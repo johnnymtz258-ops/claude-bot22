@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parent
 REVIEW_TABLES = [
     "runs", "lane_governor",
     "signals", "evals", "signal_outcomes",
-    "decision_ledger", "decision_outcomes", "missed_opportunities",
+    "decision_ledger", "decision_outcomes", "missed_opportunities", "candidate_paths",
     "paper_positions", "positions", "guardian_events",
     "auto_trade_events", "execution_intents", "trade_failures",
     "copy_wallets", "copy_wallet_history", "copy_signals", "copy_paper_positions", "copy_live_positions",

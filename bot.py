@@ -29,6 +29,7 @@ from adaptive_engine import confidence_report, dollar_size_guide, position_state
 from wallet_sync import PublicSolanaWalletSync, reconcile_balance, recent_sale_evidence
 from edge_engine import setup_path_quality, breadth_regime, analog_summary, risk_position_size, proof_metrics, price_move_plausible, outcome_from_path
 from execution_quality import JupiterExecutionProbe
+from path_tracker import CandidatePathTracker
 from copy_trading import CopyTradeEngine
 
 ROOT = Path(__file__).resolve().parent
@@ -628,6 +629,12 @@ PAPER_MAX_OPEN = max(3, min(12, ei("PAPER_MAX_OPEN_POSITIONS", 8)))
 PAPER_GLITCH_MAX_MINUTES = max(5, ei("PAPER_GLITCH_MAX_MINUTES", 20))
 # Paper/shadow exits are checked on their own fast loop (one batched request per tick).
 PAPER_MONITOR_SECONDS = max(3, ei("PAPER_MONITOR_SECONDS", 6))
+# Candidate path recorder: follows every evaluated coin for PATH_TRACK_HORIZON_MINUTES even
+# after it leaves the scanner lists, with exact first-touch times for exit backtests.
+PATH_TRACKER_ENABLED = eb("PATH_TRACKER_ENABLED", True)
+PATH_TRACK_HORIZON_MINUTES = max(30, min(360, ei("PATH_TRACK_HORIZON_MINUTES", 120)))
+PATH_TRACK_POLL_SECONDS = max(10, ei("PATH_TRACK_POLL_SECONDS", 30))
+PATH_TRACK_MAX_ACTIVE = max(20, ei("PATH_TRACK_MAX_ACTIVE", 300))
 # v15 proof-first shadow simulator. It remains independent of Telegram/live execution so
 # the strategy keeps producing unbiased forward evidence even when the user makes no trades.
 SHADOW_SIM_ALWAYS_ON = eb("SHADOW_SIM_ALWAYS_ON", True)
@@ -6621,6 +6628,26 @@ async def paper_monitor_loop(http,db,state):
         state["paper_monitor_running"]=False
 
 
+async def path_tracker_loop(http,db,state):
+    """Research-only forward path recorder (never trades)."""
+    tracker=CandidatePathTracker(db,lambda chain,tokens: batch_pairs(http,chain,tokens),
+                                 horizon_s=PATH_TRACK_HORIZON_MINUTES*60,poll_s=PATH_TRACK_POLL_SECONDS,
+                                 max_active=PATH_TRACK_MAX_ACTIVE)
+    state["path_tracker"]=tracker
+    last_prune=0.0
+    while True:
+        try:
+            stats=await tracker.step()
+            state["path_tracker_stats"]=stats
+            if time.time()-last_prune>=6*3600:
+                tracker.prune(); last_prune=time.time()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"[path-tracker error] {type(exc).__name__}: {exc}")
+        await asyncio.sleep(PATH_TRACK_POLL_SECONDS)
+
+
 async def execution_preflight(http,state,pair,tier):
     """Read-only route/friction check. Never constructs, signs or submits a trade."""
     if str(pair.get("chainId") or "").lower()!="solana" or not EXECUTION_PREFLIGHT_ENABLED:
@@ -9486,6 +9513,7 @@ async def main():
     hot_scout_task = asyncio.create_task(hot_scout_loop(http,guard,limiter,db,state)) if HOT_SCOUT_ENABLED else None
     live_exit_task = asyncio.create_task(live_exit_loop(http,db,state)) if live_executor.keypair_path else None
     paper_monitor_task = asyncio.create_task(paper_monitor_loop(http,db,state))
+    path_tracker_task = asyncio.create_task(path_tracker_loop(http,db,state)) if PATH_TRACKER_ENABLED else None
     try:
         while True:
             try:
@@ -9499,7 +9527,7 @@ async def main():
             await command_task
         except asyncio.CancelledError:
             pass
-        for task in (live_exit_task, paper_monitor_task):
+        for task in (live_exit_task, paper_monitor_task, path_tracker_task):
             if task:
                 task.cancel()
                 try:
