@@ -2906,7 +2906,51 @@ async def pair_for_token(http, chain, token):
     ]
     if not exact:
         return None
-    return max(exact, key=lambda p: f(nest(p, "liquidity", "usd", default=0)))
+    best = dict(max(exact, key=lambda p: f(nest(p, "liquidity", "usd", default=0))))
+    annotate_pool_liquidity(best, exact)
+    return best
+
+
+def annotate_pool_liquidity(best, pools):
+    """Record liquidity summed over every pool of the token (only pools that report it).
+
+    DexScreener omits the liquidity field for some pools; a missing value must mean
+    "unknown", never "$0". Summing across pools also keeps a pool migration from looking
+    like a drain.
+    """
+    known=[f(nest(p,"liquidity","usd",default=0)) for p in pools if f(nest(p,"liquidity","usd",default=0))>0]
+    best["_total_liquidity_usd"]=sum(known)
+    best["_liquidity_known"]=bool(known)
+    return best
+
+
+_LIQ_DROP_SEEN={}
+
+
+def monitored_pair(pair, pos, key=None, confirm=True):
+    """Copy of ``pair`` whose liquidity is safe to compare with the position's entry liquidity.
+
+    - unknown liquidity (field missing / zero on every pool) -> entry liquidity (no alarm);
+    - liquidity is the total across the token's pools;
+    - with ``confirm``, a drop of LIQ_WARNING% or more must be seen on two consecutive
+      checks before it counts, so a single bad read cannot trigger a "liquidity -100%" exit.
+    """
+    entry_liq=f(pos.get("entry_liquidity"))
+    known=pair.get("_liquidity_known", f(nest(pair,"liquidity","usd",default=0))>0)
+    total=f(pair.get("_total_liquidity_usd")) or f(nest(pair,"liquidity","usd",default=0))
+    liq=total
+    if not known or total<=0:
+        liq=entry_liq if entry_liq>0 else total
+        if key is not None: _LIQ_DROP_SEEN.pop(key,None)
+    elif entry_liq>0 and (1-total/entry_liq)*100>=LIQ_WARNING and confirm and key is not None:
+        if not _LIQ_DROP_SEEN.get(key):
+            _LIQ_DROP_SEEN[key]=True
+            liq=entry_liq
+    elif key is not None:
+        _LIQ_DROP_SEEN.pop(key,None)
+    out=dict(pair)
+    out["liquidity"]=dict(pair.get("liquidity") or {},usd=liq)
+    return out
 
 
 async def update_market_regime(http,state,force=False):
@@ -6370,7 +6414,7 @@ async def track_positions(http, db, state=None):
         remaining_stake=max(0.01,f(pos.get("amount_usd"))*clamp(f(pos.get("remaining_fraction"),1.0),0.0,1.0))
         pos_tp1=fee_aware_tp1(pos_tp1,remaining_stake)
         risk_profile=tier_risk_profile(tier)
-        info=position_state(pair,pos,tp1=pos_tp1,tp2=pos_tp2,risk_line=f(risk_profile.get("soft"),RISK_LINE),
+        info=position_state(monitored_pair(pair,pos,key=("pos",pos["id"])),pos,tp1=pos_tp1,tp2=pos_tp2,risk_line=f(risk_profile.get("soft"),RISK_LINE),
                             trailing=f(risk_profile.get("trailing"),TRAIL),liquidity_exit=LIQ_DROP,
                             round_trip_friction=FOMO_ROUNDTRIP_FRICTION_PCT, exit_friction=FOMO_EXIT_FRICTION_PCT,
                             small_position_usd=SMALL_POSITION_USD, small_hard_stop=f(risk_profile.get("small_hard"),SMALL_POSITION_HARD_STOP_PCT),
@@ -6474,6 +6518,19 @@ async def guardian_loop(http,db,state):
         await asyncio.sleep(GUARDIAN_MONITOR_SECONDS)
 
 
+def _sell_amount_arg(parts, replying):
+    """The amount in "/sell 5", "/sell $5", "/sell 30%" or "/sell TICKER 5", else None."""
+    cand=parts[1] if (replying or len(parts)==2) and len(parts)>=2 else (parts[2] if len(parts)>=3 else None)
+    if cand is None:
+        return None
+    raw=str(cand).strip()
+    try:
+        float(raw.replace("%","").replace("$","").replace(",",""))
+    except ValueError:
+        return None
+    return raw
+
+
 def _reply_contract(message):
     replied = message.get("reply_to_message") or {}
     body = str(replied.get("text") or "")
@@ -6561,7 +6618,8 @@ async def track_paper_positions(http,db,prices=None,answered=None):
         peak=max(f(pos.get("peak_price") or pos["entry_price"]),current)
         if peak>f(pos.get("peak_price") or pos["entry_price"]): db.paper_update_peak(pos["id"],peak)
         draw=(current/max(peak,1e-18)-1)*100
-        liq_drop=(1-m["liq"]/max(f(pos["entry_liquidity"]),1))*100
+        safe_liq=metrics(monitored_pair(pair,pos,key=("paper",pos["id"])))["liq"]
+        liq_drop=(1-safe_liq/max(f(pos["entry_liquidity"]),1))*100
         age=(time.time()-pos["open_ts"])/60
         reason=None
         paper_tp1,paper_tp2=tier_profit_targets(pos.get("tier") or "ENTRY OPTION")
@@ -6585,7 +6643,7 @@ async def batch_pairs(http, chain, tokens, answered=None):
     given, tokens whose request actually succeeded are added to it, so callers can tell
     "DexScreener has no price for this coin" from "the request failed".
     """
-    out={}
+    out={}; pools={}
     wanted=[str(t) for t in dict.fromkeys(tokens) if t]
     for i in range(0,len(wanted),30):
         chunk=wanted[i:i+30]
@@ -6602,6 +6660,9 @@ async def batch_pairs(http, chain, tokens, answered=None):
                 continue
             if tok not in out or f(nest(p,"liquidity","usd",default=0))>f(nest(out[tok],"liquidity","usd",default=0)):
                 out[tok]=p
+            pools.setdefault(tok,[]).append(p)
+    for tok,best in list(out.items()):
+        out[tok]=annotate_pool_liquidity(dict(best),pools.get(tok,[best]))
     return out
 
 
@@ -7092,7 +7153,8 @@ async def live_autopilot_track_positions(http,db,state):
         if peak>f(pos.get("peak_price") or pos["entry_price"]):
             db.update_position_peak(pos["id"],peak)
         draw=(current/max(peak,1e-18)-1)*100
-        liq_drop=(1-m["liq"]/max(f(pos["entry_liquidity"]),1))*100
+        safe_liq=metrics(monitored_pair(pair,pos,key=("auto",pos["id"])))["liq"]
+        liq_drop=(1-safe_liq/max(f(pos["entry_liquidity"]),1))*100
         age=(time.time()-f(pos["open_ts"]))/60
 
         # One sell action per token per cycle.
@@ -7252,6 +7314,7 @@ async def handle_commands(http, db, state):
         normalized = re.sub(r"^/buy(?=[$\d])", "/buy ", normalized, flags=re.I)
         normalized = re.sub(r"^/(sellpct|sellusd)(?=[$\d])", lambda m: "/" + m.group(1) + " ", normalized, flags=re.I)
         normalized = re.sub(r"^/sold(?=[$\d])", "/sold ", normalized, flags=re.I)
+        normalized = re.sub(r"^/sell(?=[$\d])", "/sell ", normalized, flags=re.I)
 
         if not normalized.startswith("/"):
             continue
@@ -8133,7 +8196,7 @@ async def handle_commands(http, db, state):
                 peak=max(f(pos.get("peak_price"),pos.get("entry_price")),current)
                 dd=(current/max(peak,1e-18)-1)*100
                 p1,p2=tier_profit_targets(tier); rp=tier_risk_profile(tier)
-                pstate=position_state(pair,pos,tp1=p1,tp2=p2,risk_line=f(rp.get("soft"),RISK_LINE),trailing=f(rp.get("trailing"),TRAIL),liquidity_exit=LIQ_DROP,
+                pstate=position_state(monitored_pair(pair,pos,confirm=False),pos,tp1=p1,tp2=p2,risk_line=f(rp.get("soft"),RISK_LINE),trailing=f(rp.get("trailing"),TRAIL),liquidity_exit=LIQ_DROP,
                                       round_trip_friction=FOMO_ROUNDTRIP_FRICTION_PCT, exit_friction=FOMO_EXIT_FRICTION_PCT,
                                       small_position_usd=SMALL_POSITION_USD, small_hard_stop=f(rp.get("small_hard"),SMALL_POSITION_HARD_STOP_PCT),
                                       mid_hard_stop=f(rp.get("mid_hard"),MID_POSITION_HARD_STOP_PCT), min_partial_sale_usd=GUARDIAN_MIN_PARTIAL_SALE_USD)
@@ -8566,6 +8629,51 @@ async def handle_commands(http, db, state):
             await send(http,
                 f"✅ ENTRY BASIS REPAIRED — {pos['symbol']}\nActual average entry: ${px:.10g}\n"
                 "GUARDIAN will use this corrected basis on its next cycle. No trade was placed.")
+            continue
+
+        elif cmd == "/sell" and _sell_amount_arg(parts, bool(_reply_contract(msg) or db.signal_from_telegram_message(_reply_message_id(msg)))):
+            # "/sell 5", "/sell $5" or "/sell 30%" (optionally "/sell TICKER 5") used to be
+            # recorded as a FULL exit because /sell ignored the amount. An amount now means a
+            # partial sale: a plain number or $ is dollars (like /bought), % is percent.
+            amount_raw=_sell_amount_arg(parts, bool(_reply_contract(msg) or db.signal_from_telegram_message(_reply_message_id(msg))))
+            reply_signal=db.signal_from_telegram_message(_reply_message_id(msg))
+            query=(reply_signal["token"] if reply_signal else _reply_contract(msg)) or (parts[1] if len(parts)>=3 else None)
+            if not query:
+                await send(http,"Reply to the coin's alert with /sell 5 (dollars) or /sell 30%, or use /sell TICKER 5.")
+                continue
+            pos,pos_err=db.find_open_position(query)
+            if not pos:
+                await send(http,pos_err or "No recorded open position matched that ticker/contract.")
+                continue
+            pair=await pair_for_token(http,pos["chain"],pos["token"])
+            current=f(pair.get("priceUsd")) if pair else f(pos["entry_price"])
+            rem=f(pos.get("remaining_fraction"),1.0)
+            current_value=f(pos["quantity"])*rem*current
+            try:
+                value=float(amount_raw.replace("%","").replace("$","").replace(",",""))
+            except Exception:
+                value=0
+            is_pct=amount_raw.endswith("%")
+            fraction=(value/100.0) if is_pct else (value/max(current_value,1e-18))
+            if fraction<=0:
+                await send(http,"The amount must be above 0. Use /sell with no amount for a full exit.")
+                continue
+            if fraction>=0.999:
+                journal_id=db.journal_snapshot(pos["id"],"SELL_ESTIMATED",before=pos)
+                pnl=db.close_position(pos["id"],current)
+                db.journal_finish(journal_id,pos["id"])
+                await send(http,f"✅ SALE RECORDED — {pos['symbol']} (the amount covers the whole remaining position)\n"
+                                f"Approx P/L: ${pnl:+.2f}\nThis updates the journal only; the bot did not place a sell order.")
+                continue
+            journal_id=db.journal_snapshot(pos["id"],"SELL_PARTIAL_ESTIMATED",before=pos)
+            pnl,new_rem=db.partial_close_position(pos["id"],current,fraction)
+            db.journal_finish(journal_id,pos["id"])
+            await send(http,
+                f"✅ PARTIAL SALE RECORDED — {pos['symbol']}\n"
+                f"Sold {'%.0f%%' % value if is_pct else '$%.2f' % value} = {fraction*100:.1f}% of what remained (≈${current_value*fraction:.2f} at ${current:.8g})\n"
+                f"Approx realized P/L on this partial: ${pnl:+.2f}\n"
+                f"Remaining: {new_rem*100:.1f}% of the original position (≈${current_value*(1-fraction):.2f}). It stays open and monitored.\n"
+                f"Meant percent instead of dollars? Send /undo, then /sell {value:g}%.")
             continue
 
         elif cmd in {"/sellpct","/sellusd","/sold"}:
