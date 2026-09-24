@@ -213,6 +213,7 @@ def export(db: Path, out_dir: Path, part_mb: float, env: dict) -> tuple[list[Pat
         writer.add("SUMMARY.txt", ("\n".join(summary) + "\n").encode("utf-8"))
 
         for table in tables:
+            print(f"  exporting {table} ({counts[table]:,} rows)...", flush=True)
             cur = con.execute(f'select * from "{table}"')
             cols = [d[0] for d in cur.description]
             keep = [i for i, c in enumerate(cols) if c not in DROP_COLUMNS.get(table, set())]
@@ -229,11 +230,20 @@ def export(db: Path, out_dir: Path, part_mb: float, env: dict) -> tuple[list[Pat
                 if not rows:
                     break
         con.execute("commit")
+        tail = _log_tail(ROOT / "bot.log", scrub)
+        if tail:
+            writer.add("bot_log_tail.txt", tail)
+    except BaseException:
+        # Never leave half-written zips behind: they cannot be opened and look like results.
+        writer.close()
+        for p in writer.paths:
+            try:
+                p.unlink()
+            except OSError:
+                pass
+        raise
     finally:
         con.close()
-    tail = _log_tail(ROOT / "bot.log", scrub)
-    if tail:
-        writer.add("bot_log_tail.txt", tail)
     return writer.finalize(), counts
 
 
@@ -249,7 +259,15 @@ def main() -> int:
         part_mb = 15.0
     print(f"Reading {db} (read-only)...")
     started = time.time()
-    paths, counts = export(db, ROOT, part_mb, env)
+    print("This can take a few minutes for a large database. Keep this window open until it says Done.")
+    try:
+        paths, counts = export(db, ROOT, part_mb, env)
+    except KeyboardInterrupt:
+        print("\nStopped. Partial files were removed; run it again when ready.")
+        return 1
+    except Exception as exc:
+        print(f"\nExport failed: {type(exc).__name__}: {exc}\nPartial files were removed. Send a screenshot of this window.")
+        return 1
     print(f"Done in {time.time() - started:.0f}s. Rows exported: {sum(counts.values()):,}\n")
     print("Upload " + ("this file:" if len(paths) == 1 else f"all {len(paths)} files:"))
     for p in paths:

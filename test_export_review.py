@@ -49,3 +49,19 @@ def test_review_export_is_complete_split_and_scrubbed(tmp_path, monkeypatch):
         assert secret not in blob, secret
     intent = next(csv.DictReader(open(out / 'execution_intents.csv')))
     assert 'wallet_address' not in intent and intent['amount_raw'] == '5551234567'
+
+
+def test_failed_export_leaves_no_partial_zip(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot, 'DB_PATH', tmp_path / 'fomo_master.db')
+    db = bot.Database(); db.conn.close()
+    monkeypatch.setattr(export_review, 'ROOT', tmp_path)
+
+    def boom(*_a, **_k):
+        raise RuntimeError('disk full')
+    monkeypatch.setattr(export_review, '_log_tail', boom)
+    try:
+        export_review.export(tmp_path / 'fomo_master.db', tmp_path, part_mb=1, env={})
+        raise AssertionError('expected failure')
+    except RuntimeError:
+        pass
+    assert not list(tmp_path.glob('FOMO_REVIEW_*.zip'))
