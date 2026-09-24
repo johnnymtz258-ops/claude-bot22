@@ -627,6 +627,9 @@ PAPER_POSITION_USD = max(1.0, min(10.0, ef("PAPER_POSITION_USD", 5)))
 PAPER_MAX_OPEN = max(3, min(12, ei("PAPER_MAX_OPEN_POSITIONS", 8)))
 # A paper simulation whose price stays implausible this long is closed as unmeasurable.
 PAPER_GLITCH_MAX_MINUTES = max(5, ei("PAPER_GLITCH_MAX_MINUTES", 20))
+# A paper position with no price at all this long (delisted/unindexed) would block one of the
+# PAPER_MAX_OPEN slots forever and silently stall the proof engine; it is closed as unmeasurable.
+PAPER_NO_PRICE_MAX_MINUTES = max(15, ei("PAPER_NO_PRICE_MAX_MINUTES", 60))
 # Paper/shadow exits are checked on their own fast loop (one batched request per tick).
 PAPER_MONITOR_SECONDS = max(3, ei("PAPER_MONITOR_SECONDS", 6))
 # Candidate path recorder: follows every evaluated coin for PATH_TRACK_HORIZON_MINUTES even
@@ -6506,6 +6509,7 @@ def _parse_usd(tokens, default=None):
 
 
 _PAPER_GLITCH_SINCE={}
+_PAPER_LAST_PRICE_TS={}
 
 
 def paper_price_glitch(pos,current,liq,now=None):
@@ -6525,14 +6529,28 @@ def paper_price_glitch(pos,current,liq,now=None):
     return True
 
 
-async def track_paper_positions(http,db,prices=None):
-    """Advance paper/shadow simulations. ``prices`` maps token -> pair (batched fetch)."""
+async def track_paper_positions(http,db,prices=None,answered=None):
+    """Advance paper/shadow simulations.
+
+    ``prices`` maps token -> pair (batched fetch); ``answered`` holds tokens whose price
+    request succeeded. A token whose request failed is skipped without counting towards
+    the no-quote timeout, so a network outage never closes simulations.
+    """
     events=[]
     for pos in db.paper_open_positions():
+        if prices is not None and answered is not None and pos["token"] not in answered:
+            continue
         pair=(prices or {}).get(pos["token"]) if prices is not None else await pair_for_token(http,pos["chain"],pos["token"])
-        if not pair: continue
-        current=f(pair.get("priceUsd")); m=metrics(pair)
-        if current<=0: continue
+        current=f((pair or {}).get("priceUsd"))
+        pid=int(pos["id"])
+        if not pair or current<=0:
+            seen=_PAPER_LAST_PRICE_TS.setdefault(pid,max(time.time(),f(pos.get("open_ts"))))
+            if time.time()-seen>=PAPER_NO_PRICE_MAX_MINUTES*60:
+                db.paper_close_unmeasurable(pid,f"price data unreliable (no quote for {PAPER_NO_PRICE_MAX_MINUTES}m) — excluded from proof")
+                _PAPER_LAST_PRICE_TS.pop(pid,None)
+            continue
+        _PAPER_LAST_PRICE_TS[pid]=time.time()
+        m=metrics(pair)
         if paper_price_glitch(pos,current,m["liq"]):
             since=_PAPER_GLITCH_SINCE.get(int(pos["id"]),time.time())
             if time.time()-since>=PAPER_GLITCH_MAX_MINUTES*60:
@@ -6559,19 +6577,23 @@ async def track_paper_positions(http,db,prices=None):
             pnl=db.paper_close(pos["id"],current,reason); events.append(("close",pos,ret,pnl,reason))
     return events
 
-async def batch_pairs(http, chain, tokens):
+async def batch_pairs(http, chain, tokens, answered=None):
     """Best exact-base pair per token via one DexScreener request per 30 tokens.
 
     Mirrors pair_for_token's identity rule (base address must match; highest liquidity
-    wins). Missing tokens are simply absent from the result.
+    wins). Missing tokens are simply absent from the result. If ``answered`` (a set) is
+    given, tokens whose request actually succeeded are added to it, so callers can tell
+    "DexScreener has no price for this coin" from "the request failed".
     """
     out={}
     wanted=[str(t) for t in dict.fromkeys(tokens) if t]
     for i in range(0,len(wanted),30):
         chunk=wanted[i:i+30]
-        _,data=await http.get(f"{DEX}/tokens/v1/{chain}/{','.join(chunk)}")
-        if not isinstance(data,list):
+        status,data=await http.get(f"{DEX}/tokens/v1/{chain}/{','.join(chunk)}")
+        if status!=200 or not isinstance(data,list):
             continue
+        if answered is not None:
+            answered.update(chunk)
         lookup={t.lower():t for t in chunk}
         for p in data:
             base=str(nest(p,"baseToken","address",default="")).strip()
@@ -6617,11 +6639,11 @@ async def paper_monitor_loop(http,db,state):
                     by_chain=defaultdict(list)
                     for p in positions:
                         by_chain[str(p.get("chain") or "solana")].append(p["token"])
-                    prices={}
+                    prices={}; answered=set()
                     for chain,tokens in by_chain.items():
-                        prices.update(await batch_pairs(http,chain,tokens))
-                    if prices:
-                        await announce_paper_events(http,await track_paper_positions(http,db,prices=prices))
+                        prices.update(await batch_pairs(http,chain,tokens,answered=answered))
+                    if answered:
+                        await announce_paper_events(http,await track_paper_positions(http,db,prices=prices,answered=answered))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -6633,7 +6655,10 @@ async def paper_monitor_loop(http,db,state):
 
 async def path_tracker_loop(http,db,state):
     """Research-only forward path recorder (never trades)."""
-    tracker=CandidatePathTracker(db,lambda chain,tokens: batch_pairs(http,chain,tokens),
+    async def fetch(chain,tokens):
+        answered=set()
+        return await batch_pairs(http,chain,tokens,answered=answered),answered
+    tracker=CandidatePathTracker(db,fetch,
                                  horizon_s=PATH_TRACK_HORIZON_MINUTES*60,poll_s=PATH_TRACK_POLL_SECONDS,
                                  max_active=PATH_TRACK_MAX_ACTIVE)
     state["path_tracker"]=tracker

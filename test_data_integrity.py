@@ -171,3 +171,46 @@ def test_paper_monitor_loop_closes_positions_with_one_batched_request(db, monkey
     assert row['active'] == 0 and 'risk stop' in row['close_reason']
     assert len(http.urls) == 1 and sent and 'PAPER SELL' in sent[0]
     assert state['paper_monitor_running'] is False
+
+
+def test_paper_position_without_any_quote_is_released_after_timeout(db):
+    pid = _paper(db, token='DEAD')
+    bot._PAPER_LAST_PRICE_TS.clear()
+    asyncio.run(bot.track_paper_positions(None, db, prices={}))
+    assert db.conn.execute('select active from paper_positions where id=?', (pid,)).fetchone()[0] == 1
+    bot._PAPER_LAST_PRICE_TS[pid] = time.time() - bot.PAPER_NO_PRICE_MAX_MINUTES * 60 - 1
+    asyncio.run(bot.track_paper_positions(None, db, prices={}))
+    row = db.conn.execute('select * from paper_positions where id=?', (pid,)).fetchone()
+    assert row['active'] == 0 and row['proof_eligible'] == 0 and 'no quote' in row['close_reason']
+    assert bot.tier_track_record(db, 'ENTRY OPTION')['n'] == 0
+
+
+def test_price_outage_never_closes_paper_positions(db, monkeypatch):
+    pid = _paper(db, token='PAPR')
+    bot._PAPER_LAST_PRICE_TS.clear()
+
+    class DownHTTP:
+        async def get(self, url, **_k):
+            return 0, None
+    stops = []
+
+    async def stop(*_a, **_k):
+        stops.append(1)
+        raise asyncio.CancelledError
+    bot._PAPER_LAST_PRICE_TS[pid] = time.time() - bot.PAPER_NO_PRICE_MAX_MINUTES * 60 - 1
+    monkeypatch.setattr(bot.asyncio, 'sleep', stop)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(bot.paper_monitor_loop(DownHTTP(), db, {}))
+    assert db.conn.execute('select active from paper_positions where id=?', (pid,)).fetchone()[0] == 1
+
+
+def test_batch_pairs_reports_which_tokens_were_answered():
+    class Mixed:
+        async def get(self, url, **_k):
+            toks = url.rsplit('/', 1)[1].split(',')
+            if 'T0' in toks:
+                return 200, []            # answered: no pairs for these coins
+            return 0, None                # failed request
+    answered = set()
+    out = asyncio.run(bot.batch_pairs(Mixed(), 'solana', [f'T{i}' for i in range(40)], answered=answered))
+    assert out == {} and answered == {f'T{i}' for i in range(30)}

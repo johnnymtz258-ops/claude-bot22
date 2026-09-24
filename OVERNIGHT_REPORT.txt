@@ -41,7 +41,7 @@ Where the paper losses came from:
       just not often enough to pay for everything else.
 
 
-WHAT CHANGED TONIGHT (all tested: 272 automated tests pass)
+WHAT CHANGED TONIGHT (all tested: 276 automated tests pass)
 ------------------------------------------------------------
 1. Every BUY alert now shows its track record, for example:
    "TRACK RECORD (ENTRY OPTION, paper, last 14d): 107 tests | 19% wins | avg -5.3% per

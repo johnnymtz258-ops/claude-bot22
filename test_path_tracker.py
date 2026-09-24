@@ -21,15 +21,18 @@ class Feed:
     def __init__(self):
         self.quotes = {}
         self.calls = []
+        self.down = False
 
     async def __call__(self, chain, tokens):
         self.calls.append((chain, list(tokens)))
+        if self.down:
+            return {}, set()          # request failed: nothing answered
         out = {}
         for t in tokens:
             q = self.quotes.get(t)
             if q:
                 out[t] = {'baseToken': {'address': t}, 'priceUsd': q[0], 'liquidity': {'usd': q[1]}}
-        return out
+        return out, set(tokens)     # the source answered for every requested token
 
 
 @pytest.fixture
@@ -150,3 +153,18 @@ def test_simulate_exit_uses_exact_touch_order():
     trail = {'path': '60:10;120:30;180:15'}
     assert simulate_exit(trail, tp=None, sl=None, max_hold_s=3600, trail=10) == 15
     assert simulate_exit({'path': ''}, tp=20, sl=8, max_hold_s=60) is None
+
+
+def test_network_outage_never_marks_paths_lost(db):
+    clock = Clock(6_000_000)
+    feed = Feed()
+    tr = _tracker(db, clock, feed, lost_s=900)
+    _decide(db, 'NET', clock.t)
+    tr.enroll_new()
+    feed.quotes['NET'] = (1.1, 100_000)
+    clock.t += 30
+    asyncio.run(tr.poll())
+    feed.down = True
+    clock.t += 1800
+    asyncio.run(tr.poll())
+    assert db.conn.execute("select status from candidate_paths where token='NET'").fetchone()[0] == 'TRACKING'

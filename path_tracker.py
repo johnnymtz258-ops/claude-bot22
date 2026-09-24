@@ -197,11 +197,19 @@ class CandidatePathTracker:
         for r in live:
             by_chain.setdefault(str(r["chain"] or "solana"), []).append(r["token"])
         prices: dict = {}
+        answered: set = set()
         for chain, tokens in by_chain.items():
             try:
                 got = await self.fetch_batch(chain, list(dict.fromkeys(tokens)))
             except Exception:
                 got = {}
+            # fetch_batch may return (quotes, answered_tokens); a plain dict means only the
+            # returned tokens are known to have been answered.
+            if isinstance(got, tuple):
+                got, ok = got
+            else:
+                ok = set((got or {}).keys())
+            answered |= {(chain, t) for t in (ok or ())}
             for tok, pair in (got or {}).items():
                 prices[(chain, tok)] = pair
         with self.db.transaction():
@@ -212,7 +220,10 @@ class CandidatePathTracker:
                     upd = self.ingest(r, now, prices.get((str(r["chain"] or "solana"), r["token"])))
                 if age > int(r["horizon_s"]):
                     upd["status"] = "DONE"
-                elif now - int(r.get("last_ts") or r["start_ts"]) > self.lost_s and not upd.get("last_ts"):
+                elif (now - int(r.get("last_ts") or r["start_ts"]) > self.lost_s and not upd.get("last_ts")
+                      and (str(r["chain"] or "solana"), r["token"]) in answered):
+                    # Only a coin the price source answered for (with no usable price) is lost;
+                    # a failed request (network outage) never ends tracking.
                     upd["status"] = "LOST"
                 if upd:
                     sets = ",".join(f"{k}=?" for k in upd)
