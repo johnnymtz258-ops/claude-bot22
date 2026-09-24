@@ -1,0 +1,57 @@
+FOMO BOT v12.1 REVERSAL EDGE — LIVE EXPORT PATCH
+
+WHY THIS EXISTS
+The Aug-29 v12.0 export showed zero actionable EARLY alerts after the final restart even though the scanner was active. PINK was not missed by discovery: it was repeatedly observed and written to the Decision Ledger.
+
+PINK TRACE (local time, UTC-5)
+- 14:51:34: price ~$0.001679, MC ~$1.626M, liquidity ~$155.9K
+- 5m -0.72%, 1h -29.12%, B/S 1.74x, 126 swaps/5m
+- 5m turnover ~0.529% of MC, realtime ~50 tx/30s
+- entry score ~53, confirmed ~59
+- sole Decision Ledger blocker: 1h move -29.1% < normal crash floor -20%
+- next 30m from that snapshot: max ~+18.17%, min ~-0.24%, final ~+8.10%
+
+The user's manual position was recorded a few minutes later around $0.001652 and GUARDIAN subsequently observed a peak around +18%. This was a real profitable washout reversal, not a discovery outage.
+
+CHANGE
+Added REVERSAL ENTRY as a separate tier instead of weakening the normal entry rules. Defaults:
+- liquidity >= $100K
+- MC $100K-$2M
+- 1h -40% to below -20%
+- 5m -1.5% to +2.5%
+- B/S >= 1.50x
+- swaps >= 100/5m
+- turnover >= 0.50% MC/5m
+- realtime >= 5 tx/30s when realtime is available
+- score >= 50 OR confirmed >= 55
+- completed normal Solana safety verification
+- >= 0.5% recovery from recent raw-price low
+- buyer pressure persistent in at least 2 of the last 3 scans at >=1.25x
+- an extra 20-second fresh confirmation before alert
+
+SIZE
+REVERSAL ENTRY is reduction-only while immature: it stays in the smaller-size bucket and cannot unlock exceptional >normal sizing.
+
+HISTORICAL SANITY CHECK ON THE CURRENT MASTER DB
+Using only raw observations and the strict market structure above (before score/realtime/safety confirmation), one 30-minute-spaced candidate per token produced 4 historical examples across OTC and PINK:
+- 3/4 reached >= +15% within 30m
+- 0/4 touched -15% within 30m
+- median max return ~+19.8%
+- median minimum return ~-1.8%
+This is a tiny, concentrated sample, so the lane remains deliberately strict and small-size. It is not evidence to lower the global crash or liquidity floors.
+
+OTHER FINDINGS
+- PumpPortal was connected and the standard Solana scanner was working.
+- The export contained 403 Decision Ledger rows in the v12 session and 15 signals after the final restart (9 SCOUT, 6 CONFIRMED), but zero EARLY/entry alerts.
+- Birdeye core probe and multiple enrichment endpoints returned HTTP 400; fallback paths stayed active. v12.1 reports this as DEGRADED instead of CORE OK.
+- X exact-contract searches produced no stored X social events in this export; only Reddit social events were stored. A prior X request logged HTTP 401 before the final restart. v12.1 makes live X API status visible in /sources and treats any non-200 as degraded rather than silently as zero posts.
+
+NOT CHANGED
+- normal -20% 1h crash floor
+- $50K normal liquidity floor
+- MICRO safety rules
+- v11.5 realtime minimum bug fix
+- recent-crash memory
+- entry stability/fragile confirmation
+- fee-aware GUARDIAN
+- social hype cannot bypass market/safety gates

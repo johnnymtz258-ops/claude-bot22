@@ -1,0 +1,57 @@
+V12.3 DATA AUDIT — export received Aug 29, 2026
+
+EXPORT
+- observations: 660,839
+- signals: 1,695
+- evaluations: 7,856
+- positions: 33
+- GUARDIAN events: 288
+- decision-ledger rows: 1,692
+- decision outcomes: 2,845
+- social events: 19
+
+V12.2 WINDOW IN BOT.LOG
+- approximately 20:58:21–22:22:26 UTC (~84 minutes)
+- 169 scan cycles
+- 880 Decision Ledger decisions in this window: 445 HOT_WAIT, 434 NEAR_ENTRY, 1 ENTRY_SENT
+
+ACTIONABLE ENTRY
+Webcade / ticker Token, signal 1665:
+- entry $0.001702
+- MC ~$1.70M, liquidity ~$110.6K
+- B/S ~1.70x, 248 swaps/5m, 26 realtime tx/30s
+- recorded position: $15
+- observed 30m path: max +2.00%, min -0.71%, final +1.29%
+- observed 60m path: max +2.00%, min -0.71%, final +1.35%
+The supplied Fomo transaction screenshot later shows one Token buy and two Token sells. Those sells were not reflected in the exported journal, so position 41 was still active at export time. If those two sells were the entire same position, v12.3 /closecash can reconcile it using their total net proceeds.
+
+PINK STALE-CONTEXT BUG
+- signal 1556 ENTRY_ALERT: 16:22:25 UTC, snapshot $0.002686
+- first BUY_RECORDED: 16:22:58 UTC, $10 at that snapshot; this trade later closed profitably
+- same signal BUY_RECORDED again: 20:34:14 UTC, $15 at the SAME $0.002686 snapshot
+- live observations near 20:34 were approximately $0.001695 -> $0.001689 -> $0.001681
+- therefore the second journal position's cost basis was stale by roughly 37% immediately
+- GUARDIAN then correctly computed from the database it was given, but the database entry basis itself was wrong.
+This is the primary reason for v12.3.
+
+DECISION-LEDGER CHECK (30m outcomes, blockers overlap)
+- liquidity blocker: n=195; clean +15 paths=26; severe <=-15 drawdowns=82; median max +5.4%, median min -13.1%
+- hard-security blocker: n=215; clean +15=0; severe <=-15=16
+- realtime blocker: n=83; clean +15=0; severe <=-15=13
+- moved/chase blocker: n=75; clean +15=1; severe <=-15=14
+- 5m-momentum blocker: n=74; clean +15=14; severe <=-15=33
+This does not support broadly loosening those gates.
+
+MISSED RUNNERS
+The largest blocked runners were mostly very low-liquidity paths (e.g. CASHPOND ~$20–22K liquidity and 401k ~$32K) or paths with large adverse excursions. Loosening the normal floor to capture them would expose the bot to many more severe drawdowns. Some later inuzard/OTC windows were attractive, but their earlier windows were materially worse, so there is not enough evidence in this short sample to widen REVERSAL EDGE.
+
+SOCIAL/SOURCES
+- 8 new exact-contract social events in this v12.2 window, all Reddit.
+- X correctly entered PAYMENT REQUIRED / HTTP 402 backoff; targeted X was OFF in exported meta.
+- Birdeye core authentication succeeded, while several feature endpoints returned HTTP 400 and were isolated behind fallbacks as intended by v12.2.
+- public Solana realtime had intermittent keepalive timeouts and one HTTP 413 reconnect, but recovered; PumpPortal remained an independent discovery path.
+
+OTHER REAL BUGS FOUND
+- /sources refresh could throw NameError: guard is not defined.
+- /scan or /why could throw AttributeError: bool has no attribute get because a boolean was passed where actionable_blockers expected a scout record.
+Both are fixed in v12.3.

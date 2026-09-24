@@ -1,0 +1,36 @@
+FOMO BOT v13.3 EDGE RECOVERY — RELEASE NOTES
+============================================
+
+1. VERSION-AWARE ENTRY COOLDOWN
+- Same-build entry cooldown remains 8 hours by default and survives restarts.
+- An ENTRY alert from an older build gets only a 60-minute upgrade grace by default.
+- After that grace, a fresh scout can be evaluated by the current build when no recorded position is open.
+- This repairs the stale-v13.0 cooldown seen on fresh HeeHaw/Leafy v13.2 setups without enabling same-build alert spam.
+
+2. LONGER VIOLENT-FLUSH MEMORY
+- Recent-crash lookback is now at least 30 minutes.
+- A <= -17.5% raw 5m flush inside that window blocks a recovery entry.
+- Fresh holdout replay blocks ZCAT while preserving v13.2 Jimothy.
+- Upgrade-safe floors prevent old .env 10m/-20 values from silently weakening the patch.
+
+3. ENTRY PIPELINE TELEMETRY
+- New Decision Ledger stages: ENTRY_COOLDOWN, ENTRY_STABILITY, ENTRY_TAPE, ENTRY_COMMIT, ENTRY_CHASE, ENTRY_SLIPPAGE, ENTRY_RATE_LIMIT.
+- /status shows one-hour counts for sent/cooldown/stability/tape/confirm/chase+slippage/rate/shadow.
+- Fast hot-scout failures now use the same stage-specific logging instead of collapsing everything into HOT_WAIT.
+
+4. /why IS NOW A REAL DIAGNOSTIC
+- /why CONTRACT no longer duplicates /scan.
+- It reports the live classifier state, scout status/move, version-aware cooldown, stability/crash memory, tape state, safety status and last internal pipeline stop.
+- It is read-only with respect to entry state: it does not create an entry or a pending confirmation marker.
+
+5. NO BROAD THRESHOLD LOOSENING
+- Normal $50K Solana liquidity floor retained.
+- Standard +10% 1h ceiling retained.
+- v13.1 strict cross-chain shapes retained.
+- v13.2 Quality Governor + shadow recovery retained.
+- Core classifier/tape/commitment thresholds are otherwise unchanged.
+
+6. LEARNING WORKFLOW RETAINED
+- /buy records MANUAL_BUY snapshots when you journal a manual trade at entry.
+- /sellcash, /closecash and /reconcile can make realized P/L cash-verified.
+- Trades performed only inside Fomo but never journaled cannot teach the bot their entry snapshot; use /buy or /bought at the time of entry when possible.

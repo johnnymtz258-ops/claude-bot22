@@ -1,0 +1,31 @@
+FOMO BOT v12.0 EDGE ENGINE — MAJOR UPGRADE
+
+Purpose
+-------
+Reduce avoidable latency, expand independent discovery/social context, reject hype/manipulated flow more intelligently, and create better audit data without loosening hard safety gates just to produce more alerts.
+
+Major changes
+-------------
+1. Separate ~5s HOT SCOUT repricing lane for established Solana scouts.
+2. Solana/actionable chains processed before watch-only chains; concurrent Dex pair batches.
+3. Optional PumpPortal single-WebSocket new-token + migration discovery.
+4. Persistent exact-contract social events + breadth/velocity/concentration pulse.
+5. Optional exact-contract X pulse for top candidates; OFF by default because API usage can be metered.
+6. Social/market divergence prevents hype from boosting weak tape.
+7. Cross-source discovery confirmation; paid Dex boosts never count as independent quality evidence.
+8. Recent buy-dollar concentration by wallet reduces score/size guidance when one wallet dominates.
+9. Direct Solana mint/freeze-authority RPC fallback; live freeze authority is a hard danger.
+10. SOL market regime reduces suggested size during RISK_OFF/STRESS; never creates a buy.
+11. Persistent decision_ledger + decision_outcomes measure blocked setups vs future paths.
+12. GUARDIAN earlier thesis-weakening warning for fresh trades with combined price/tape/liquidity deterioration.
+13. Earlier TP1 profit-giveback protection when no partial was recorded.
+14. New /sources, /pulse, /socialdeep commands.
+15. Export includes social_events.csv, decision_ledger.csv, decision_outcomes.csv.
+
+Safety philosophy
+-----------------
+Speed/social data do not bypass realtime minimums, liquidity, safety, recent-crash memory, stability, v11.5 commitment confirmation, or chase protection. Social hype cannot create an entry by itself. Paid boosts are discovery only. Real-money autopilot remains separately gated and OFF unless configured/armed.
+
+No profit guarantee
+-------------------
+This system remains a decision-support/journal tool for speculative meme-token trading. Rugs, slippage, liquidity failure and regime changes can cause losses even when all configured checks pass.

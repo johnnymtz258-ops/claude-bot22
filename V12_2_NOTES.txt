@@ -1,0 +1,34 @@
+FOMO BOT v12.2 SOURCE RESILIENCE
+
+WHY THIS PATCH EXISTS
+The live v12.1 /sources screen showed two provider-side problems:
+1) X API returned HTTP 402 while a bearer token was configured.
+2) Birdeye returned HTTP 400 on its core probe and several enrichments.
+
+X FIX
+- HTTP 402 is now classified as PAYMENT REQUIRED rather than generic DEGRADED.
+- X REST scouting pauses for 30 minutes after a 402 instead of repeatedly sending rejected requests.
+- All non-X discovery continues normally: PumpPortal, Solana realtime, DexScreener, GeckoTerminal, RSS/Reddit, safety and Guardian.
+- /sources explicitly says when targeted X is ON but PAUSED by billing.
+- /socialdeep explains the billing state.
+- copied bearer tokens are normalized if they include "Bearer ", "Authorization:" or surrounding quotes.
+- use /sources refresh after adding X credits to retry immediately.
+
+IMPORTANT: CODE CANNOT BYPASS X BILLING.
+X API uses credit-based pay-per-use access. If the app is returning HTTP 402, usable credits/billing are required for the bot's X recent-search calls. The bot can only fail safely and stop wasting calls until that is fixed in the X Developer Console.
+
+BIRDEYE FIX
+- API keys are normalized if copied with labels/quotes.
+- Core verification is now two-stage using current documented endpoints:
+  A) GET /defi/networks
+  B) if A gives an ambiguous 400-class response, GET /defi/price for wrapped SOL with x-chain=solana
+- A working price fallback prevents a false whole-provider DEGRADED state.
+- If both probes fail, the actual probe name + safe provider error summary is shown.
+- Feature failures remain isolated; public/on-chain fallbacks continue.
+- setup_edge_sources.command can now replace/update the Birdeye BDS API key with hidden input.
+- /sources refresh forces a new Birdeye core check after key rotation.
+
+If Birdeye still returns 400 after v12.2 and a freshly generated BDS key, that is likely account/key/provider access rather than a scanner-logic issue. Generate the key from the Birdeye Data Services Security page, then update it with setup_edge_sources.command.
+
+TRADING LOGIC
+No entry, reversal, liquidity, realtime, crash-memory, sizing, Guardian, profit-taking or safety thresholds were loosened in this patch.

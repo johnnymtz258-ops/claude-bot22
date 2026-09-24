@@ -1,0 +1,76 @@
+FOMO BOT v15.0 SOL EDGE ENGINE — FINAL BUILD VALIDATION
+========================================================
+Validation date: 2026-09-09
+Calibration/holdout source: FOMO_DATA_EXPORT_20260909_124121.zip
+
+SOFTWARE / REGRESSION
+---------------------
+- 166/166 tests passed.
+- 47 top-level Python files compiled successfully.
+- 28 regression/test files are present.
+- 6 macOS .command launchers passed `bash -n` and are executable:
+  * export_data.command
+  * run_model_lab.command
+  * setup_edge_sources.command
+  * setup_live_trading.command
+  * setup_wallet_sync.command
+  * start_mac.command
+
+V15-SPECIFIC REGRESSION COVERAGE
+--------------------------------
+Coverage includes:
+- proof gate uses only fresh current-build shadow outcomes,
+- live guidance is $0 before proof is ACTIVE,
+- explicit bankroll is required before non-zero live guidance even after proof,
+- bankroll/risk-based position sizing,
+- stateful multi-observation setup-path acceptance/rejection,
+- Solana breadth RISK_OFF veto,
+- historical analog severe-downside veto,
+- fee-aware net shadow accounting,
+- losing-streak/daily-loss paper risk circuit,
+- Runner Radar WATCH-only behavior,
+- Jupiter round-trip execution-quality measurement,
+- Jupiter Swap V2 read-only /order path with public taker and no /execute or /build,
+- Jupiter Tokens V2 explicit audit.isSus hard veto,
+- disabled STRUCTURE-style live lanes continuing as shadow-only evidence,
+- retained legacy safety/cooldown/delivery/Guardian regressions.
+
+REAL DATABASE MIGRATION TEST
+----------------------------
+A fresh byte-copy of the Sep-9 exported master DB was opened through v15 using FOMO_STATE_DB.
+Historical rows before -> after:
+- observations: 24,897 -> 24,897
+- signals: 9,040 -> 9,040
+- evals: 43,451 -> 43,451
+- positions: 55 -> 55
+- guardian_events: 749 -> 749
+- decision_ledger: 82,364 -> 82,364
+- decision_outcomes: 244,619 -> 244,619
+- missed_opportunities: 538 -> 538
+- social_events: 45 -> 45
+- journal_actions: 21 -> 21
+- paper_positions: 0 -> 0
+- runs: 4 -> 5 (expected v15 run marker)
+- lane_governor: 4 -> 7 (expected fresh v15 CAPITAL CORE / STRUCTURE / MANUAL CHAIN governor rows)
+
+No historical observation, signal, evaluation, position, journal, Guardian, Decision Ledger, or outcome row was removed or rewritten by startup migration.
+
+DATA / MODEL CHECK
+------------------
+The Sep-9 export is a fresh holdout of v13.3 logic (no v14 run marker). Its 81 completed delivered 30m paths showed weak reward/risk asymmetry. A later replay of v14's static capital box on this fresh dataset also failed to generalize well enough to authorize live entries. v15 therefore does not use that static box as its primary positive model.
+
+The export's observations table had already pruned most older multi-day snapshots. Because v15's new path gate depends on sequences of observations, it cannot be honestly reconstructed for all 81 historical alerts. The build intentionally does NOT claim a historical v15 win rate. Instead, always-on current-build shadow simulation and a fresh proof gate collect forward evidence net of configured friction.
+
+SECURITY / LIVE-MONEY DEFAULTS
+------------------------------
+- .env is excluded from the release; .env.example contains configuration placeholders only.
+- no private-key, seed, PEM, database, user export, or runtime log is packaged.
+- caches and development backup artifacts are excluded.
+- real autopilot remains OFF unless explicitly armed and confirmed.
+- pre-proof live size is $0.
+- even after proof becomes ACTIVE, non-zero live guidance requires explicit /bankroll by default.
+- Jupiter execution-quality preflight is read-only and never calls /execute or /build.
+
+LIMITATION
+----------
+Passing software tests, migration checks, historical analyses, shadow proof, or API preflight cannot guarantee profitable future trading. Meme-token markets are non-stationary and exposed to rugs, gaps, liquidity loss, route failure, slippage, latency and adversarial behavior. The safest validation path is fresh v15 paper/shadow data before risking live capital.

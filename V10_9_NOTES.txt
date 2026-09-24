@@ -1,0 +1,30 @@
+FOMO BOT v10.9 NOLOCK+HORIZON
+
+1. Manual ledger locks removed
+- /buy and /bought no longer reject a journal entry due to manual open-position count, daily realized P/L, manual amount, or alert-to-Telegram price drift.
+- Existing positions can be averaged with another manual buy.
+- Manual positions no longer consume the optional REAL autopilot position cap.
+- Automated execution keeps its own AUTO_LIVE safeguards.
+
+2. Exact Telegram trade snapshots
+- Entry/check/re-entry messages are saved in telegram_trade_context with price, market cap and liquidity.
+- Reply /bought 5 after the Fomo purchase to use that message snapshot.
+- /buy CONTRACT AMOUNT works without a prior bot signal.
+- Explicit overrides: price or mc.
+
+3. Hold/time-horizon engine
+- Every actionable entry shows a TRADE HORIZON.
+- /hold and /plan re-evaluate a live token/position.
+- Classifications: SCALP, SHORT-TERM, SHORT SWING, EXTENDED HOLD CANDIDATE, or RISK/EXIT REVIEW.
+- The old rigid 15-minute manual time-stop was replaced by horizon-aware monitoring. A no-progress exit requires actual weak live structure rather than time alone.
+
+4. Entry-quality changes from Aug-28 data
+- 1h falling-knife floor tightened to -20%.
+- STRONG requires >=25 swaps and >=0.25% 5m dollar turnover/MC.
+- High-flow internal scouts added.
+- FLOW ENTRY added for verified normal-liquidity high-flow setups; not permitted for REAL autopilot.
+- Controlled second-leg alert reset after >=60m when strong fresh flow returns and the prior position is no longer open.
+- MICRO thresholds intentionally remain strict because broad low-liquidity rescue backtests showed severe downside/rug frequency.
+
+5. v10.8 state-ledger fix retained
+- Closed historical positions cannot be resurrected from stale old folders.

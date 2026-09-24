@@ -1,0 +1,17 @@
+FOMO BOT v10.6 STABILITY-GATED
+
+GTA6 exposed a concrete failure mode: rolling DEX 5m/1h numbers could look healthy after
+the raw token price had already broken sharply, and /check was anchored to a scout rather
+than the exact actionable alert / user's recorded entry.
+
+Changes:
+- Requires at least 3 raw-price observations spanning >=45 seconds before an entry can fire.
+- Normal entries blocked >8% below the recent observed 10m peak.
+- STRONG ENTRY blocked >5% below the recent observed peak.
+- >=10% scan-to-scan raw-price break blocks an entry even if provider 5m data still looks positive.
+- STRONG ENTRY requires persistent buy pressure across recent observations.
+- /check compares current price to the exact original actionable alert.
+- /check closes an old entry after >6% deterioration from that alert.
+- Once a token is in /positions, /check becomes POSITION UPDATE/RISK and will not tell the user to buy it again.
+- Real autopilot inherits the same stability/deterioration gates.
+- All v10.5 rug/holder/falling-knife protections remain.

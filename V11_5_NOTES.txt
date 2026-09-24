@@ -1,0 +1,26 @@
+FOMO BOT v11.5 — ENTRY CONFIRM + PROFIT REMINDER
+
+WHY THIS PATCH EXISTS
+- Pinktacio: the entry worked and reached the +15% GUARDIAN partial checkpoint; the first profit alert was missed.
+- TIT: the Telegram entry showed RT 1 tx/30s even though the configured realtime entry minimum is 2. The normal classifier had an inconsistent hardcoded >=1 check.
+- Greyson: the transaction screenshot shows a losing trade, but the original alert metrics were not included, so no unsupported root cause is claimed. The next runtime export should be used to audit it precisely.
+
+CHANGES
+1. Normal classifier now enforces REALTIME_ENTRY_TX30 everywhere.
+2. Fragile normal ENTRY OPTION setups require ~45s extra internal confirmation when multiple warning traits coexist.
+3. Hot fragile normal entries require at least 3 realtime tx/30s by default.
+4. One-time TP1 reminder after ~120s if no partial was recorded and the trade remains >=+10%.
+5. Bare /check can fall back to the most recently opened recorded position.
+6. Existing fee-aware small-position recovery logic is unchanged. The fix is aimed at avoiding bad entries, not forcing wider losses.
+
+DEFAULT FRAGILITY TRAITS
+- 5m move >= +5%
+- liquidity < 10% above the $50K normal floor
+- entry score <60 AND confirmed score <72
+- realtime activity at or below the normal minimum
+At least two traits are needed for the extra confirmation delay.
+
+VALIDATION
+- TIT screenshot replica with score 59 / confirmed 69 / 5m +7.7% / liq $50.3K / RT 1 now returns NO ENTRY because realtime is below the configured minimum.
+- New v11.5 tests cover realtime floor enforcement, fragile-entry delay/pass, strong-entry bypass, and one-time TP1 reminder behavior.
+- Prior v10/v11 regression tests remain passing.

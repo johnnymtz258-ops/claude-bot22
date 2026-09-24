@@ -1,0 +1,44 @@
+FOMO BOT v15.1 SOL EDGE HARDENED — AUDIT RESPONSE
+=================================================
+Date: 2026-09-18
+
+This release was built in response to the supplied v15 reliability audit. The original audit's risk ordering was treated as a hardening checklist, but fixes were implemented according to SQLite/Solana execution semantics rather than copied mechanically.
+
+CRITICAL / HIGH-RISK ITEMS
+--------------------------
+1. Database transaction atomicity — ADDRESSED for critical live BUY/SELL accounting, decision dedupe/cooldown mutation and execution-state transitions using explicit write transactions with rollback.
+2. API timeouts — ADDRESSED in shared HTTP/live execution/RPC paths with explicit timeouts.
+3. Position tracking race — ADDRESSED at the live execution boundary with database execution leases, idempotency and atomic position accounting.
+4. Lost execution context on network retry — ADDRESSED using persistent execution intents and pre-submit signed transaction signature storage. Blind resend of unresolved signed orders is prohibited.
+5. Unverified balance assumptions — ADDRESSED in live execution through checked SOL/token balance APIs and fail-closed accounting.
+6. SQLite concurrency/isolation — IMPLEMENTED as WAL + busy_timeout + short BEGIN IMMEDIATE write transactions. Broad EXCLUSIVE mode was intentionally NOT used because it would unnecessarily serialize readers and is not the preferred pattern for this workload.
+7. Proof/governor corruption — ADDRESSED with startup current-build governor integrity validation/reset.
+8. Signal dedup under load — ADDRESSED with DB-backed decision_dedupe plus execution-level idempotency/leases.
+9. Post-execution slippage — ADDRESSED by comparing verified wallet output delta with quoted output and persisting excess-fill-slippage events.
+10. Circuit breaker bypass — ADDRESSED by a centralized live_execution_gate at the real-order transition boundary.
+
+MEDIUM ITEMS
+------------
+11. RPC failover — ADDRESSED with configurable RPC fallback pool.
+12. Confirmation polling — ADDRESSED with getSignatureStatuses polling and timeout.
+13. Error categorization — IMPROVED with structured network/execution failure categories and persistent trade_failures.
+14. Keypair revalidation — ADDRESSED using startup fingerprint plus immediate-before-sign fingerprint verification.
+15. Max transaction/balance check — ADDRESSED with verified wallet balance + SOL reserve preflight and configured size caps.
+
+PERFORMANCE / OPERABILITY
+-------------------------
+16. Inefficient queries — targeted hot-path queries were bounded/avoided in new hardening logic; broad historical query refactoring was deliberately not mixed into the safety release unless necessary.
+17. Missing indexes — ADDRESSED for major decision/signal/position/execution/failure lookup paths.
+18. Unbounded results — high-risk/active social query path is bounded; new diagnostics use bounded result sets.
+19. Implicit type coercion — live execution/balance/accounting paths now use explicit checked states rather than treating missing balances as zero; a repository-wide type-system rewrite was intentionally not attempted in this maintenance release.
+20. Trade-failure logging — ADDRESSED with persistent structured trade_failures and /execstatus.
+
+ADDITIONAL DEFENSES ADDED
+-------------------------
+- Solana chain confirmation overrides contradictory/lost Jupiter HTTP responses.
+- Confirmed-but-unreconciled transactions fail closed until wallet truth can be established.
+- Startup reconciliation can reconstruct a confirmed BUY from wallet delta without resending.
+- Real-order authorization blocks when unresolved transaction state exists.
+- Exact execution state is included in exports for postmortem analysis.
+
+The strategy layer remains proof-first. Execution safety improvements are not evidence of trading profitability.

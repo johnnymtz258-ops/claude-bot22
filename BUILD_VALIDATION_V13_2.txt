@@ -1,0 +1,78 @@
+FOMO BOT v13.2 SHADOW RECOVERY — FINAL BUILD VALIDATION
+======================================================
+Validation date: 2026-08-30
+Source database/export: FOMO_DATA_EXPORT_20260830_190331.zip
+Parent build: v13.1 QUALITY GOVERNOR
+
+SCOPE
+-----
+v13.2 is a control-plane / learning-integrity update. No fresh post-v13.1 holdout was available yet, so the static entry classifier was intentionally NOT retuned from the same Aug-30 data.
+
+CODE / REGRESSION
+-----------------
+- 42 Python files compiled successfully.
+- 25 test files executed successfully.
+- 125 tests passed.
+- New v13.2 coverage includes:
+  * bad experimental-lane cohort persists as QUARANTINED,
+  * same-build restart preserves quarantine state,
+  * quarantined lane returns $0 bot-guided size,
+  * weak LANE_SHADOW cohort cannot reopen the lane,
+  * clean LANE_SHADOW cohort can return the lane to a fresh PROBATION phase,
+  * recovered probation excludes the old failed live cohort,
+  * LANE_SHADOW and lane_governor export hooks are present,
+  * active launcher/self-check/docs report the current v13.2 build.
+
+ENTRY MODEL INTEGRITY
+---------------------
+Direct source comparison with v13.1 confirmed these functions are unchanged:
+- classify_entry_tier
+- entry_stability_check
+- entry_tape_preservation
+- entry_commitment_gate
+- tier_profit_targets
+
+Therefore the v13.1 BLUECHIP chase fix, cross-chain shapes, Jimothy downtrend repair gate, normal Solana recovery pocket, REVERSAL separation, and profit targets remain intact.
+
+QUALITY GOVERNOR FIX
+--------------------
+- Added persistent lane_governor state keyed by build version + tier.
+- Phase boundaries use signal/decision row-ID floors instead of timestamp-only cohort boundaries.
+- Fully qualified candidates suppressed only by quarantine are logged as LANE_SHADOW.
+- 30m LANE_SHADOW outcomes must pass the same existing quality bar before the lane can return to a fresh PROBATION cohort.
+- Quarantine remains in force when shadow evidence is weak.
+- /status exposes probation or shadow-recovery progress.
+- /learn and /daily report governor-shadow outcomes separately.
+- export_data.py exports lane_governor.csv.
+
+REAL DATABASE MIGRATION TEST
+----------------------------
+A byte-copy of the latest ~235MB master DB was opened by v13.2 using FOMO_STATE_DB.
+Counts before -> after:
+- observations: 1,168,690 -> 1,168,690
+- signals: 2,452 -> 2,452
+- evals: 11,281 -> 11,281
+- positions: 47 -> 47
+- guardian_events: 401 -> 401
+- decision_ledger: 17,394 -> 17,394
+- decision_outcomes: 49,469 -> 49,469
+- missed_opportunities: 200 -> 200
+- social_events: 22 -> 22
+- journal_actions: 9 -> 9
+- runs: 1 -> 2 (expected new v13.2 run marker only)
+- open recorded positions after migration: 1
+- new v13.2 governor rows: 2, both PROBATION with phase floors at signal 2452 / decision 17394
+
+No existing journal, signal, observation, learning, position, or GUARDIAN row was removed or rewritten by startup migration.
+
+MAC / PACKAGE
+-------------
+- 6 .command launchers passed bash -n syntax validation.
+- All 6 launchers are executable.
+- Active start_mac.command and doctor.py branding now reports v13.2 SHADOW RECOVERY.
+- No .env, PEM, key, seed file, master DB, or data export is included in the release package.
+- Development __pycache__ / pytest cache artifacts are excluded.
+
+LIMITATION
+----------
+This update improves governor correctness and future evidence collection. It does not establish a new trading edge because there is not yet a fresh post-v13.1 live holdout. The next classifier/threshold update should be based on new v13.1/v13.2 live outcomes rather than another fit to the same Aug-30 sample.

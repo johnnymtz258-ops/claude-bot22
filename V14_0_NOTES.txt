@@ -1,0 +1,53 @@
+FOMO BOT v14.0 CAPITAL FIRST — RELEASE NOTES
+============================================
+
+1. CAPITAL-FIRST ECONOMIC EDGE
+- Added a final fee-aware public-market quality gate after the legacy classifier.
+- Requires market depth, real dollar turnover, controlled momentum, sufficient prints and buyer confirmation.
+- Existing security, stability, tape, commitment, chase and slippage gates remain in force.
+
+2. UNIVERSAL BUY PERSISTENCE
+- Normal/STRONG/FLOW/REVERSAL BUY candidates must survive ~75 seconds of fresh confirmation.
+- Rejects a candidate that weakens >~2.5%, loses >~3% liquidity, or runs >~3% before confirmation.
+
+3. TOKEN TRAUMA MEMORY
+- A same-contract bot alert that experienced <=-15% 30m drawdown blocks another bot-guided entry for 24h by default.
+
+4. CORE SELF-QUARANTINE
+- New CAPITAL CORE governor starts PROBATION.
+- Probation bot-guided size cap: $5.
+- After >=6 completed 30m delivered paths, weak median upside / +10 hit rate / drawdown quality quarantines core BUY alerts.
+- Quarantined candidates continue as CAPITAL_SHADOW and can re-prove the lane without live-risk alerts.
+
+5. WEAK LANES WATCH-ONLY BY DEFAULT
+- STRUCTURE BUY alerts OFF by default.
+- MANUAL CHAIN BUY alerts OFF by default.
+- MICRO/FRESH BUY alerts OFF by default.
+- Discovery, diagnostics and learning remain active.
+
+6. CAPITAL LOSS CAP
+- Guardian hard price risk cannot be widened beyond ~8% by an old .env or old DB setting.
+- Fees are no longer treated as a reason to tolerate 16-20% losses on small positions.
+
+7. PROFIT REALIZATION
+- Normal checkpoints ~+12% / +25%.
+- Fee-aware TP1 can rise when needed for tiny positions.
+- <=$25 positions at TP1 favor full realization.
+- High-water giveback from a meaningful winner escalates to EXIT_REVIEW / full exit guidance.
+
+8. TELEGRAM DELIVERY TRUTH
+- sendMessage retries three times.
+- Failed BUY delivery releases the action reservation and records ENTRY_DELIVERY_FAIL; no EARLY signal / long cooldown is consumed.
+- Guardian TP, runner, exit and liquidity-warning flags advance only after confirmed delivery and remain retryable otherwise.
+- /status reports Telegram delivery health.
+
+9. UPGRADE-SAFE SIZE LIMITS
+- old $20/$30 DB guidance is capped to $10 normal / $15 exceptional.
+- optional REAL autopilot remains OFF unless explicitly armed and is capped to $5 per trade.
+- small auto positions use full TP1 realization.
+
+10. DIAGNOSTICS
+- /status shows capital-core state, ENTRY_EDGE, ENTRY_DELIVERY_FAIL and CAPITAL_SHADOW counts.
+- /why CONTRACT diagnoses capital edge and persistence without creating a pending BUY.
+
+This build uses public/on-chain data only. It is decision-support software, not a guarantee of profit.

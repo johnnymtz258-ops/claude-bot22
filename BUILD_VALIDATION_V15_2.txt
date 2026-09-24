@@ -1,0 +1,108 @@
+FOMO BOT v15.2 SELECTIVE PROOF — FINAL BUILD VALIDATION
+========================================================
+Validation date: 2026-09-20
+Forward-data source: FOMO_DATA_EXPORT_20260920_225327.zip
+Base release: v15.1 SOL EDGE HARDENED
+
+SOFTWARE / REGRESSION
+---------------------
+- 190/190 tests passed in the development tree after the final v15.2 edits.
+- 49 top-level Python files compiled successfully.
+- 30 regression/test files are present.
+- 6 macOS .command launchers passed `bash -n` and are executable:
+  * export_data.command
+  * run_model_lab.command
+  * setup_edge_sources.command
+  * setup_live_trading.command
+  * setup_wallet_sync.command
+  * start_mac.command
+
+FRESH SEP-20 FORWARD DATA
+-------------------------
+v15.1 closed research shadows (all lanes):
+- n=56; 17 unique tokens
+- net P/L: -$7.60
+- gross market P/L before modeled friction: +$0.06
+- modeled fees/friction: $7.66
+- net ROI: -2.71%
+- win rate: 16.1%
+- profit factor: 0.53
+
+Core live-capable tiers only (ENTRY / STRONG / FLOW / REVERSAL):
+- n=26; 7 unique tokens
+- net P/L: -$4.11
+- gross market P/L: +$0.27
+- modeled fees/friction: $4.38
+- net ROI: -3.16%
+- win rate: 23.1%
+- profit factor: 0.59
+
+STRUCTURE research-only:
+- n=30
+- net P/L: -$3.49
+- gross P/L: -$0.21
+- modeled friction: $3.28
+- win rate: 10.0%
+- profit factor: 0.42
+
+SELECTIVE-PROOF CALIBRATION
+---------------------------
+The existing final entry score was the clearest simple separator that held directionally across the two chronological v15 cohorts:
+- older v15.0 core, score >=70: n=18 / 11 unique tokens, net +$1.51, net ROI +1.68%, 50.0% wins, PF 1.17;
+- later v15.1 core, score >=70: n=7 / 4 unique tokens, net +$2.84, net ROI +8.13%, 57.1% wins, PF 2.80.
+
+A >=75 cutoff did not generalize to the older v15.0 cohort. Therefore >=70 is used only as the DEFAULT FORWARD-PROOF ELIGIBILITY FLOOR. These historical rows are calibration evidence and are NOT counted as v15.2 proof.
+
+V15.2 BEHAVIOR / REGRESSION COVERAGE
+------------------------------------
+New/updated coverage verifies:
+- every fully qualified setup may still enter broad research shadow simulation;
+- only core ENTRY/STRONG/FLOW/REVERSAL shadows with final score >=70 are proof-eligible by default;
+- research-only shadows cannot unlock live guidance;
+- proof requires >=12 completed eligible paths and >=6 unique token contracts;
+- ACTIVE additionally requires positive net P/L, >=1.0% net ROI after modeled friction, >=45% wins and PF >=1.20;
+- proof begins fresh for v15.2; prior-build trades are not grandfathered;
+- the live paper loss-streak/drawdown circuit uses the same proof-eligible cohort instead of broad research shadows;
+- /paperreport and /edge separate research economics from proof economics;
+- /status exposes RESEARCH_SHADOW telemetry;
+- exports include paper_positions.csv and decision_dedupe.csv;
+- all v15.1 execution hardening remains covered: WAL/atomic accounting, durable execution intents, idempotency, cross-process execution leases, RPC failover, confirmation polling, wallet-delta verification, startup reconciliation, structured trade failures, centralized fail-closed live gate and /execstatus.
+
+REAL DATABASE MIGRATION TEST
+----------------------------
+A byte-copy of the Sep-20 exported master DB was opened/migrated through v15.2 using FOMO_STATE_DB.
+Historical rows before -> after:
+- observations: 409,078 -> 409,078
+- signals: 18,611 -> 18,611
+- evals: 86,006 -> 86,006
+- positions: 55 -> 55
+- guardian_events: 779 -> 779
+- decision_ledger: 176,739 -> 176,739
+- decision_outcomes: 512,169 -> 512,169
+- missed_opportunities: 954 -> 954
+- social_events: 53 -> 53
+- journal_actions: 23 -> 23
+- paper_positions: 243 -> 243
+- runs: 6 -> 7 (expected new v15.2 run marker only)
+- lane_governor: 10 -> 13 (expected fresh v15.2 CAPITAL CORE / STRUCTURE / MANUAL CHAIN rows)
+
+Migration results:
+- journal_mode = WAL
+- runtime busy_timeout is configured by the application
+- paper_positions contains proof_eligible and proof_reason
+- all three current-build governor rows start PROBATION at the latest signal/decision floors
+- no historical observation, signal, evaluation, position, journal, Guardian, Decision Ledger, outcome, missed-opportunity or paper-position row was removed or rewritten by startup migration.
+
+SECURITY / LIVE-MONEY DEFAULTS
+------------------------------
+- .env is excluded; .env.example contains configuration placeholders only.
+- no private-key, seed, PEM, database, user export or runtime log is packaged.
+- caches, compiled bytecode and development backup artifacts are excluded.
+- real autopilot remains OFF unless explicitly armed/confirmed.
+- v15.2 proof starts from zero fresh eligible outcomes.
+- pre-proof live size remains $0.
+- even after proof becomes ACTIVE, non-zero live guidance still requires an explicit bankroll by default.
+
+LIMITATION
+----------
+The score>=70 split was selected with v15.0/v15.1 outcomes visible and is therefore calibration, not independent proof. Passing software tests, migration checks or retrospective segmentation cannot guarantee profitable future trades. Fresh v15.2 shadow/proof results are required before live authorization. Meme-token markets remain non-stationary and exposed to rugs, liquidity loss, slippage, routing failure, latency and adversarial behavior.

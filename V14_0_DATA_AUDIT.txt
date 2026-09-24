@@ -1,0 +1,79 @@
+FOMO BOT v14.0 CAPITAL FIRST — AUG 31 POST-v13.3 AUDIT
+=====================================================
+Source: user export 86ebe8db-43ee-4bfb-b9c7-fc254b878600.zip
+Latest recorded build in source DB: v13.3 EDGE RECOVERY
+
+WHY A MAJOR REBUILD WAS NECESSARY
+---------------------------------
+The v13.3 delivered-entry cohort had poor reward/risk for small Fomo trades even when raw endpoint results looked roughly flat.
+Completed 30-minute v13.3 delivered paths (ENTRY_SENT / ENTRY_SENT_HOT):
+- n=22
+- median maximum available upside: +2.61%
+- median maximum drawdown: -1.34%
+- median 30m endpoint: +0.96%
+- +10% touched: 18.2%
+- <=-15% drawdown: 9.1%
+- positive 30m endpoints: 54.5%
+
+With an assumed ~5% round-trip Fomo drag, a +2.61% median maximum excursion is not an economically useful alert cohort. The strategy needed to optimize for fee-worthy upside and bounded downside, not merely positive endpoints.
+
+TAIL FAILURES
+-------------
+APEUS produced two v13.3 delivered entries with 30m paths of approximately:
+- STRONG ENTRY: max +0.99%, min -31.08%, final -23.29%
+- later ENTRY OPTION: max +8.61%, min -44.81%, final -35.38%
+The first recorded APEUS position used $18.96 and the journal estimated roughly -$5.03 realized P/L when closed. This is unacceptable downside asymmetry for a system whose common wins are only a few percent.
+
+STRUCTURE / CROSS-CHAIN EDGE
+----------------------------
+The source DB already quarantined v13.3 STRUCTURE after six completed 30m paths:
+- median maximum upside about +0.8%
+- +8% target hit 0%
+- severe-drawdown rate 0%
+The v13.3 MANUAL CHAIN delivered cohort had median maximum upside only about +1.78% across six paths. Both are below typical Fomo friction for small trades, so v14 defaults these BUY lanes to watch/shadow only.
+
+TELEGRAM DELIVERY DEFECT
+------------------------
+The source bot.log contains repeated Telegram network-send failures (9 failed-send log lines). In v13.3, the bot could reserve an actionable cooldown before Telegram delivery and still create delivery-dependent state after a send failure. Guardian profit/exit flags could also become consumed without confirmed delivery. v14 changes delivery accounting so message-dependent state advances only after Telegram returns a confirmed message ID, with retries first.
+
+CAPITAL-FIRST COUNTERFACTUAL
+----------------------------
+A simple final public-market capital shape was evaluated on the same v13.3 delivered cohort. This is NOT an independent holdout and must not be treated as proof of future profitability. It is a defensive redesign check only.
+
+Required normal Solana shape:
+- liquidity / market cap >=15%
+- 5m turnover >=0.20% of market cap
+- 5m move about -2% to +4%
+- 1h move about -5% to +10%
+- >=10 swaps/5m
+- B/S >=1.35x, or a heavy-flow exception with >=1% turnover, >=50 swaps and >=1.15x B/S
+- plus all existing security, stability, tape, commitment, chase and slippage gates
+- plus 75s second confirmation
+- plus 24h same-token trauma memory after a <=-15% prior 30m bot-alert drawdown
+
+On the already-seen v13.3 delivered cohort, the static shape selected STACY, ZCAT, solly and MACRODUCK. The new trauma rule would additionally reject ZCAT because an earlier v13.2 ZCAT alert had a -20.17% 30m drawdown inside the prior 24h. The remaining three already-seen paths were STACY, solly and MACRODUCK:
+- n=3
+- median maximum upside: +18.05%
+- median drawdown: -6.27%
+- median 30m endpoint: +18.05%
+- +10% touched: 100%
+- <=-15% drawdown: 0%
+Again, this is in-sample defensive evidence, not a profitability claim. The 75s v14 persistence rule was not counterfactually scored here because the historical observation cadence is incomplete around every old alert.
+
+CORE CIRCUIT BREAKER
+--------------------
+v14 adds a version-aware CAPITAL CORE governor for normal/strong/flow/reversal BUY alerts. It begins in PROBATION with a $5 guidance cap. After at least six completed 30m delivered paths it grades median available upside, +10% hit rate, and <=-10% drawdown rate. If quality fails, BUY alerts quarantine automatically while fully-qualified setups are logged as CAPITAL_SHADOW. Clean shadow paths can return the lane to fresh probation without asking the user to risk capital during recovery.
+
+RISK / EXIT CHANGES
+-------------------
+- price hard line capped at ~-8%, including old databases carrying legacy 16-20% small-position settings
+- normal profit checkpoints approximately +12% / +25%
+- small positions favor a full TP1 realization instead of a fee-heavy tiny partial
+- meaningful high-water giveback becomes EXIT_REVIEW / full-profit-lock guidance
+- same-token severe-path memory prevents ordinary cooldown expiry from authorizing a repeat failure
+- bot-guided normal sizing capped at $10, exceptional $15; core probation cap $5
+- optional REAL autopilot remains opt-in and is capped at $5/trade in this build
+
+INTERPRETATION
+--------------
+v14 intentionally prefers fewer, better-defined BUY alerts over activity for its own sake. It uses only public/on-chain market information. No backtest, counterfactual, test suite, or filter can guarantee future profits in meme coins; gaps, rugs, slippage, latency and regime change remain material risks.

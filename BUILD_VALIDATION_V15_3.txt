@@ -1,0 +1,38 @@
+FOMO BOT v15.3 ACTIONABLE CORE — FINAL BUILD VALIDATION
+=======================================================
+Validation date: 2026-09-21
+Source base: v15.2 SELECTIVE PROOF + Sep-20 forward dataset + v15.1 hardening
+
+SOFTWARE / REGRESSION
+---------------------
+- 197/197 tests passed in the development package before final packaging.
+- New v15.3 tests cover actionable pre-proof signaling, STRICT compatibility, capped test sizing, explicit Telegram labeling, TEST-entry cooldown persistence and continued proof lock on real execution.
+
+LATEST DATABASE MIGRATION
+-------------------------
+A byte-copy of FOMO_DATA_EXPORT_20260920_225327.zip master DB was opened by v15.3. Historical rows were preserved exactly:
+- observations 409,078 -> 409,078
+- signals 18,611 -> 18,611
+- evals 86,006 -> 86,006
+- positions 55 -> 55
+- guardian_events 779 -> 779
+- decision_ledger 176,739 -> 176,739
+- decision_outcomes 512,169 -> 512,169
+- missed_opportunities 954 -> 954
+- social_events 53 -> 53
+- journal_actions 23 -> 23
+- paper_positions 243 -> 243
+- runs 6 -> 7 (expected v15.3 run marker)
+- lane_governor 10 -> 13 (expected fresh current-build governor rows)
+- SQLite journal mode WAL; busy_timeout 10000ms.
+
+SAFETY MODEL
+------------
+- ACTIONABLE mode changes Telegram signal visibility, not automated execution authorization.
+- Real autopilot remains proof/risk/bankroll gated by live_execution_gate().
+- TEST signals use capped manual guidance; quarantine/risk-pause signals show PAPER-only sizing.
+- No secrets, user DB, exports or runtime logs belong in the release package.
+
+LIMITATION
+----------
+A visible BUY signal is not evidence of positive expectancy. Fresh v15.3 forward results must still be reviewed before increasing risk.

@@ -1,0 +1,34 @@
+FOMO BOT v11.4 — DATA RATIONALE
+Source: latest Aug-29 master DB/export used for the v11.3 holdout audit.
+
+WHY AUTO CHECKS AT ~60s / ~150s
+The goal is not to keep an entry alive artificially; it is to prevent a user who sees Telegram 2–3 minutes late from acting on a stale first alert.
+Examples from the observed post-alert path included:
+- clean OTC setup: about +1.1% near 60s and +2.4% near 150s
+- PINK: about +1.8% near 60s and +4.0% near 150s, then a much larger later move
+- moonkey: near flat around 60s but roughly -12% around 150s
+- inuzard: roughly -8% around 150s
+- BAILEY: roughly +4.7% around 150s, but its recent-crash context would now be blocked by v11.3
+- later OTC: roughly -2.9% around 150s, also blocked by the v11.3 crash-memory gate
+
+This supports automatic revalidation rather than either (a) blindly buying a stale alert or (b) closing every alert simply because it is more than a minute old. +2% remains the ideal window. Approximately +2% to +5% can be marked LATE BUT STILL VIABLE with reduced sizing; >+5% is do-not-chase by default.
+
+SMART SIZE SANITY CHECK ON RECENT ENTRY SNAPSHOTS
+Using the current historical calibration and the default $5 / $20 / $30 range, recent snapshots produced advisory examples such as:
+- OTC: ~$15
+- ANTSEM: ~$5
+- PINK: ~$8
+- TIT: ~$15
+- NOVALUE: ~$12
+- Grokstreet: ~$12
+No recent example unlocked >$20. That is intentional: current historical path evidence is not mature/clean enough to justify exceptional sizing yet. A high legacy score alone cannot unlock an oversized recommendation.
+
+PARTIAL-SALE ECONOMICS
+The user reported that small trades can experience meaningful Fomo/network/slippage friction. v11.4 therefore:
+- reports both percent and approximate dollars for partials;
+- defaults to a ~$5 minimum useful partial;
+- can skip mechanically selling a $1–$3 slice of a healthy tiny winner;
+- can recommend pulling approximately the original stake out of a sufficiently large runner;
+- warns if TP1 was reached, no partial was recorded, and most of the profit window is later given back.
+
+This is descriptive decision support, not a guarantee of future returns.

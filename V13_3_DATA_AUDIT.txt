@@ -1,0 +1,97 @@
+FOMO BOT v13.3 EDGE RECOVERY — AUG 31 FRESH HOLDOUT AUDIT
+=========================================================
+Source export: FOMO_DATA_EXPORT_20260831_002628.zip
+Fresh v13.2 runtime in export: ~2.13 hours
+Fresh v13.2 Decision Ledger: 1,756 rows across 97 contracts
+Events: 921 HOT_WAIT, 833 NEAR_ENTRY, 2 ENTRY_SENT
+
+WHY v13.3 EXISTS
+----------------
+v13.2 fixed the Quality Governor itself, but the fresh post-v13.2 holdout exposed two independent control-flow failures that can make a stricter bot feel worse even when its classifier is unchanged:
+1. an ENTRY signal created by an older build could suppress a newly valid setup for the full legacy eight-hour cooldown;
+2. the recent-crash memory window was short enough for a violent flush to expire before a superficial rebound became actionable.
+
+FRESH v13.2 ACTIONABLE OUTCOMES
+-------------------------------
+Completed 30-minute paths:
+- Jimothy / STRUCTURE ENTRY: max +2.97%, min -1.06%, final +1.70%
+- ZCAT / ENTRY OPTION: max +3.92%, min -20.17%, final -8.52%
+
+The sample is intentionally too small to justify a broad score/liquidity/momentum retune. v13.3 therefore changes the control plane around the classifier, not the core classifier thresholds.
+
+STALE CROSS-BUILD COOLDOWN
+--------------------------
+HeeHaw:
+- prior ENTRY alert: v13.0 STABLE EDGE, 377.9 minutes before the fresh v13.2 candidate
+- fresh v13.2 near-entry snapshot: 5m +4.31%, 1h -3.70%, B/S 1.76x, 229 swaps, 0.925% turnover/MC
+- that snapshot had no ordinary near-entry blocker
+- subsequent 30m path: max +17.84%, min -1.08%, final +17.84%
+
+Leafy:
+- prior ENTRY alert: v13.0 STABLE EDGE, 373.3 minutes before the fresh v13.2 candidate
+- fresh v13.2 near-entry snapshot: 5m +4.66%, 1h -2.61%, B/S 1.75x, 11 swaps, 0.161% turnover/MC
+- that snapshot had no ordinary near-entry blocker
+- subsequent 30m path: max +13.90%, min -1.09%, final +5.47%
+
+v13.2 still looked up the legacy EARLY signal over eight hours. Because those old alerts were from v13.0, not the current model, the fresh setup could be suppressed before the current-build stability/tape/confirmation pipeline got a fair evaluation.
+
+v13.3 fix:
+- same-build ENTRY_SENT rows keep the full 8h cooldown, including across restarts;
+- older-build alerts get a 60m upgrade grace by default;
+- after that grace, the current build can evaluate a fresh scout independently when no recorded position is open;
+- the ordinary same-build second-leg rules remain intact.
+
+ZCAT VIOLENT-FLUSH MEMORY
+-------------------------
+At ZCAT's v13.2 entry:
+- live entry snapshot: 5m +3.63%, 1h -2.39%, B/S 1.83x, 17 swaps, ~1.03% turnover/MC
+- within the preceding 30 minutes, raw observations recorded a -17.99% five-minute print about 10.8 minutes before entry
+- the old recent-crash lookback was only 10 minutes, so that flush had just expired from the hard crash-memory gate
+- the following 30m path reached -20.17% and finished -8.52%
+
+v13.3 fix:
+- preserve at least 30 minutes of crash memory;
+- a <= -17.5% five-minute raw observation inside that window blocks the recovery entry;
+- legacy .env values of 10m / -20% cannot silently weaken the new default after upgrade.
+
+Counterfactual replay on the real exported observation history:
+- ZCAT is blocked by the new crash-memory rule.
+- v13.2 Jimothy remains allowed by the stability rule.
+- HeeHaw and Leafy old-build cooldowns are cleared after the 60m cross-build grace; they still must pass all current live gates before any alert.
+
+WHAT WAS NOT LOOSENED
+---------------------
+The audit did NOT support a broad relaxation just to increase alert count:
+- v13.0 cross-chain BUY cohorts remained weak; strict v13.1 cross-chain shapes stay in place.
+- isolated low-liquidity runners existed, but neighboring low-liquidity candidates still showed severe drawdown risk; the normal $50K Solana liquidity floor remains.
+- isolated >+10% 1h continuation runners existed, but historical continuation cohorts showed substantial severe-drawdown risk; the normal +10% 1h ceiling is not broadly raised.
+- the core entry classifier, tape-preservation gate, commitment gate and lane thresholds are otherwise unchanged from v13.2.
+
+OBSERVABILITY ADDED
+-------------------
+v13.3 logs post-classifier stops separately:
+- ENTRY_COOLDOWN
+- ENTRY_STABILITY
+- ENTRY_TAPE
+- ENTRY_COMMIT
+- ENTRY_CHASE
+- ENTRY_SLIPPAGE
+- ENTRY_RATE_LIMIT
+- LANE_SHADOW
+- ENTRY_SENT / ENTRY_SENT_HOT
+
+/status summarizes the last-hour entry pipeline. /why CONTRACT now explains the live classifier, scout, cooldown, stability, tape, safety and last internal gate without creating a pending entry.
+
+INTERPRETATION
+--------------
+This is not a promise of profit. The fresh holdout is small and meme-coin returns are highly non-stationary. v13.3 is designed to remove a demonstrated stale-version suppression bug, remember a demonstrated dangerous flush longer, and make future alert droughts measurable before any further model retuning.
+
+CHRONOLOGICAL WALK-FORWARD SANITY CHECK
+---------------------------------------
+Fresh master DB endpoint validation (older 70% vs newest 30%):
+- 30m: train 99 / unseen test 43; unseen median -0.5%, 37% positive, 7% >=+15%, 14% <=-15%.
+- The score cut learned only from the older 30m slice was ~66; unseen score>=66 had median -0.2% versus -3.5% below the cut.
+- 120m: train 98 / unseen test 42; unseen median -1.7%, 33% positive, 10% >=+15%, 29% <=-15%.
+- The older-slice 120m score cut was ~68; unseen score>=68 had median -0.6% versus -6.2% below it.
+
+This is another reason v13.3 does not lower score/quality thresholds simply to increase Telegram frequency. The unseen endpoints remain difficult; higher-quality cohorts degrade less, but the sample does not justify claiming a stable profit edge or fitting a new broad threshold from one night.

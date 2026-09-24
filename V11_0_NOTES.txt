@@ -1,0 +1,38 @@
+FOMO BOT v11.0 GUARDIAN — RELEASE NOTES
+
+CORE
+- Independent 8-second Guardian position loop.
+- Position state machine: ENTRY, CONFIRMED, PROFITABLE, TAKE_PARTIAL, RUNNER, WEAKENING, EXIT REVIEW.
+- Material-transition alerts instead of constant noise.
+- Dynamic trailing-risk logic and hold-horizon re-evaluation.
+
+LEARNING / CALIBRATION
+- Adaptive confidence and size guidance.
+- Raw legacy score explicitly down-weighted because chronological holdout testing did not show stable monotonic performance at all horizons.
+- Completed endpoint history is Bayesian-smoothed.
+- New path-aware 30/60/120m outcome ledger captures max/min/final moves.
+- Missed-opportunity ledger logs clean strong-flow runners that lacked a timely EARLY alert.
+- /daily, /learn and /lab reports.
+- Offline run_model_lab.command chronological holdout report.
+
+DISCOVERY
+- Fast discovery mode caps the standard scan interval at 15s by default.
+- Existing safety, stability, FLOW ENTRY, second-leg, strict MICRO and falling-knife protections retained.
+
+MANUAL WORKFLOW
+- Manual journal remains free of position-count, daily-loss, size and chase-recording locks.
+- /bought reply records exact Telegram alert/check snapshot.
+- Existing partial-sale commands retained.
+
+WALLET SYNC
+- Optional PUBLIC-address-only Solana reconciliation.
+- Sell auto-recording requires swap-like evidence by default (tracked token down + SOL or USDC received).
+- Transfer-like decreases do not automatically alter the journal.
+- Never requires a seed phrase/private key.
+
+OPTIONAL REAL AUTOPILOT
+- Still off unless separately configured and armed.
+- Dedicated real-money caps retained.
+- Adaptive layer may reduce but never increase configured automatic position size.
+- Profit trail tightens as return rises.
+- Old simplistic flat time exit replaced with a stale+deteriorating condition.

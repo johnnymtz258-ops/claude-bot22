@@ -1,0 +1,62 @@
+FOMO BOT v15.0 SOL EDGE ENGINE — RELEASE NOTES
+==============================================
+
+1. PROOF-FIRST DEPLOYMENT
+- Always-on fresh-build shadow simulation after a setup passes the full edge pipeline.
+- Shadow P/L is charged estimated execution/frontend friction.
+- Default proof sample: 12 completed fresh core shadow trades.
+- ACTIVE requires positive net P/L, >=45% win rate and profit factor >=1.20.
+- Otherwise live guidance remains locked or becomes QUARANTINED.
+
+2. BANKROLL REQUIRED FOR LIVE GUIDANCE
+- Proof passing no longer implies an arbitrary dollar size.
+- /bankroll AMOUNT is required for non-zero live-money guidance by default.
+- Default risk budget: 0.5% bankroll with about an 8% risk reference.
+- Optional REAL autopilot is also locked when bankroll is unset.
+
+3. STATEFUL SOLANA PATH GATE
+- Multiple observations over time, not a one-frame decision.
+- Chase, peak drawdown, liquidity decay, buyer persistence and continuation/reclaim shape are measured.
+- Live-disabled Solana lanes (e.g. STRUCTURE) can still continue through validation and produce shadow evidence, then stop before a BUY alert.
+
+4. REGIME + HISTORICAL DOWNSIDE
+- Breadth guard uses the surrounding Solana meme candidate universe.
+- RISK_OFF requires multiple stress symptoms.
+- Transparent nearest-neighbor historical analogs can veto repeatedly dangerous shapes.
+- Historical similarity never creates a BUY by itself.
+
+5. JUPITER EXECUTION QUALITY
+- SOL -> token -> SOL round-trip route preflight.
+- With a PUBLIC taker address, current Swap V2 /order is used read-only; transaction/request material is discarded and /execute is never called.
+- Without a public taker, legacy quote-only routing is retained only as compatibility measurement.
+- Configurable Phantom/frontend friction is included in shadow economics.
+
+6. JUPITER TOKENS V2
+- Optional discovery from top-trending 5m, top-organic 5m and recent-pool feeds.
+- Exact-mint safety enrichment before action.
+- Explicit audit.isSus / banned status is a hard veto.
+- Organic score and verification are context only and never a BUY signal.
+
+7. RUNNER RADAR
+- Broad high-flow scanner records WATCH ONLY leaders even if they never become entries.
+- /leaders surfaces these candidates without presenting them as buys.
+
+8. RISK CIRCUITS
+- Net shadow losing streak can temporarily pause live risk.
+- Daily paper drawdown can pause live risk when bankroll is configured.
+- Existing token trauma, crash-memory, Guardian, safety, delivery-retry and cooldown protections remain.
+
+9. OPERATING COMMANDS
+- /edge
+- /leaders
+- /shadow on|off
+- /paperreport
+- /bankroll AMOUNT
+- /why CONTRACT
+- /status
+- /sources
+
+10. REAL EXECUTION
+- Real autopilot remains optional and OFF unless explicitly armed/confirmed.
+- v15 does not need any live trade to collect proof.
+- Public/on-chain data only; no material non-public or illegal insider information is used.

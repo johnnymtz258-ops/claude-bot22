@@ -1,0 +1,65 @@
+FOMO BOT v16.1 VELOCITY EDGE — BUILD VALIDATION
+================================================
+
+RESULT: PASS
+
+Regression / feature tests
+--------------------------
+- pytest: 220 passed
+- python compileall: PASS
+- .command shell syntax: PASS
+- all .command launchers remain executable
+
+Velocity changes validated
+--------------------------
+- VERSION: v16.1 VELOCITY EDGE
+- PROOF_ELIGIBLE_MIN_SCORE default: 55
+- PROOF_FIRST_MIN_PATHS default: 8
+- ENTRY_STABILITY_MIN_SPAN_SECONDS default: 20
+- FAST ENTRY: 2 observations / 15 seconds, stronger flow/liquidity floor
+- FAST ENTRY never bypasses a hard security block
+- FAST ENTRY remains excluded from real live-autopilot tiers
+- FAST lane can use basic safety while premium enrichment is still running
+- STRICT lane preserves breadth/historical vetoes; FAST records these as soft warnings
+- TEST signals return a small capped manual-test amount without requiring a bankroll
+- Real live execution gate remains fail-closed before proof/risk/bankroll authorization
+
+Architecture changes validated
+------------------------------
+- Broad scanner stays in the main cycle
+- Hot-scout / FAST monitor runs as its own asyncio task
+- COPY wallet stream runs as its own asyncio task
+- Generic provider circuit breaker protects slow/failing Birdeye/Jupiter/GeckoTerminal calls
+- COPY RPC has a separate short circuit breaker
+- Regime-aware sizing: STRESS 0.60x, RISK_OFF 0.78x, RISK_ON 1.10x, UNKNOWN 0.85x
+- Normal/exceptional dollar caps remain enforced
+
+Current API behavior cross-check
+--------------------------------
+- Solana logsSubscribe currently accepts one pubkey per mentions subscription; COPY EDGE creates one subscription per tracked wallet.
+- Helius standard Solana RPC/WSS endpoint usage retained.
+- Jupiter api.jup.ag API-key based endpoints retained; hardened execution implementation was not rewritten.
+
+Database migration check against Sep-20 export
+----------------------------------------------
+Historical row counts preserved:
+- observations: 409078 -> 409078
+- signals: 18611 -> 18611
+- evals: 86006 -> 86006
+- positions: 55 -> 55
+- guardian_events: 779 -> 779
+- decision_ledger: 176739 -> 176739
+- decision_outcomes: 512169 -> 512169
+- missed_opportunities: 954 -> 954
+- social_events: 53 -> 53
+- journal_actions: 23 -> 23
+- paper_positions: 243 -> 243
+Expected initialization-only changes:
+- runs: 6 -> 7
+- lane_governor: 10 -> 13
+SQLite journal mode: WAL
+SQLite busy timeout: 10000 ms
+
+Important
+---------
+This validates code behavior and migration safety, not profitability. Fresh v16.1 signal and paper/copy outcomes are still required to judge trading edge.

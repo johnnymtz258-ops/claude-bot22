@@ -1,0 +1,79 @@
+FOMO BOT v13.3 EDGE RECOVERY — FINAL BUILD VALIDATION
+====================================================
+Validation date: 2026-08-31
+Fresh holdout: FOMO_DATA_EXPORT_20260831_002628.zip
+Base code: v13.2 SHADOW RECOVERY
+
+CODE / REGRESSION
+-----------------
+- 43 Python files compiled successfully.
+- 26 pytest files discovered.
+- 132 tests passed.
+- New v13.3 coverage includes:
+  * older-build ENTRY alerts no longer suppress a new model for the full 8h cooldown,
+  * 60m cross-build duplicate grace still prevents immediate upgrade duplicates,
+  * same-build cooldown survives restart windows,
+  * <=-17.5% five-minute raw flush remains remembered inside 30m,
+  * a >30m-old flush expires normally,
+  * pipeline diagnostics count only the current build,
+  * active launcher/doctor/package branding checks.
+
+FRESH HOLDOUT COUNTERFACTUAL
+----------------------------
+- v13.2 runtime represented ~2.13 hours, 1,756 Decision Ledger rows, 97 contracts, and 2 actual BUY alerts.
+- ZCAT actual v13.2 ENTRY OPTION: 30m max +3.92%, min -20.17%, final -8.52%.
+- At the ZCAT alert timestamp, the exported raw observation history contains a -17.99% 5m print ~10.8m earlier.
+- v13.3 stability replay blocks ZCAT on recent-crash memory.
+- Jimothy actual v13.2 STRUCTURE ENTRY remains allowed by the revised stability gate.
+- HeeHaw's prior v13.0 alert was ~377.9m old at the first clean v13.2 near-entry snapshot; v13.3 clears that old-build cooldown after the configured grace.
+- Leafy's prior v13.0 alert was ~373.3m old at the first clean v13.2 near-entry snapshot; v13.3 clears that old-build cooldown after the configured grace.
+- These cooldown resets do NOT force a BUY: all live classifier, safety, stability, tape, confirmation, slippage and limiter gates still have to pass.
+
+CORE MODEL REGRESSION
+---------------------
+The following functions are byte-for-byte unchanged from v13.2:
+- classify_entry_tier
+- actionable_blockers
+- entry_tape_preservation
+- entry_commitment_gate
+- tier_profit_targets
+
+The intended model change is isolated to entry_stability_check's crash-memory horizon/threshold plus the version-aware cooldown control flow and diagnostics. No broad liquidity, score, cross-chain or 1h momentum relaxation was introduced.
+
+REAL DATABASE MIGRATION TEST
+----------------------------
+A byte-copy of the user's fresh exported master DB was opened by v13.3 using FOMO_STATE_DB.
+Counts before -> after:
+- observations: 980,705 -> 980,705
+- signals: 2,732 -> 2,732
+- evals: 12,504 -> 12,504
+- positions: 47 -> 47
+- guardian_events: 405 -> 405
+- decision_ledger: 21,512 -> 21,512
+- decision_outcomes: 61,544 -> 61,544
+- missed_opportunities: 222 -> 222
+- social_events: 23 -> 23
+- journal_actions: 10 -> 10
+- runs: 3 -> 4 (expected new v13.3 run marker)
+- lane_governor: 2 -> 4 (expected fresh v13.3 STRUCTURE/MANUAL CHAIN governor rows)
+
+No historical observation, signal, position, Guardian, Decision Ledger, outcome, missed-opportunity, social, or journal rows were removed by startup migration.
+
+MAC / PACKAGE
+-------------
+- 6 .command launchers passed bash -n.
+- All 6 launchers retain executable permissions.
+- Active start_mac.command and doctor.py branding reports v13.3 EDGE RECOVERY.
+- .env is excluded.
+- No PEM/key/seed files are included.
+- .env.example documents 30m/-17.5 crash memory plus cross-build cooldown controls.
+
+LIMITATION
+----------
+Passing tests and historical/counterfactual replay do not guarantee profitable future trades. The fresh v13.2 holdout is small. Meme coins remain highly non-stationary, and execution friction can dominate small positions. v13.3 is intentionally evidence-bounded: it repairs demonstrated control-flow/stability failures and adds observability instead of fitting broad new thresholds to a tiny sample.
+
+WALK-FORWARD LAB
+----------------
+- Fresh master DB 30m chronological holdout: train 99 / unseen 43; unseen median -0.5%; score>=older-slice cut (~66) median -0.2% vs -3.5% below.
+- 120m chronological holdout: train 98 / unseen 42; unseen median -1.7%; score>=older-slice cut (~68) median -0.6% vs -6.2% below.
+- This report is included as V13_3_WALK_FORWARD_REPORT.txt and is validation-only; it does not auto-tune live thresholds.

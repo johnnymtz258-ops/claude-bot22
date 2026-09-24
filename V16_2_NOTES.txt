@@ -1,0 +1,23 @@
+FOMOBOT v16.2 QUALITY MEASUREMENT
+================================
+
+Purpose
+-------
+Surgical accounting/reporting hotfix. Entry thresholds, discovery logic, safety checks,
+and live sizing gates are unchanged from v16.1.
+
+Changes
+-------
+1. FAST ENTRY now participates in proof_shadow_rows(), matching proof_candidate_eligibility().
+2. v16.1 and v16.2 paper/proof outcomes share one quality cohort so installing this hotfix
+   does not reset proof evidence or hide existing shadow results.
+3. /paperreport now reports v16.2 and includes per-tier trade count, win rate, net P/L,
+   ROI and friction for FAST/FLOW/STRONG/ENTRY OPTION/REVERSAL.
+4. /edge and paper risk guard use the same v16.1+v16.2 quality cohort.
+5. The tier report uses paper_positions.realized_pnl, the actual schema field.
+6. Open paper positions and the shared external database remain untouched by the package.
+
+Safety
+------
+REAL autopilot behavior is unchanged. This release does not loosen entry gates and does not
+turn on live trading.

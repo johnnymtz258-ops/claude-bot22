@@ -1,0 +1,34 @@
+v10.2 SMART AUTOPILOT — CHANGE NOTES
+
+DISCOVERY / SIGNALS
+- Fresh-launch scanner tier for very new Solana coins.
+- Re-entry/consolidation setup detection using stored observation history.
+- Broader public X search plus public Reddit launch chatter; exact contract mentions can feed discovery.
+- Internal scout state is independent from whether a GET READY Telegram message was sent.
+- Confirmation can promote a still-valid setup into an actionable tier.
+- Informational Telegram messages cannot consume the separate entry-alert budget.
+
+MANUAL COIN INPUT
+- Exact-contract resolution before ticker/name search.
+- Multi-word /scan and /why queries supported.
+- Duplicate ticker/name results return contract choices rather than guessing.
+- Valid unindexed Solana mints can be pinned as PENDING and retried every scanner cycle.
+- /track /tracked /untrack added.
+
+PERSISTENCE
+- Shared DB: ~/Library/Application Support/FomoBot/fomo_master.db
+- First-launch recovery of active positions from older sibling v9_signals.db files.
+- Six-hour state backups, ten retained.
+
+AUTOPILOT
+- Paper autopilot for no-money testing.
+- Optional real Solana execution through Jupiter with local signing.
+- Live execution disabled by default and requires local setup plus two-step Telegram arming.
+- Real fresh-launch auto buys disabled by default.
+- Trade-size, max-open, buys/day, daily realized-loss, SOL reserve, price impact, anti-chase, hard safety, TP1/TP2, stop, trailing, liquidity and time-exit controls.
+- If real autopilot is turned off while an auto position remains open, normal Telegram TP/risk alerts continue.
+
+SECURITY
+- Wallet secret never passes through Telegram.
+- setup_live_trading.command can generate a dedicated local wallet file with restrictive file permissions.
+- Distribution ZIP contains no .env, database, log, API keys, wallet files, or private key material.

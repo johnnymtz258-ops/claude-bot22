@@ -1,0 +1,4 @@
+{
+  "_comment": "PUBLIC Solana wallets only. Add 5-20 known smart wallets here or use /copywallet. The bot can also auto-discover Birdeye smart/top-flow candidates.",
+  "wallets": []
+}

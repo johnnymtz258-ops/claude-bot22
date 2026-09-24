@@ -1,0 +1,26 @@
+FOMO BOT v10.4 DATA-TUNED
+
+This build adds the re-entry changes requested after reviewing the actual overnight database.
+
+WHY:
+The uploaded database showed 24 re-entry opportunities, and that family was materially weaker
+than normal entry alerts, including several catastrophic collapses. The fix is NOT to increase
+frequency or blindly raise the score. It changes the re-entry state machine.
+
+CHANGES:
+- Re-entry now starts as RE-ENTRY WATCH, not an immediate actionable entry.
+- A setup must survive a 3-minute confirmation window and pass the entire structure again.
+- Requires at least 12 minutes of observed history.
+- Requires a real 10-minute base with <=18% range.
+- Requires current 5m momentum between 0% and +5%.
+- Requires B/S >=1.35x and >=20 swaps/5m.
+- Requires sustained buyer pressure over multiple recent snapshots.
+- Requires >=$60k liquidity and >=85% retention versus recent baseline.
+- Rejects rebounds >35% from the recent low (helps reject near-zero wick/dead-cat artifacts).
+- Rejects a recent >=45% crash inside the re-entry window.
+- Requires BOTH RugCheck and holder-distribution verification.
+- Existing v10.3 hard rug/holder/liquidity protections remain.
+- Real autopilot re-entry is OFF by default even if live autopilot is armed.
+- /check revalidates the stricter re-entry structure and safety.
+
+The goal is fewer but materially cleaner second-chance opportunities.

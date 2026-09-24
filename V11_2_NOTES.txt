@@ -1,0 +1,13 @@
+FOMO BOT v11.2 — NETWORK HARDENING
+
+Problem fixed:
+- macOS/Python could repeatedly fail TLS verification for api.rugcheck.xyz with CERTIFICATE_VERIFY_FAILED / unable to get local issuer certificate.
+
+Changes:
+- Explicit certifi Mozilla CA bundle for aiohttp HTTPS.
+- Short retry/backoff for transport/TLS failures.
+- Duplicate network log throttling.
+- RugCheck 5-minute circuit breaker after transport/TLS failure; 60-second pause on bad HTTP responses.
+- RugCheck unavailability remains UNKNOWN, never a safety pass. Other safety feeds continue.
+- doctor.py uses identical CA configuration.
+- SSL verification is NEVER disabled.

@@ -1,0 +1,33 @@
+FOMO BOT v16.2 QUALITY MEASUREMENT — BUILD VALIDATION
+====================================================
+
+Scope
+-----
+Surgical accounting/reporting hotfix on top of v16.1. Entry gates, discovery logic,
+safety checks and live execution authorization are unchanged.
+
+Validated changes
+-----------------
+- VERSION reports v16.2 QUALITY MEASUREMENT.
+- FAST ENTRY is included in proof_shadow_rows().
+- v16.1 and v16.2 share a quality cohort for proof/report/risk continuity.
+- paper_stats accepts one build version or a collection of compatible versions.
+- /paperreport adds per-tier count, win rate, net P/L, ROI and friction.
+- Tier net P/L uses the actual schema column realized_pnl.
+- /edge and paper risk guard use the same carried-forward cohort.
+- Shared external database path remains unchanged.
+
+Validation commands
+-------------------
+python3 -m py_compile bot.py doctor.py adaptive_engine.py edge_engine.py copy_trading.py live_execution.py
+pytest -q
+
+Result
+------
+Python compilation: PASS
+Full pytest suite: PASS — 223 passed
+
+Safety note
+-----------
+This validates code behavior and migration continuity, not profitability. REAL autopilot
+remains gated/off unless separately configured and armed.

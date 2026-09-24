@@ -1,0 +1,102 @@
+FOMO BOT v13.1 QUALITY GOVERNOR — AUG 30 HOLDOUT AUDIT
+=====================================================
+Source export: FOMO_DATA_EXPORT_20260830_190331.zip
+v13.0 runtime start in this export: 2026-08-30 14:23:57 America/Chicago
+
+WHY THIS PATCH EXISTS
+---------------------
+The first v13.0 runtime proved that broader discovery was working, but the new manual cross-chain BUY lane was too permissive. The user also reported a cluster of poor Fomo results. The goal of v13.1 is to reject repeated low-edge shapes without globally reducing scouting or loosening safety to chase yesterday's winners.
+
+BOT ATTRIBUTION VS MANUAL TRADES
+--------------------------------
+The screenshot contains a mixture of bot-derived and manual trades. The shared DB shows:
+- 4: bot-alert MANUAL CHAIN ENTRY, recorded $10.
+- Jimothy: bot-alert STRUCTURE ENTRY, recorded $10.83.
+- popape: bot-alert normal ENTRY OPTION, recorded $4.97.
+- BLUECHIP: the bot did send a MANUAL CHAIN ENTRY, but the journal buy was explicit/manual ($13.71); it remained open at export time.
+- PONZI and the shown moonkey position were manual positions opened before v13.0 started, so they are not evidence that v13.0 generated those two entries.
+
+V13.0 ACTIONABLE PATH RESULTS
+-----------------------------
+Completed 30-minute paths since v13.0 startup:
+
+MANUAL CHAIN ENTRY
+- n=10
+- median maximum upside: +0.45%
+- median final return: -1.38%
+- positive 30m endpoints: 20%
+- reached +5% at any point: 10%
+- reached +10%: 0%
+- hit -10% or worse: 30%
+- 60m completed sample: n=8, 0% positive endpoints, median max only +0.34%
+
+Conclusion: the broad v13.0 cross-chain actionable lane had no acceptable fee-adjusted edge in this first holdout. It needed redesign, not merely smaller position sizing.
+
+STRUCTURE ENTRY
+- n=2 completed 30m paths
+- Jimothy: max +1.16%, min -6.69%, final -6.57%
+- TripleT: max +12.64%, min -0.04%, final +10.81%
+
+The important difference was tape quality. Jimothy entered with 1h -7.56%, B/S 1.38x, 38 swaps and only ~0.072% 5m turnover/MC. TripleT had 1h -4.11%, B/S 2.42x, 113 swaps and ~0.406% turnover/MC.
+
+NORMAL ENTRY OPTION
+- n=3 completed 30m paths during v13.0
+- median final: -3.50%
+- median max: +10.82%
+- 33% positive endpoints
+- 33% touched -10% or worse
+
+Across the broader Decision Ledger history, ordinary ENTRY OPTION alerts with deeply negative 1h momentum were consistently weak:
+- (-20,-15]% 1h: n=2, 0% positive final, 100% hit -10%
+- (-15,-12]%: n=3, 0% positive final, 67% hit -10%
+- (-12,-10]%: n=2, 0% positive final, 50% hit -10%
+- (0,+5]%: n=5, 80% positive final, median max +36.85%
+
+There was one useful older recovery example around -8.5% 1h (Leafy) with strong B/S, swaps, turnover and realtime activity. Therefore v13.1 does not simply ban all negative 1h entries; it creates a strict -10%..-5% recovery pocket.
+
+SPECIFIC FAILURES FIXED
+-----------------------
+1. BLUECHIP chase bug
+The v13.0 alert was sent even though the latency ledger recorded scout_move=+14.37%. MANUAL CHAIN ENTRY and STRUCTURE ENTRY were missing the scout-chase cap that the normal Solana lane already used. v13.1 enforces ~+4% max scout move for those lanes.
+
+2. v13.0 cross-chain classifier too broad
+Examples such as 4, MON, GOOGLc, IF, DRB, VELVET and the BSC weak paths could pass with very little real dollar turnover or with mediocre 1h structure. v13.1 replaces the broad mode with three explicit shapes: low-liquidity flow, deep-liquidity flow and true breakout.
+
+3. Jimothy weak downtrend structure
+v13.1 requires much stronger B/S, swaps and turnover for an established STRUCTURE ENTRY when 1h is <= -5%. This blocks the Jimothy snapshot but preserves the cleaner TripleT/CATE-style pattern.
+
+4. Normal Solana downtrend entries too permissive
+v13.1 standard entries use roughly -10%..+10% 1h. Between -10% and -5%, the setup must prove a stronger recovery pocket. Deeper washouts remain eligible only through the separate strict REVERSAL ENTRY lane.
+
+5. Small-position profit realization
+popape is a useful example of a market-path win that did not translate cleanly into the user's Fomo result. From the bot alert it reached +26.18% within 30m and never dipped below +4.52% during that window, but the user's small real trade ended around flat/slightly negative after execution/friction. v13.1 raises small-position TP1 to an economic threshold and can recommend closing the whole tiny remainder instead of forcing an uneconomic partial.
+
+V13.1 COUNTERFACTUAL CHECK ON V13.0 ALERTS
+-------------------------------------------
+Using the v13.1 classifier on the recorded v13.0 entry snapshots:
+- blocks BSC 豹拉
+- blocks 4
+- blocks Jimothy
+- preserves TripleT
+- preserves popape
+- blocks HeeHaw
+- blocks the later weak Leafy alert
+- blocks MON, GOOGLc, IF, DRB, 孙小圣, VELVET and BLUECHIP cross-chain paths
+- preserves the earlier profitable GG-like flow test and later GG-like breakout test from the prior dataset
+- preserves the CATE-like established structure test
+
+This is intentionally conservative. A rejected cross-chain candidate can still appear as CROSS-CHAIN WATCH and remain in the Decision Ledger so future data can prove whether the stricter lane is missing too much opportunity.
+
+NEW QUALITY GOVERNOR
+--------------------
+STRUCTURE ENTRY and MANUAL CHAIN ENTRY now start each v13.1 run in PROBATION. After at least 6 completed 30m paths in the current build, a lane is automatically QUARANTINED if its recent median max upside, target-hit rate or severe-drawdown rate is unacceptable. Quarantine suppresses BUY alerts from that lane while internal scouting/outcome learning continues. /status reports PROBATION / ACTIVE / QUARANTINED.
+
+NO BROAD LIQUIDITY RELAXATION
+-----------------------------
+The export still contains huge low-liquidity survivors, but many neighboring low-liquidity candidates suffered large drawdowns. v13.1 therefore does NOT lower the normal $50K Solana liquidity floor or broadly weaken MICRO/security gates.
+
+INTERPRETATION
+--------------
+v13.0's problem in this holdout was not "the scanner saw nothing." It saw many candidates and expanded into more markets, but the new cross-chain lane converted too many mediocre scouts into BUY calls. v13.1 keeps the discovery expansion while substantially raising the conversion standard.
+
+This audit is descriptive, not a guarantee of future profit. Meme/cross-chain markets remain highly non-stationary and execution fees/slippage can dominate small trades.

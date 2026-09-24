@@ -1,0 +1,29 @@
+V13.0 STABLE EDGE — DATA AUDIT SUMMARY
+Source: FOMO_DATA_EXPORT_20260830_130219.zip + user-provided Fomo trade-history screenshot.
+
+Database scale at validation
+----------------------------
+observations: 1,153,820
+signals: 2,100
+evals: 9,829
+positions: 41
+guardian_events: 369
+signal_outcomes: 148
+missed_opportunities: 171
+decision_ledger: 13,028
+decision_outcomes: 36,814
+social_events: 21
+
+Key findings
+------------
+1. CATE was a strategy-universe blind spot, not simply a threshold miss. The exact Solana CATE token was observed hundreds of times but had zero signal rows; its ~$40M–$50M MC was outside the v12 normal actionable universe. v13 adds a separate established STRUCTURE ENTRY lane instead of raising the micro/meme ceiling globally.
+
+2. GG was a chain/actionability blind spot. The Robinhood token had CONFIRMED signal records, but v12's actionable chain was Solana. v13 adds a manual-only cross-chain alert lane. It is explicitly excluded from real autopilot.
+
+3. Cross-chain GG paths support faster management rather than normal meme targets. One early observed GG setup reached roughly +5.6% before falling nearly -9.7% within 60m; a later deep-liquidity breakout reached roughly +18.1%. v13 therefore starts the experimental lane at +5/+12 profit checkpoints with tighter risk supervision.
+
+4. Journal quote estimates cannot be treated as execution truth. The supplied screenshot shows actual Fomo cash outcomes that disagree with quote-derived database P/L on some trades (for example a displayed GG buy/sell sequence was profitable while the old journal estimate was negative). v13 removes ESTIMATED/MIXED closes from recent-realized-P/L/losing-streak sizing inputs and adds /reconcile.
+
+5. Manual profitable trades were previously lost as learning examples. v13 records explicit manual /buy snapshots into the Decision Ledger so future audits can compare user-spotted chart structures with bot entries and blocked decisions.
+
+6. The evidence still does not justify broadly lowering the normal Solana $50K liquidity floor or deleting recent-crash/realtime/tape safeguards. New opportunity types are added as separate lanes with their own constraints.

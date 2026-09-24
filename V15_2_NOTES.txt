@@ -1,0 +1,34 @@
+FOMO BOT v15.2 SELECTIVE PROOF — RELEASE NOTES
+==============================================
+
+1. RESEARCH != LIVE PROOF
+- Every fully-qualified Solana setup can still be simulated and learned from.
+- Only core ENTRY/STRONG/FLOW/REVERSAL setups with entry score >=70 are proof-eligible by default.
+- Lower-score and STRUCTURE/FRESH/MICRO/cross-chain shadows remain research-only and cannot unlock live guidance.
+
+2. FRESH PROOF STARTS FROM ZERO
+- v15.2 requires 12 completed proof-eligible paths by default.
+- At least 6 unique token contracts must be represented so one repeated runner cannot prove the whole strategy.
+- ACTIVE additionally requires positive net P/L, >=1% net ROI after simulated friction, >=45% wins and PF >=1.20.
+- The Sep-20 retrospective is calibration evidence only; it is not counted as v15.2 proof.
+
+3. PAPER RISK CIRCUIT ALIGNED WITH PROOF
+- Losing-streak and paper-drawdown live locks now use proof-eligible shadows only.
+- Broad research shadows still appear in reports but cannot poison the live risk circuit.
+
+4. CLEARER REPORTING
+- /paperreport separates ALL RESEARCH from the PROOF-ELIGIBLE cohort.
+- /edge shows the score floor and both research/proof economics.
+- /status adds RESEARCH_SHADOW telemetry.
+- exports now include paper_positions.csv and decision_dedupe.csv.
+
+5. V15.1 EXECUTION HARDENING RETAINED
+- durable execution intents and idempotency,
+- cross-process execution leases,
+- WAL/busy_timeout/atomic accounting,
+- RPC failover and confirmation polling,
+- wallet-delta verification,
+- startup reconciliation of ambiguous signed transactions,
+- centralized fail-closed live gate and /execstatus.
+
+No change guarantees profit. Real autopilot remains OFF by default. Keep shadow proof running first.

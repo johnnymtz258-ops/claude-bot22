@@ -1,0 +1,35 @@
+FOMO BOT v11.1 FEE-AWARE GUARDIAN
+
+WHY THIS PATCH EXISTS
+The v11.0 Guardian state machine treated any manual position at -10% or worse as EXIT REVIEW. On small ~$5-$10 positions this could create poor fee economics and churn during ordinary meme-coin volatility. The OTC example supplied by the user fell to about -10.7%, triggered EXIT REVIEW, and then recovered near the original entry shortly afterward.
+
+CHANGES
+- -10% remains a soft advisory risk line, not an automatic hard exit for small manual positions.
+- Default small position bucket: <= $15.
+- Default price-only hard line for small positions: -20%.
+- Default mid-size bucket up to $25: -16% price-only hard line.
+- Structural danger overrides position size and can still trigger EXIT REVIEW earlier:
+  * liquidity down >= configured hard threshold,
+  * soft loss plus seller control / negative short-term momentum,
+  * broad 1h breakdown with sellers controlling,
+  * multiple deterioration signals.
+- Soft-loss positions without structural confirmation become WEAKENING / RECOVERY WATCH instead of immediate EXIT REVIEW.
+- Guardian messages now show an estimated fee-adjusted all-in return and approximate P/L using configurable friction assumptions.
+- Default estimated round-trip friction: 5%; default exit-side friction: 2.5%. These are estimates only and can be changed in .env.
+- Hold-horizon advice uses the same fee-aware logic so /hold will not contradict Guardian.
+- Entry scanner, FLOW ENTRY, second-leg detection, safety gates, learning, wallet sync, partial sells, and manual journal behavior are otherwise unchanged from v11.0.
+
+CONFIG
+FOMO_ROUNDTRIP_FRICTION_PCT=5
+FOMO_EXIT_FRICTION_PCT=2.5
+SMALL_POSITION_USD=15
+SMALL_POSITION_HARD_STOP_PCT=20
+MID_POSITION_HARD_STOP_PCT=16
+
+VALIDATION
+- Python compilation: PASS
+- Shell launcher syntax: PASS
+- Legacy v10/v10.9/v11 regression suite: PASS
+- v11.1 OTC-like small-position recovery-watch regression: PASS
+- v11.1 liquidity-failure emergency-exit regression: PASS
+- Live-execution unit tests: PASS

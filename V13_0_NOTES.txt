@@ -1,0 +1,29 @@
+FOMO BOT v13.0 STABLE EDGE — RELEASE NOTES
+
+Purpose
+-------
+Stabilization release built from the Aug 30 export and Fomo trade history. The release focuses on structural blind spots and accounting accuracy instead of lowering the existing meme-coin safety gates.
+
+Major changes
+-------------
+1. STRUCTURE ENTRY: separate Solana lane for established $5M–$75M liquid charts, 45s fresh confirmation, $15 default size cap, +8/+18 profit checkpoints.
+2. MANUAL CHAIN ENTRY: Base/BSC/Monad/Robinhood alert lane, manual execution only, flow + deep-liquidity breakout submodes, $12 size cap, +5/+12 checkpoints.
+3. Trending-pool discovery for established charts.
+4. Execution Truth: CASH_VERIFIED / CASH_PARTIAL / MIXED / ESTIMATED P/L quality.
+5. Smart sizing ignores quote-estimated/mixed closed P/L when calculating recent realized P/L and losing streaks.
+6. /reconcile TICKER CASH_IN CASH_OUT for actual Fomo cash on an already-closed trade.
+7. /undo reverses the most recent supported Telegram journal action within 30 minutes; it never touches Fomo.
+8. Explicit manual /buy snapshots are stored as MANUAL_BUY Decision Ledger events.
+9. Decision Ledger includes build_version; runs table records version/config start markers.
+10. Cross-chain/structure Guardian thresholds and hold windows are tier-specific.
+11. X 402 billing hold stays latched for the session; message explicitly says credits are needed.
+12. Existing v12 .env chain lists cannot silently hide newly configured manual-entry chains.
+13. Export now includes positions.csv, runs.csv, journal_actions.csv.
+
+Data examples motivating the lanes
+----------------------------------
+CATE exact token had 300 observations but zero signals in the supplied database. At 2026-08-30 15:22:28 UTC it was approximately $46.66M MC, $2.11M liquidity, +0.91% 5m, -4.07% 1h, 2.0x B/S, 60 swaps and 0.0189% 5m turnover/MC. v13's structure classifier accepts the setup after score/tape/fresh-confirmation gates. Its next 60m observed path was about +3.86% max / -0.12% min; this is why the lane uses a slower 30m–4h horizon rather than pretending it is a launch-meme scalp.
+
+GG on Robinhood had CONFIRMED records but could not become an actionable v12 Solana entry. An observed early GG setup around 07:44 UTC had ~$168K liquidity, 1.67x B/S, 16 swaps and ~0.0496% turnover; v13's flow submode accepts it after confirmation. That snapshot reached about +5.56% before later falling ~-9.69% within 60m, motivating +5% TP1 and tighter Guardian risk. A later deep-liquidity GG breakout around 14:03 UTC (~$548K liquidity, +5.06% 5m, +14.1% 1h) reached about +18.15% within 60m, motivating the separate breakout submode.
+
+Important: these are descriptive observations, not guarantees or a claim that future setups will behave the same way.

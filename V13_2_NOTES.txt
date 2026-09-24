@@ -1,0 +1,39 @@
+FOMO BOT v13.2 SHADOW RECOVERY — RELEASE NOTES
+================================================
+
+PURPOSE
+-------
+v13.2 is a reliability/learning update on top of v13.1. It intentionally does not retune the static entry thresholds from the same Aug-30 holdout. Fresh post-v13.1 data should drive the next classifier changes.
+
+1. REVERSIBLE QUALITY GOVERNOR
+------------------------------
+- Added persistent lane_governor state for STRUCTURE ENTRY and MANUAL CHAIN ENTRY.
+- Same-build restarts preserve PROBATION / ACTIVE / QUARANTINED state.
+- A quarantined lane now records otherwise fully-qualified candidates as LANE_SHADOW.
+- Completed 30m LANE_SHADOW paths can return the lane to a fresh PROBATION cohort only after the same quality bar is re-proven.
+- Phase boundaries use database row-ID floors, preventing same-second timestamp collisions and preventing old failed cohorts from instantly re-quarantining a recovered lane.
+
+2. QUARANTINE-CONSISTENT SIZING
+-------------------------------
+- Adaptive /size guidance is $0 for a quarantined experimental lane.
+- The reason explicitly says the lane must re-qualify through shadow recovery.
+- Manual journal commands remain unlocked; this is bot guidance, not a trading-account lock.
+
+3. BETTER LEARNING VISIBILITY
+-----------------------------
+- /status shows probation counts and shadow recovery progress.
+- /learn and /daily separate LANE_SHADOW paths from generic near-entry rejects.
+- export_data.py now exports lane_governor.csv.
+
+4. PACKAGE / VERSION CLEANUP
+----------------------------
+- start_mac.command and doctor.py now identify the current v13.2 build.
+- START_HERE / quick guide / README upgrade instructions were corrected.
+
+5. RETAINED v13.1 ENTRY SAFETY
+------------------------------
+- No v13.1 cross-chain threshold was loosened.
+- No normal Solana liquidity/security gate was loosened.
+- The BLUECHIP scout-chase fix, Jimothy downtrend repair gate, strict recovery pocket, fee-aware profit handling, Execution Truth, journal tools, GUARDIAN, Decision Ledger and version-aware runs remain.
+
+This release improves the governor's behavior and evidence collection; it does not claim that the underlying trading edge has been revalidated on fresh post-v13.1 data yet.

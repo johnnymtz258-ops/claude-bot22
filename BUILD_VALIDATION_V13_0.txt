@@ -1,0 +1,18 @@
+FOMO BOT v13.0 STABLE EDGE — FINAL BUILD VALIDATION
+Date: 2026-08-30
+
+Final validation completed before distribution:
+- Pytest regression suite: 105 passed
+- Python compileall: PASS
+- Mac launcher shell syntax: PASS
+- Executable .command launchers verified:
+  * start_mac.command
+  * export_data.command
+  * run_model_lab.command
+  * setup_edge_sources.command
+  * setup_live_trading.command
+  * setup_wallet_sync.command
+- Secret-file check: no .env, *.pem, or *.key included in release root
+- ZIP integrity: validated after packaging
+
+This release preserves the shared-state architecture; user secrets are intentionally not packaged.

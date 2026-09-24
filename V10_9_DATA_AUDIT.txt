@@ -1,0 +1,70 @@
+FOMO BOT v10.9 — AUG-28 DATA AUDIT
+Source: user export containing fomo_master.db, bot.log, signal_performance.csv and latency_events.csv.
+
+DATA COVERAGE / COUNTS
+- observations: 369,102
+- signals: 1,046
+- evaluations: 4,446
+- latency events: 756
+- positions: 28
+- catalysts: 270
+- telegram signal mappings: 402
+- paper positions: 0
+- real auto-trade events: 0
+- raw observation coverage in this export: roughly 03:45–16:30 UTC on Aug 28.
+
+MANUAL WORKFLOW FAILURES CONFIRMED IN BOT.LOG
+- moonkey entry around 07:42 UTC was followed by: "Risk lock: you already have 3 recorded open positions."
+  The user later had to use /addmc to record it.
+- moonkey entry around 16:19 UTC again hit the 3-position lock.
+- after positions were sold/closed, another attempted entry hit: "Daily loss lock is active (-23.48)."
+These are journal failures: the user had already made or wanted to record a manual decision, but the journal refused to track it. v10.9 removes those manual hard locks.
+
+RECENT ACTIONABLE ALERT REVIEW
+(Forward max/min use raw observations for up to ~120m where available; values are approximate.)
+- USXR STRONG 03:46: max +6.6%, min -99.9%. Strong label was too generous for its low dollar-flow quality; later rug/collapse.
+- cat 05:49: max 0.0%, min -15.9%. Bad/flat entry.
+- PINK 06:02: max +4.8%, min -35.5%. Bad entry.
+- moonkey 07:42: max +57.6%, min -8.9%. Good opportunity. It was slightly negative around the old 15m time-stop and later ran strongly; fixed-duration exit was too rigid.
+- KURO 08:32: max +40.7%, min -25.5%. Reached meaningful profit before later rolling over. Profit-taking/trailing mattered more than simply rejecting the initial setup.
+- ANTSEM STRONG 09:36: max +41.6%, min -23.2%. Strong early upside followed by deterioration.
+- WindChill 10:00: max +6.0%, min -77.7%. Alert had roughly -24% 1h momentum; tightening the crash floor to -20% is designed to block this setup.
+- BITCAT 10:06: max +28.8%, min -5.1%. Clean good entry.
+- GTAAPE 10:54: max +26.7%, min -30.1%. Very volatile.
+- NOVALUE 11:12: max +13.9%, min -13.2%. Mediocre.
+- Lasers 11:23: max +62.5%, min -72.3%. Extreme whipsaw; not a set-and-forget hold.
+- cat 14:25: max +42.7%, min -6.9%. Good entry.
+- UOTF 14:37: max +73.0%, later about -99.8%. Good early move followed by rug-like collapse; partial profits/trailing remain essential.
+- PINK 15:12: max +17.2%, min -32.3%. Brief profit window then deterioration.
+- moonkey 16:19: only short follow-up available before export; roughly -7.8% best / -19.3% worst so far.
+
+Two earlier alerts (ANTSEM 00:53 and USOC 00:54) predate raw observation coverage. Evaluations show ANTSEM roughly +1.0% at 5m, -7.8% at 15m, -9.8% at 30m; USOC roughly +11.6%, +34.8%, +81.3% then about -99.9% by 120m.
+
+MISSED / LATE OPPORTUNITY REVIEW
+The raw observation stream was searched for strong, liquid-enough positive-flow states that subsequently moved >=25% in ~60m without a nearby EARLY alert. Clean examples included:
+- GTA around 13:31: ~$297k MC, ~$48.7k liquidity, ~9.45% 5m turnover/MC, ~273 swaps, B/S ~1.35x; later max roughly +320% with limited initial drawdown.
+- LAAMA around 05:51: ~$96k MC / ~$25.9k liquidity, high turnover; later roughly +140%.
+- BULLFART around 14:33: ~$173k MC / ~$35.8k liquidity, B/S ~1.75x, ~426 swaps; later roughly +126%.
+- PINK second leg around 12:35: strong renewed flow; later roughly +117% before the next bot entry arrived hours later.
+- Dunkin around 13:26: ~$109k MC / ~$28.6k liquidity; later roughly +101%.
+- moonkey second leg around 09:21: renewed flow; later roughly +63% after its earlier trade had been closed.
+Other examples included ANTSEM, GTAAPE, COUGH, TIPANSEM, Sue, GASSPAS, Lucia, $Chomp, cat and invest.
+
+WHY MICRO ENTRY WAS NOT BROADLY LOOSENED
+A raw backtest of permissive $25k–$50k liquidity "strong flow" states found that most also suffered severe downside. In one tested candidate set, 6 of 7 hit at least -15% within an hour even though several also printed +25% or more first. Examples included tokens that later fell roughly -64% to -99%. Therefore v10.9 does not simply lower the liquidity floor. It adds earlier FLOW scouts, verified normal-liquidity FLOW ENTRY, and a controlled second-leg reset while retaining strict safety/stability checks.
+
+CHANGES IMPLEMENTED FROM THIS AUDIT
+1. Remove hard manual journal position-count/daily-loss/size/chase recording locks.
+2. Preserve exact Telegram alert/check snapshot for /bought replies.
+3. Allow exact-contract manual recording without a prior bot signal.
+4. Add exact price and market-cap overrides.
+5. Replace rigid 15m manual time-stop with horizon-aware monitoring.
+6. Add live hold horizon classifications and /hold /plan commands.
+7. Tighten 1h falling-knife floor to -20%.
+8. Tighten STRONG dollar-flow requirements.
+9. Add high-flow internal scout and FLOW ENTRY path without weakening safety.
+10. Add controlled >=60m second-leg re-alert when fresh verified flow returns and no open position remains.
+11. Keep MICRO rescue strict due adverse downside/rug backtest.
+12. Keep +15% and +35% profit checkpoints; recent data repeatedly showed profitable windows that later reversed sharply.
+
+This audit is descriptive/backtested on the available history. It does not guarantee future returns or protection from rugs/liquidity loss.

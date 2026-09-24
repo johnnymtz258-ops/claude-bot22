@@ -1,0 +1,162 @@
+FOMO BOT v11.3 — AUG-28/29 FULL-DAY AUDIT
+Source: FOMO_DATA_EXPORT_20260829_111447.zip
+Reviewed v11.2 run: approximately 20:39 UTC Aug 28 through 16:15 UTC Aug 29.
+
+DATA COVERAGE
+- 523,777 raw observations in the master database
+- 1,551 historical signals total
+- 7,078 evaluations
+- 25 historical position rows
+- 174 GUARDIAN state events
+- 89 forward signal-outcome rows
+- 85 missed-opportunity ledger rows
+- 1,110 latency events
+- Run-window signals: 378 total = 231 SCOUT, 129 CONFIRMED, 18 actionable EARLY alerts
+- Run-window actionable labels: 14 ENTRY OPTION, 3 STRONG ENTRY, 1 FLOW ENTRY
+
+ACTIONABLE ALERT PERFORMANCE
+The 18 v11.2 actionable alerts were evaluated using the stored forward-path ledger.
+
+At 30 minutes (18 completed):
+- 38.9% finished positive
+- median final return about -6.1%
+- 27.8% reached +15% at some point
+- 38.9% touched -15% or worse
+
+At 60 minutes (18 completed):
+- 33.3% finished positive
+- median final return about -6.4%
+- 38.9% reached +15% at some point
+- 55.6% touched -15% or worse
+- 5.6% touched -60% or worse
+
+At 120 minutes (17 completed):
+- 17.6% finished positive
+- median final return about -9.9%
+- 35.3% reached +15% at some point
+- 70.6% touched -15% or worse
+- 11.8% touched -60% or worse
+
+Interpretation: the current signal set is NOT a good passive 1–2 hour buy-and-forget system. Several alerts did provide short profit windows, so GUARDIAN/partials matter, but entry quality still needed one targeted protection rather than broad loosening.
+
+IMPORTANT INDIVIDUAL EXAMPLES WITH RAW FOLLOW-UP
+- OTC 05:18 — clean setup: about +29.3% max with only ~-2.1% early downside at 60m.
+- PINK 07:19 — excellent: roughly +74% by 60m and ~+84% by 120m with negligible initial drawdown.
+- NOVALUE 10:15 — modest/clean: roughly +7.7% max, ~-7.5% min at 60m.
+- Grokstreet 14:01 — reached ~+19.4%, later reversed; +15 happened before -10.
+- nothing 11:45 — reached ~+23.7%, later reversed sharply; +15 happened before -10.
+- TIT 10:09 — eventually reached ~+36%, but suffered about -10% first and ~-16.6% within 60m.
+- inuzard 06:55 — immediate failure: only ~-1.5% best, ~-45.3% worst by 60m, ~-53.5% by 120m.
+- BAILEY FLOW ENTRY 10:35 — poor FLOW example: ~+12.3% best but ~-52.4% worst by 60m and ~-85.9% by 120m.
+- OTC 13:35 — eventually +16.7%, but hit -10 before +15 and reached about -14.9% within 60m.
+- moonkey 15:01 STRONG — eventually +21%, but hit -10 only about 118 seconds after the alert and reached roughly -22.2% before recovery.
+
+KEY FINDING #1 — RECENT CRASH/REBOUND MEMORY WAS MISSING
+For the 12 actionable alerts covered by the continuous raw observation window, v11.2 only judged stability from the current/recent price shape. It could forget that a token had suffered a severe 5m crash shortly before the alert once the newest live snapshot bounced.
+
+Examples:
+- inuzard had a ~-13.5% 5m flush only ~83 seconds before the entry; it then fell ~-45% by 60m.
+- BAILEY had roughly a -40.6% 5m flush about 10 minutes before its FLOW ENTRY; it later fell ~-86%.
+- the later OTC entry had a ~-16% prior 5m flush while its 1h tape was still about -14.5%; it hit -10 before +15.
+- moonkey had a ~-14% prior 5m flush and 1h tape still about -11.5%; it hit -10 about two minutes after the STRONG alert before later recovering.
+- Grokstreet also had a prior ~-14% flush, but by the alert its 1h tape had repaired to about +8.9% and it delivered +15 before -10. This is why v11.3 does NOT simply block every token that crashed earlier.
+
+v11.3 targeted rule:
+- <= -20% 5m flush anywhere in prior 10m: wait.
+- <= -12% 5m flush in prior 3m: wait.
+- <= -12% 5m flush in prior 10m AND current 1h still below -5%: wait.
+
+On the 12 raw-covered actionables, this rule would have held back inuzard, BAILEY, the later OTC and moonkey while preserving the clean OTC/PINK/Grokstreet examples. Two of the blocked setups later recovered, but both first suffered fee-relevant >=10% drawdowns. The gate can allow them later once the broader tape repairs; it is a delay, not a permanent blacklist.
+
+KEY FINDING #2 — GUARDIAN STATE FLAPPING WAS REAL
+Run-window GUARDIAN state-change ledger:
+- WEAKENING: 72
+- ENTRY: 69
+- EXIT_REVIEW: 11
+- PROFITABLE: 10
+- CONFIRMED: 3
+- TAKE_PARTIAL: 2
+
+The log emitted about 35 GUARDIAN messages. ANTSEM alone generated many internal ENTRY <-> WEAKENING/EXIT transitions because a small bounce around the -10% line repeatedly changed the state.
+
+ANTSEM is the best example:
+- recorded at $15 around 06:34 UTC
+- ~06:51: v11.2 called EXIT REVIEW around -16.3% because one snapshot combined the loss with weak structure
+- it subsequently recovered and eventually reached about +15.2%
+- GUARDIAN correctly issued TAKE PARTIAL near that +15% window
+- no partial sale was recorded; the position later rolled over and ultimately was sold around -19.7%
+
+This shows both sides:
+1) the fee-aware RECOVERY WATCH concept was valid; one soft structural snapshot should not necessarily trigger a tiny-position exit;
+2) once +15% is reached, taking/recording a partial remains important because meme-coin profit windows can disappear.
+
+v11.3 fix:
+- SMALL structure-only EXIT above the hard line must persist ~45s.
+- MID structure-only EXIT must persist ~30s.
+- hard price-line or >=30% liquidity failure remains immediate.
+- confirmed EXIT escalation bypasses the soft warning cooldown.
+- WEAKENING recovery now has hysteresis so a tiny bounce does not instantly reset to ENTRY.
+- repeated WEAKENING messages require materially worse return/drawdown/liquidity before re-alerting.
+
+ACTUAL RECORDED MANUAL POSITIONS DURING THE RUN
+- NOVALUE: $5.00, realized about -$1.15 (~-22.9% gross journal P/L)
+- USTF: $10.00, realized about +$0.59 (~+5.9%)
+- OTC: $9.11, realized about +$1.27 (~+13.9%)
+- ANTSEM: $15.00, realized about -$2.95 (~-19.7%)
+No open positions remained at export time.
+
+KEY FINDING #3 — DO NOT BROADLY LOWER LIQUIDITY / MICRO RULES
+The missed-opportunity ledger found 67 run-window examples, including many impressive moves. But this ledger is deliberately survivor-selected: it records strong-flow states that later ran, not every similar state that failed.
+
+There were 54 Solana missed-runner records; 34 began below the normal $50k liquidity floor. Broad tests of permissive low-liquidity conditions continued to produce too many -20% to -99% outcomes. Therefore v11.3 keeps:
+- normal entry liquidity floor at $50k,
+- strict MICRO rescue,
+- safety/stability checks,
+- Solana-only actionable chain default.
+
+Several large ledger examples on BSC/Base/Robinhood are intentionally watch-only because those chains are not configured as actionable by default.
+
+FLOW ENTRY NOTE
+Only one FLOW ENTRY occurred in this run (BAILEY), and it failed badly after a prior crash/rebound. A broader market-only retrospective of permissive FLOW-like snapshots also had poor downside characteristics. v11.3 therefore does NOT loosen FLOW ENTRY. The recent-crash memory now applies to FLOW ENTRY as well.
+
+ADAPTIVE CONFIDENCE NOTE
+In this single-day 18-alert sample, neither the legacy score nor the displayed adaptive confidence showed a reliable monotonic relationship with 60-minute outcome. That sample is too small to rebuild the calibration model around, but it is enough to avoid treating the number as mature. v11.3 labels the calibration LEARNING until both endpoint and path cohorts are sufficiently populated. During LEARNING, /size is reduction-only: it can suggest less than the configured base, but not more than 1.00x.
+
+ALERT / UX LOAD
+Approximate log counts over the ~20h run:
+- 117 GET READY messages
+- 20 actionable entry blocks in the log (18 unique EARLY database records; some log formatting/rechecks account for the difference)
+- 35 GUARDIAN messages
+- 15 BOT HEALTH messages
+
+v11.3 adds `/quiet on` to hide GET READY / optional momentum/watch chatter and routine health heartbeats while preserving actionable entries and GUARDIAN alerts. Internal scouting continues.
+
+NETWORK HEALTH
+- no Python traceback/crash in the run log
+- only 3 SSL certificate errors near initial RugCheck startup; RugCheck circuit breaker activated and later safety checks resumed
+- realtime WebSocket reconnected as needed and continued scanning
+- repeated Birdeye 400 responses were isolated to unsupported enrichment endpoints; core scanning continued
+- GeckoTerminal public rate limits occurred frequently but the scanner continued using other discovery sources
+
+v11.3 also reduces repeated console logging for already-paused Birdeye features and throttles repeated GeckoTerminal rate-limit notices. It does not weaken TLS verification.
+
+WHAT v11.3 DELIBERATELY DOES NOT CHANGE
+- normal $50k liquidity floor
+- manual journal remains unlocked
+- +15% / +35% profit checkpoints
+- strict MICRO safety
+- real-money autopilot remains separately gated and OFF by default
+- no claim that legacy score is a win probability
+
+VALIDATION
+v11.3 includes a new regression suite for:
+- fresh crash-memory blocking,
+- repaired old-crash allowance,
+- small-position structural exit persistence,
+- immediate hard price/liquidity exits,
+- WEAKENING recovery hysteresis,
+- repeated-WEAKENING alert suppression,
+- quiet-mode code paths,
+plus all prior v10/v11 regression tests.
+
+This audit is descriptive/backtested on available history. It does not guarantee future returns or protection from rugs/liquidity loss.

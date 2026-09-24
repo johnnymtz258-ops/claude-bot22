@@ -1,0 +1,101 @@
+FOMO BOT v10.7 — DATA AUDIT OF THE v10.6 RUN
+Data reviewed: fomo_master.db supplied 2026-08-27
+Primary v10.6 review window: ~19:08 UTC through 22:17 UTC
+
+WHAT THE LATEST RUN DID
+-----------------------
+Signals in the review window:
+- 67 SCOUT / GET READY records
+- 24 internal CONFIRMED momentum records
+- 8 actionable EARLY / ENTRY OPTION alerts
+
+The eight actionable v10.6 entries were:
+1. SAAS — max about +3.2% in available follow-up. Low-motion.
+2. USXR — max about +1.4%, min about -0.9%. Low-motion. A recorded $5 trade closed around -$0.03.
+3. ECTF — max about +1.6%. Low-motion; a /check shortly after the alert closed the entry window.
+4. BITCAT — major winner. About +15% was reached before -10%, and the observed run eventually exceeded +100%. A recorded $5.80 trade closed around +$2.03 (+~35%).
+5. NTDA — max about +3.6%. Low-motion.
+6. cat — reached about +24.4%; +15% occurred before a later -10% drawdown. Good entry, but profits needed protecting.
+7. USOF — max about +3.4%. The 32x buy/sell ratio looked impressive, but only roughly $522 of 5m dollar volume was moving a ~$1.6M market cap. This is exactly the kind of high-count/low-dollar churn that should not consume an entry alert.
+8. USWS — max about +2.9% in the available follow-up. Low-motion.
+
+KEY FINDING #1 — v10.6 WAS SAFER, BUT TOO MANY ENTRIES WERE ECONOMICALLY QUIET
+-------------------------------------------------------------------------------
+Six of the eight actionable alerts had 5-minute dollar volume equal to only about 0.024%-0.041% of market cap. They generally went nowhere. BITCAT and cat, the two meaningful winners, were around 0.276% and 1.047% respectively.
+
+v10.7 change:
+- Normal ENTRY OPTION requires >=0.08% 5m dollar turnover / market cap.
+- STRONG ENTRY requires >=0.15%.
+
+On this exact eight-alert sample, that filter would have removed the six low-motion alerts while retaining BITCAT and cat. That result is encouraging but is still a small sample and is not a profit guarantee.
+
+KEY FINDING #2 — ONE IMPORTANT LOW-LIQUIDITY MOVE WAS MISSED
+------------------------------------------------------------
+TOGETHER was put on SCOUT at roughly 21:52:46 UTC around $0.0001127. It did not get a normal entry because liquidity was only about $28k-$29k, below the $50k normal floor, and its recent raw tape had been volatile. Around 21:53:56 it had recovered to about $0.0001192 with roughly:
+- $29.3k liquidity / $117.3k market cap
+- ~25% liquidity-to-MC
+- ~11.2% of market cap traded in 5 minutes
+- ~3.28x buys/sells
+- ~291 swaps/5m
+- 5m +1.2%, 1h -2.7%
+
+From that recovered snapshot the observed move later reached roughly +68% without first hitting -10%.
+
+v10.7 change:
+A separate MICRO ENTRY path can rescue this type of setup WITHOUT lowering the normal $50k liquidity floor. It requires:
+- $25k-$50k liquidity
+- $70k-$400k market cap
+- 18%-80% liquidity/MC
+- >=5% 5m dollar turnover/MC
+- >=1.8x buy/sell
+- >=50 swaps/5m
+- controlled 5m/1h move and scout distance
+- strong score/confirmation
+- RugCheck + holder verification
+- a shorter 3-minute microcap stability window with recovery proof
+
+An offline replay of the recent SCOUT set using these strict conditions selected TOGETHER and did not broadly open the liquidity gate to the weaker missed movers.
+
+OTHER MOVERS THAT REMAIN INTENTIONALLY FILTERED
+-----------------------------------------------
+Several WATCH-only names later moved, but the data also showed reasons not to chase them:
+- AFD: later moved strongly, but buy/sell pressure was only around 1.3x and the tape remained erratic.
+- HIM / bababoi: only about 7 swaps at the initial scout snapshots; too little evidence.
+- Dyson / GTA: buy/sell was below 1x at scout time.
+- Biz: 1h was around -41.5%, a falling-knife condition.
+- 中国黑牛: strong activity but very large later drawdowns; instability remained high.
+- Taste: eventually rallied, but the -10% risk line was hit before +15% from its scout path.
+- stonkape: pumped hard and later fell roughly 98%; exactly the kind of move where verified safety and fast partial-profit handling matter.
+- fone: eventually moved much later, but was around a $10M market cap and had sellers exceeding buyers at scout time, outside this early-meme strategy.
+
+KEY FINDING #3 — PARTIAL PROFIT TRACKING EXISTED, BUT THE TELEGRAM WORKFLOW WAS AWKWARD
+--------------------------------------------------------------------------------------
+v10.6 already had internal partial-position math and /sellpct /sellusd commands. The problem was usability: TAKE PARTIAL PROFIT messages did not carry the contract and /sellpct required TICKER + percent, so replying directly to the advice did not work.
+
+v10.7 change:
+- TAKE PARTIAL PROFIT, DE-RISK MORE and EXIT/REDUCE alerts include the exact contract.
+- After actually selling in Fomo, reply directly to the alert with:
+    /sellpct 50
+    /sellusd 2
+  or friendly aliases:
+    /sold 50%
+    /sold $2
+- The bot journals realized P/L on that leg, updates remaining_fraction, and keeps monitoring the remainder.
+- /sell still records a full exit.
+- These commands journal manual Fomo actions; they do not place the manual order.
+
+TAKE-PROFIT LEVELS
+------------------
+The current +15% first checkpoint remains sensible for the reviewed sample: BITCAT, cat and the best missed microcap move all crossed +15%, while most low-motion alerts never came close. The partial-sale workflow is therefore improved rather than raising TP1 and risking giving fast meme-coin moves back. TP2 remains +35%, with the trailing-risk logic still active after TP1.
+
+PACKAGING / MAC FIX
+-------------------
+All .command files in v10.7 are marked executable before packaging, including export_data.command, to avoid the access-privileges problem seen in v10.6.
+
+BOTTOM LINE
+-----------
+v10.7 is intentionally not "more alerts at any cost." It does two things simultaneously:
+1. suppresses economically quiet false-positive entry alerts; and
+2. adds a narrow, high-flow, safety-verified path for exceptional low-liquidity microcaps that the fixed $50k floor could miss.
+
+No filter can guarantee profitability. Meme coins can gap, rug, or reverse between scans. Continue using small position sizing and record actual buys/sells so the position-aware risk system has accurate information.

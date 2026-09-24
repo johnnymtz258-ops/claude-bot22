@@ -1,0 +1,17 @@
+FOMO BOT v11 — WALK-FORWARD VALIDATION
+Generated: 2026-08-31 05:54:00
+Database: /mnt/data/export_aug31/fomo_master.db
+
+Walk-forward 30m: train 99 / unseen test 43
+Older median -0.3% → unseen median -0.5% | unseen positive 37% | ≥+15 7% | ≤-15 14%
+Unseen score ≥66: n=18 median -0.2% vs lower-score n=25 median -3.5%
+
+Walk-forward 120m: train 98 / unseen test 42
+Older median -5.2% → unseen median -1.7% | unseen positive 33% | ≥+15 10% | ≤-15 29%
+Unseen score ≥68: n=18 median -0.6% vs lower-score n=24 median -6.2%
+
+Interpretation:
+- The newest chronological slice is not used to define the older comparison slice.
+- Endpoint returns do not prove a target was reached before a drawdown.
+- This lab never loosens entry filters or changes real-trading settings automatically.
+- Use it together with signal path outcomes, missed-opportunity review, and Guardian trade management.

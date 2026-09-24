@@ -1,0 +1,80 @@
+FOMO BOT v14.0 CAPITAL FIRST — FINAL BUILD VALIDATION
+=====================================================
+Validation date: 2026-08-31
+Source live export: 86ebe8db-43ee-4bfb-b9c7-fc254b878600.zip
+Base code: v13.3 EDGE RECOVERY
+
+TEST / CODE VALIDATION
+----------------------
+- Full pytest suite: 148 passed.
+- v14-specific regression file: 16 passed.
+- Python compileall: PASS.
+- 6 macOS .command launchers: bash syntax PASS and executable permission PASS.
+- Legacy test expectations were intentionally updated only where v14 deliberately supersedes the old risk/profit semantics (8% capital hard cap, full small-position TP1, high-water profit lock, delivery retry behavior, current branding).
+
+V14 REGRESSION COVERAGE INCLUDES
+--------------------------------
+- deep/active MACRODUCK-like normal shape passes the final capital edge gate,
+- APEUS/HeeHaw/PVP-like poor-asymmetry shapes are rejected,
+- 24h same-token trauma memory after severe 30m path,
+- STRUCTURE and cross-chain BUY lanes watch/shadow-only by default,
+- every real normal/STRONG entry requires persistence confirmation,
+- fast-lane ENTRY_SENT_HOT participates in same-build cooldown,
+- old DB $20/$30 size guidance cannot bypass $10/$15 v14 caps,
+- legacy 20% small hard stop cannot bypass the 8% capital hard line,
+- small TP1 realizes full position,
+- high-water giveback becomes full profit-lock EXIT_REVIEW,
+- failed action reservation can be released,
+- Telegram retries and confirms delivery before state advances,
+- core capital governor quarantines a bad fresh cohort,
+- clean CAPITAL_SHADOW paths can return the core lane to probation,
+- capital-core probation size is capped at $5.
+
+REAL DATABASE MIGRATION TEST
+----------------------------
+A byte-copy of the latest user master DB was opened/migrated by v14.
+Counts before -> after:
+- observations: 727,565 -> 727,565
+- signals: 3,709 -> 3,709
+- evals: 16,818 -> 16,818
+- positions: 50 -> 50
+- guardian_events: 453 -> 453
+- decision_ledger: 34,582 -> 34,582
+- decision_outcomes: 103,606 -> 103,606
+- missed_opportunities: 314 -> 314
+- social_events: 25 -> 25
+- journal_actions: 15 -> 15
+- runs: 4 -> 5 (expected v14 run marker)
+- lane_governor: 4 -> 7 (expected v14 STRUCTURE, MANUAL CHAIN, and CAPITAL CORE state rows)
+No historical trading/learning rows were deleted or rewritten by startup migration.
+
+UNCHANGED LEGACY ENTRY COMPONENTS
+---------------------------------
+AST/source comparison against the v13.3 package verified these legacy functions are unchanged:
+- classify_entry_tier
+- actionable_blockers
+- entry_stability_check
+- entry_tape_preservation
+- entry_commitment_gate
+v14 adds a final capital-edge layer, token-trauma memory, and universal persistence after those existing gates rather than silently weakening them.
+
+DELIVERY / RISK VALIDATION
+--------------------------
+- Telegram sendMessage retries 3 times.
+- ENTRY_DELIVERY_FAIL does not create an EARLY signal or consume the long per-token entry cooldown.
+- Guardian TP/runner/exit flags advance only after confirmed Telegram delivery.
+- Guardian liquidity-warning delivery likewise stays retryable after failure.
+- normal/exceptional guidance is upgrade-capped to $10/$15; core probation to $5.
+- optional real autopilot remains opt-in and is capped to $5/trade.
+- Guardian price hard line cannot exceed 8% even when an older caller/config supplies 16-20% legacy values.
+
+PACKAGE / SECURITY
+------------------
+- .env is excluded from the release ZIP.
+- no private keys, seed files, PEMs, master DB, user export, or user log are included.
+- __pycache__, pytest cache, development DB copies and generated release ZIPs are excluded.
+- ZIP integrity and extracted-package tests are required before distribution.
+
+LIMITATION
+----------
+The latest v13.3 data motivated the redesign, but the v14 capital-shape counterfactual is not an independent holdout. Passing tests and historical replay cannot guarantee profitable future trades. Meme-coin execution remains exposed to gaps, rugs, slippage, latency and regime change. The safest validation path is fresh v14 paper data before risking new live capital.

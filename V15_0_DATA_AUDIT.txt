@@ -1,0 +1,87 @@
+FOMO BOT v15.0 SOL EDGE ENGINE — SEP-9 MULTI-DAY DATA AUDIT
+================================================================
+Source: FOMO_DATA_EXPORT_20260909_124121.zip
+
+WHAT ACTUALLY RAN
+-----------------
+The exported runs table contains v13.0, v13.1, v13.2 and v13.3. There is no v14 run marker. Therefore this dataset is a fresh holdout of the older logic, not evidence that v14 itself was deployed or validated live.
+
+DATABASE AT EXPORT
+------------------
+observations: 24,897
+signals: 9,040
+evals: 43,451
+positions: 55
+guardian_events: 749
+decision_ledger: 82,364
+decision_outcomes: 244,619
+missed_opportunities: 538
+social_events: 45
+journal_actions: 21
+runs: 4
+lane_governor: 4
+paper_positions: 0
+
+V13.3 DELIVERED ENTRY HOLDOUT — 30 MINUTES
+------------------------------------------
+All chains: n=81
+- median maximum return: +5.02%
+- median minimum return: -3.58%
+- median endpoint: +0.47%
+- reached +10%: 34.6%
+- reached -8% or worse: 33.3%
+- reached -15% or worse: 13.6%
+
+Solana only: n=69
+- median maximum return: +6.78%
+- median minimum return: -5.14%
+- median endpoint: -0.24%
+- reached +10%: 39.1%
+- reached -8% or worse: 39.1%
+- reached -15% or worse: 15.9%
+
+Solana by tier:
+- ENTRY OPTION: n=51, median max +7.85%, median endpoint +0.65%
+- STRONG ENTRY: n=12, median max +12.85%, median endpoint -1.38%
+- STRUCTURE ENTRY: n=6, median max +0.84%, median endpoint -0.12%
+
+INTERPRETATION
+--------------
+The old model did find runners, but the downside frequency was too close to the upside-hit frequency for a small, fee-sensitive bankroll. A STRONG label did not imply a strong endpoint. The multi-day data also varied materially by day, indicating regime dependence rather than one stable fixed threshold set.
+
+V14 STATIC CAPITAL BOX — FRESH GENERALIZATION CHECK
+----------------------------------------------------
+The v14 normal Solana static economic gate was replayed against the v13.3 delivered-entry snapshots in this later Sep-9 dataset. It selected 15 paths.
+
+Those 15 paths had:
+- median maximum return: +10.97%
+- median minimum return: -6.93%
+- median endpoint: -3.23%
+- reached +10%: 53.3%
+- reached -8% or worse: 46.7%
+- reached -15% or worse: 13.3%
+
+Conclusion: the v14 fixed liquidity/turnover/momentum box did not generalize well enough to be the positive authorization model. It has therefore been demoted in v15. v15 uses a broad veto layer plus stateful path confirmation, current-market breadth, historical downside analogs, execution-quality preflight and forward proof.
+
+WHY v15 DOES NOT CLAIM A HISTORICAL WIN RATE
+---------------------------------------------
+The Decision Ledger and outcomes span the multi-day holdout, but the observations table in this export begins only around Sep 9 05:19 local-system time and ends around Sep 9 17:41. Older observation snapshots had been pruned by maintenance. The new v15 setup-path gate requires consecutive observations across time, so it cannot be honestly replayed for every one of the 81 old alerts.
+
+It would be misleading to synthesize missing snapshots or call a partial retrospective pass a backtest. Therefore v15 intentionally starts with an always-on shadow/proof phase and grades only fresh v15 forward trades net of configured friction.
+
+DESIGN CONSEQUENCES
+-------------------
+1. No attempt to maximize alert count.
+2. Solana-first actionable lane.
+3. One-frame score/classifier cannot authorize a trade by itself.
+4. Broad market RISK_OFF can veto new exposure.
+5. Historical analog layer is downside-veto only; it cannot create a BUY.
+6. Real route/friction is measured before action when Jupiter is available.
+7. Jupiter Tokens V2 suspicious/banned status is an independent veto when configured.
+8. Every fully qualified setup can create a shadow trade before live authorization.
+9. Fresh-build proof must become ACTIVE before live BUY guidance.
+10. Explicit /bankroll is required before non-zero live-money sizing.
+
+LIMITATION
+----------
+No historical audit, classifier, proof gate or API can guarantee positive future returns. Meme-token distributions are non-stationary; liquidity, routing, fees and adversarial behavior can change faster than the model.

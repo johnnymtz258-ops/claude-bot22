@@ -1,0 +1,18 @@
+FOMO BOT v16.0 COPY EDGE — QUICK GUIDE
+============================================
+
+START: double-click start_mac.command
+CHECK: /copy, /copydiscover, /copywallets, /status, /sources, /edge, /paperreport, /execstatus
+VALIDATE: copy-paper runs automatically; leave /shadow on; keep both live systems OFF initially
+EXPORT: run export_data.command after a meaningful fresh sample
+
+READ THE REPORT CORRECTLY
+-------------------------
+ALL RESEARCH = every qualifying simulation used for learning.
+PROOF-ELIGIBLE = the higher-conviction core subset allowed to prove live edge.
+Only the proof cohort can unlock live guidance.
+
+Default proof cohort: core Solana entry score >=70.
+Default ACTIVE requirements: 12 closed proof paths, >=6 unique tokens, positive net P/L, >=1% net ROI, >=45% wins, PF >=1.20.
+
+No bot can guarantee profit. Do not fund real autopilot merely because software tests pass.

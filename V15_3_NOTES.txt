@@ -1,0 +1,31 @@
+FOMO BOT v15.3 ACTIONABLE CORE — RELEASE NOTES
+===============================================
+
+1. ACTIONABLE SIGNALING
+- Fully-qualified proof-eligible core setups no longer disappear just because proof is not ACTIVE yet.
+- Default ACTIONABLE policy sends BUY NOW — TEST SIZE / MANUAL ONLY during proof probation.
+- If proof/risk/core state is quarantined or paused, the same setup remains visible as PAPER BUY NOW with $0 live sizing.
+- Once proof, bankroll and risk gates are open, the alert becomes LIVE-QUALIFIED BUY NOW.
+
+2. LIVE CAPITAL STILL FAIL-CLOSED
+- Real autopilot still uses the unchanged centralized live_execution_gate().
+- Pre-proof TEST BUY alerts cannot bypass proof, bankroll, unresolved-transaction, lane, daily-loss or capacity gates for automated execution.
+- /signalpolicy strict restores the older v15.2 behavior.
+
+3. TEST-SIZE GUIDANCE
+- During proof probation, a configured bankroll can produce a capped manual test-size guide.
+- Default pre-proof test size is 50% of the normal bankroll-risk cap, never above $3 by default.
+- If bankroll is not configured, the signal still appears but dollar guidance remains $0.
+
+4. TELEGRAM / LEARNING
+- TEST BUY signals are persisted as ENTRY_SENT_TEST so they participate in cooldown, outcome capture, token-trauma memory and historical analog learning.
+- Telegram delivery failure still releases the cooldown.
+- /status reports TEST-BUY count separately from fully live-qualified ENTRY_SENT alerts.
+- /signalpolicy actionable|strict controls signal visibility without changing real autopilot safety.
+
+5. RETAINED
+- v15.2 selective proof cohorting.
+- v15.1 execution hardening: atomic accounting, WAL/busy timeout, execution leases, durable transaction intents, RPC failover, chain confirmation, wallet-delta reconciliation and structured execution failures.
+- Solana-first stateful path, breadth, historical downside, Jupiter execution-quality and proof/shadow engines.
+
+This release makes the bot operationally useful without pretending an unproven setup is live-qualified. A TEST BUY signal is still high risk; passing software tests does not imply trading profitability.

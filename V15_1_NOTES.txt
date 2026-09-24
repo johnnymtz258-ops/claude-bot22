@@ -1,0 +1,95 @@
+FOMO BOT v15.1 SOL EDGE HARDENED — RELEASE NOTES
+=================================================
+Release date: 2026-09-18
+Base: v15.0 SOL EDGE ENGINE
+
+PURPOSE
+-------
+v15.1 is an execution-integrity and reliability hardening release. It intentionally keeps the v15 proof-first signal/edge architecture and focuses on preventing software, network, concurrency, database, and wallet-accounting failures from turning into duplicate, phantom, or incorrectly recorded live trades.
+
+1. ATOMIC DATABASE ACCOUNTING
+-----------------------------
+- SQLite uses WAL mode, a 10-second busy timeout and foreign-key enforcement.
+- Critical multi-step live BUY/SELL accounting uses explicit BEGIN IMMEDIATE transactions with rollback on failure.
+- Decision logging serializes cooldown/deduplication checks with the write transaction.
+- New indexes support high-volume decision, signal, position, failure and execution queries.
+
+2. DURABLE EXECUTION INTENTS + IDEMPOTENCY
+------------------------------------------
+- Every live swap has a persistent execution-intent record and logical idempotency key.
+- The locally signed Solana transaction signature is persisted BEFORE Jupiter submission.
+- New-order authorization fails closed while an unresolved live execution exists.
+- Cross-process database execution leases prevent concurrent loops/processes from intentionally sending the same logical order.
+
+3. CHAIN/WALLET TRUTH OVER HTTP RESPONSES
+-----------------------------------------
+- Jupiter HTTP success/failure is not treated as final execution truth.
+- The bot polls Solana transaction status after submission.
+- If the network response disappears but Solana confirms the signature, the bot treats the chain result as authoritative.
+- Actual wallet balance deltas are verified before a confirmed swap is fully accounted.
+- A chain-confirmed transaction with unreadable wallet delta becomes CONFIRMED_UNRECONCILED and locks new real orders until reconciliation succeeds.
+- Quote-vs-realized wallet output is measured; excessive realized slippage is persisted as a structured failure/warning.
+
+4. STARTUP CRASH RECOVERY
+-------------------------
+- Pending/ambiguous execution intents are reconciled on startup and during the live loop.
+- A confirmed BUY can be reconstructed from verified wallet balance change without resending the transaction.
+- Failed on-chain transactions become FAILED.
+- Still-uncertain signed transactions remain locked rather than being blindly retried.
+
+5. WALLET / RPC / NETWORK HARDENING
+-----------------------------------
+- Explicit HTTP timeouts are used on the shared client and live execution path.
+- Solana RPC supports a configurable fallback pool and tracks the active endpoint / last RPC error.
+- SOL/token balance reads return explicit success/error state to the live path.
+- Live buys verify SOL balance plus reserve before signing.
+- The signing keypair fingerprint is checked immediately before each signature; file replacement/corruption blocks execution.
+- Confirmation polling has a configurable timeout.
+
+6. CENTRALIZED LIVE-RISK GATE
+-----------------------------
+One fail-closed authorization gate now checks the conditions that must all be true before a new real-money order can be sent, including:
+- no unresolved execution,
+- fresh-build proof ACTIVE,
+- CAPITAL CORE governor ACTIVE,
+- paper risk circuit not paused,
+- explicit bankroll configured,
+- lane not quarantined,
+- live daily/order/open-position limits not breached.
+
+Real autopilot remains optional and OFF by default.
+
+7. GOVERNOR + DEDUPLICATION INTEGRITY
+-------------------------------------
+- Current-build lane-governor rows are validated at startup; corrupt state is reset to fresh PROBATION instead of being trusted as ACTIVE.
+- Decision-level database dedupe reduces concurrent duplicate event insertion.
+- Execution-level idempotency and leases are independent of Telegram/decision cooldowns.
+
+8. STRUCTURED FAILURE AUDIT
+---------------------------
+New persistent tables:
+- execution_intents
+- execution_leases
+- trade_failures
+- decision_dedupe
+
+Exports now include execution_intents.csv, execution_leases.csv, trade_failures.csv and auto_trade_events.csv.
+
+New Telegram command:
+- /execstatus — SQLite safety mode, current RPC, unresolved executions, governor integrity repairs, central live-order gate and recent execution failures.
+
+9. WHAT DID NOT CHANGE
+----------------------
+This hardening pass does not replace v15's proof-first trading architecture. Stateful setup-path confirmation, Solana breadth veto, historical downside analog veto, Jupiter read-only route preflight, shadow/proof grading and bankroll risk sizing remain the strategy layer. The purpose of v15.1 is to make the boundary between a strategy decision and an actual wallet mutation substantially safer and auditable.
+
+10. DEPLOYMENT
+--------------
+Recommended first run remains PAPER/SHADOW:
+1. Stop the previous bot with Control + C.
+2. Unzip FOMO_BOT_v15_1_SOL_EDGE_HARDENED.zip.
+3. Run start_mac.command.
+4. Do not delete ~/Library/Application Support/FomoBot/fomo_master.db.
+5. Send /status, /sources, /edge, /paperreport and /execstatus.
+6. Keep /shadow on and real autopilot OFF while collecting fresh proof.
+
+No software hardening or trading model can guarantee profitability. Meme-token markets remain exposed to rugs, gaps, liquidity loss, slippage, route failure, latency and adversarial behavior.

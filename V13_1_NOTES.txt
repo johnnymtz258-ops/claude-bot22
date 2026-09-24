@@ -1,0 +1,48 @@
+FOMO BOT v13.1 QUALITY GOVERNOR — RELEASE NOTES
+================================================
+
+1. Rebuilt MANUAL CHAIN ENTRY
+- Removed the broad v13.0 flow rule.
+- Added strict low-liquidity flow, deep-liquidity flow and breakout shapes.
+- Added a ~+4% maximum move from the bot's own scout before BUY.
+- Fixed the BLUECHIP-style chase path where +14% from scout could still become actionable.
+- Cross-chain real autopilot remains disabled.
+
+2. Added cross-chain pre-watch visibility
+- High-quality Base/BSC/Monad/Robinhood scouts may send `CROSS-CHAIN WATCH — MANUAL ONLY`.
+- It is explicitly NOT a buy call.
+- `/quiet on` still suppresses this chatter.
+
+3. Tightened STRUCTURE ENTRY quality
+- Max ~+4% from scout.
+- If 1h <= -5%, require >=1.75x B/S, >=40 swaps and >=0.15% 5m turnover/MC.
+- Blocks the audited Jimothy shape while preserving TripleT/CATE-style clean structure tests.
+
+4. Cleaner normal Solana 1h regime
+- Standard lane: roughly -10% to +10% 1h.
+- -10%..-5% is a strict recovery pocket requiring >=1.75x B/S, >=20 swaps, >=0.25% turnover/MC, controlled 5m tape and realtime confirmation when available.
+- Deeper washouts must use the separate REVERSAL ENTRY lane.
+
+5. Experimental-lane Quality Governor
+- STRUCTURE and MANUAL CHAIN lanes start PROBATION each build.
+- After >=6 completed 30m paths, weak recent performance can QUARANTINE the lane automatically.
+- Quarantined lane continues scouting/logging but sends no BUY alert.
+- `/status` shows lane health.
+- Probation size caps: ~$12 structure, ~$8 cross-chain by default.
+
+6. Fee-aware profit realization
+- MANUAL CHAIN base targets changed from +5/+12 to +8/+16.
+- TP1 gets raised when necessary to target at least ~$0.50 net after configured friction on the remaining stake.
+- If a tiny position reaches that fee-aware TP but an ordinary partial would be too small, GUARDIAN can suggest closing the full remaining position instead of taking a fee-heavy tiny slice.
+
+7. Retained v13 features
+- Execution Truth / CASH_VERIFIED vs ESTIMATED P/L.
+- `/reconcile`, `/undo`, `/sellcash`, `/closecash`, `/fixentry`.
+- Manual-buy learning.
+- CATE-style established structure discovery.
+- GG-style cross-chain discovery.
+- Gecko trending pools, PumpPortal, Solana realtime, Reddit/RSS, optional X.
+- Decision Ledger + version-aware runs.
+- v12 reversal, source-resilience, stale-context protection, 5s hot scouts and GUARDIAN.
+
+No threshold change guarantees profit. The purpose of v13.1 is to reduce repeated low-edge entry shapes while keeping broad discovery and learning active.

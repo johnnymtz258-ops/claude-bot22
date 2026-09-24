@@ -1,0 +1,39 @@
+FOMO BOT v16.0 COPY EDGE — RELEASE NOTES
+=========================================
+
+1. SMART-WALLET COPY ENGINE
+- Up to 20 tracked public Solana wallets.
+- One WebSocket connection with one standard logsSubscribe per wallet.
+- Helius RPC/WSS when configured; public Solana fallback otherwise.
+- Confirmed transaction fetch before classification; failed transactions ignored.
+
+2. DEX-AGNOSTIC SWAP PARSER
+- Uses final tracked-wallet SOL/USDC/token balance deltas.
+- Multi-hop routes collapse to the final received/sold token.
+- Best-effort venue label for Jupiter/Pump/Raydium/Meteora; execution does not depend on that label.
+- Jito-bundled transactions require no special copying path after they land on-chain.
+
+3. PAPER FIRST + ACTIONABLE SIGNALS
+- Every qualified tracked-wallet buy opens a follower-time paper copy.
+- COPY BUY NOW test alert is visible immediately for sufficiently scored wallets.
+- Leader partial/full sells produce proportional COPY EXIT handling.
+- Paper friction is configurable.
+
+4. WALLET DISCOVERY / REPUTATION
+- Birdeye tagged smart traders and repeated high-dollar wallet flow can auto-populate copy candidates.
+- /copydiscover lists them.
+- /copyanalyze reconstructs recent confirmed SOL/USDC round trips and derives an observed-history score.
+- Risky dev/bundler/sniper/insider tagged wallets are not auto-promoted.
+
+5. OPTIONAL LIVE COPY
+- Reuses hardened live_execution.py; no second execution stack.
+- Default OFF + kill switch ON.
+- 48h paper-age + 20 closed positive-net copy trades required before arming by default.
+- Wallet score, event age, follower chase, liquidity, max open positions, daily loss, keypair, balance, confirmation and wallet-delta checks remain enforced.
+
+6. LESS NOISE
+- GET READY scout Telegram chatter defaults OFF on first v16 migration.
+- Internal scouting, social/news, PumpPortal, DexScreener, GeckoTerminal, Jupiter Tokens, Birdeye smart money and realtime Solana remain active.
+- /scouts on can restore early scout messages.
+
+No historical or paper result guarantees future profitability.

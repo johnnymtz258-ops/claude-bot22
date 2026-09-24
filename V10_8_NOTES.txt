@@ -1,0 +1,24 @@
+FOMO BOT v10.8 STATE-LEDGER
+
+This is v10.7 FLOW+PARTIAL plus a persistent-position ledger repair.
+
+WHY THIS BUILD EXISTS
+Older version folders can contain a stale ACTIVE copy of a trade. v10.6/v10.7
+migration checked only whether the shared database already had an ACTIVE copy.
+After you sold the shared position, a future version launch could therefore import
+the stale old ACTIVE row again. This is why FRUG and Pistacio kept reappearing.
+
+FIXES
+1. A closed shared position is now authoritative. Migration will never resurrect
+   the exact same old trade merely because an older folder still says ACTIVE.
+2. Trade identity uses chain + token + original open_ts, so a legitimate later
+   re-entry into the same token is still allowed.
+3. Startup conservatively removes stale duplicate rows created by the old bug
+   when they have the same chain/token/open_ts/entry price/amount. It preserves
+   the earliest journal row and preserves legitimate re-entries.
+4. Scanner/entry logic and v10.7 partial-sell behavior are unchanged.
+
+EXPECTED ONE-TIME STARTUP
+On the first v10.8 launch you may see lines such as:
+[state] removed 3 stale duplicate(s) ...
+That is the repair working. FRUG/Pistacio should not return after being closed.

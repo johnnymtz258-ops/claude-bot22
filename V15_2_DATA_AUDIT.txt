@@ -1,0 +1,76 @@
+FOMO BOT v15.2 SELECTIVE PROOF — SEP-20 FORWARD DATA AUDIT
+==========================================================
+Source: FOMO_DATA_EXPORT_20260920_225327.zip
+
+LATEST v15.1 SHADOW RESULTS
+---------------------------
+All closed v15.1 shadows: n=56
+- net P/L: -$7.60
+- gross market P/L before modeled friction: +$0.06
+- modeled fees/friction: $7.66
+- net ROI: -2.71%
+- win rate: 16.1%
+- profit factor: 0.53
+- unique tokens: 17
+
+Core live-capable tiers only (ENTRY/STRONG/FLOW/REVERSAL): n=26
+- net P/L: -$4.11
+- gross market P/L: +$0.27
+- modeled fees/friction: $4.38
+- net ROI: -3.16%
+- win rate: 23.1%
+- profit factor: 0.59
+- unique tokens: 7
+
+STRUCTURE research-only: n=30
+- net P/L: -$3.49
+- gross P/L: -$0.21
+- modeled friction: $3.28
+- win rate: 10.0%
+- profit factor: 0.42
+
+The latest 20 core proof rows reproduced the Telegram state:
+- net P/L: -$2.18
+- PF: 0.72
+- win rate: 25%
+- unique tokens: 6
+
+SCORE SEGMENT DIAGNOSTIC
+------------------------
+The existing entry score was the clearest simple separator that held directionally across the chronological v15 cohorts.
+
+Older v15.0 core, score >=70:
+- n=18; 11 unique tokens
+- net +$1.51 after modeled friction
+- net ROI +1.68%
+- win rate 50.0%
+- PF 1.17
+
+Later/fresh v15.1 core, score >=70:
+- n=7; 4 unique tokens
+- net +$2.84 after modeled friction
+- net ROI +8.13%
+- win rate 57.1%
+- PF 2.80
+
+A still-higher >=75 cutoff did not generalize to v15.0 (net negative), while lower cutoffs admitted substantially more loss-heavy paths. v15.2 therefore uses 70 as a DEFAULT FORWARD-PROOF ELIGIBILITY FLOOR, not as a claim of historical profitability.
+
+DESIGN FAILURE FIXED
+--------------------
+In v15.1, all core shadows could enter proof regardless of score, and the paper loss circuit also included deliberately broad research shadows. This mixed two different purposes:
+1) broad data collection, and
+2) authorization of live risk.
+
+That architecture could quarantine/pause live guidance because of experiments that were never intended to be live candidates.
+
+V15.2 RESPONSE
+--------------
+- Keep broad shadow research.
+- Mark only high-conviction core shadows proof_eligible.
+- Require sample count + token diversity + positive net ROI + win/PF quality before ACTIVE.
+- Make the live paper-risk circuit use the same proof cohort.
+- Start v15.2 proof fresh; no old trades are grandfathered into authorization.
+
+LIMITATION
+----------
+The >=70 segmentation was chosen with historical v15.0/v15.1 results available. It is calibration, not independent validation. Fresh v15.2 forward results are required before any live authorization. Meme-token behavior remains non-stationary and execution costs can dominate small trades.

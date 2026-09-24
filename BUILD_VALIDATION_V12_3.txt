@@ -1,0 +1,11 @@
+FOMO BOT v12.3 CONTEXT GUARD — BUILD VALIDATION
+
+- 22 regression test files passed, including all prior v10/v11/v12 suites and new v12.3 context/cash-reconciliation tests.
+- 39 Python files compiled successfully.
+- 6 macOS .command launchers passed bash syntax checks and retain executable permissions.
+- A copy of the supplied Aug-29 master DB opened/migrated successfully.
+- Before/after historical row counts remained: observations 660,839; signals 1,695; evals 7,856; positions 33; GUARDIAN events 288; decision_ledger 1,692; decision_outcomes 2,845; social_events 19.
+- telegram_trade_context migration added context_kind, valid_until, consumed_ts and context_status without deleting existing rows.
+- The old PINK signal-1556 context from the supplied DB is treated as EXPIRED under v12.3 despite having been created before the new columns existed.
+- Cash reconciliation unit test: a recorded $15 position closed with $17.99 actual net proceeds realizes +$2.99.
+- No entry/liquidity/reversal/sizing threshold was broadly loosened in this patch.

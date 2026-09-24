@@ -1,0 +1,97 @@
+FOMO BOT v15.1 SOL EDGE HARDENED — FINAL BUILD VALIDATION
+========================================================
+Validation date: 2026-09-18
+Calibration/holdout source: FOMO_DATA_EXPORT_20260909_124121.zip
+Base release: v15.0 SOL EDGE ENGINE
+
+SOFTWARE / REGRESSION
+---------------------
+- 185/185 tests passed in the development tree before packaging.
+- 48 top-level Python files compiled successfully before packaging.
+- 6 macOS .command launchers passed `bash -n` and are executable:
+  * export_data.command
+  * run_model_lab.command
+  * setup_edge_sources.command
+  * setup_live_trading.command
+  * setup_wallet_sync.command
+  * start_mac.command
+
+V15.1 HARDENING REGRESSION COVERAGE
+-----------------------------------
+New coverage includes:
+- WAL + busy_timeout database setup,
+- transaction rollback on critical accounting failure,
+- atomic auto-BUY rollback under injected DB failure,
+- cross-process execution lease exclusion/release,
+- corrupted current-build governor reset to PROBATION,
+- DB-backed decision deduplication across two connections,
+- execution-intent idempotency and unresolved-execution blocking,
+- structured failure persistence across restart,
+- keypair mutation detection before signing,
+- deterministic signed transaction signature derivation before send,
+- wallet-balance rejection before network submission,
+- Solana RPC failover,
+- Solana confirmation overriding contradictory Jupiter HTTP failure,
+- confirmation timeout persisting AMBIGUOUS state and blocking blind retry,
+- quote-vs-wallet post-fill slippage diagnostics,
+- chain-confirmed but unreadable wallet delta remaining unresolved/fail-closed,
+- export of hardening execution tables,
+- /execstatus + centralized live gate + reconciliation/atomic methods packaged.
+
+All retained v15.0 proof/edge and legacy regression tests also pass.
+
+REAL DATABASE MIGRATION TEST
+----------------------------
+A fresh byte-copy of the Sep-9 exported ~239 MB master DB was opened through v15.1 using FOMO_STATE_DB.
+Historical rows before -> after:
+- observations: 24,897 -> 24,897
+- signals: 9,040 -> 9,040
+- evals: 43,451 -> 43,451
+- positions: 55 -> 55
+- guardian_events: 749 -> 749
+- decision_ledger: 82,364 -> 82,364
+- decision_outcomes: 244,619 -> 244,619
+- missed_opportunities: 538 -> 538
+- social_events: 45 -> 45
+- journal_actions: 21 -> 21
+- paper_positions: 0 -> 0
+- runs: 4 -> 5 (expected v15.1 run marker only)
+- lane_governor: 4 -> 7 (expected fresh current-build CAPITAL CORE / STRUCTURE / MANUAL CHAIN governor rows)
+
+SQLite after migration:
+- journal_mode = WAL
+- busy_timeout = 10,000 ms
+- governor integrity repairs = 0
+- execution_intents = 0
+- execution_leases = 0
+- trade_failures = 0
+
+No historical observation, signal, evaluation, position, journal, Guardian, Decision Ledger, outcome or missed-opportunity row was removed or rewritten by startup migration.
+
+STRATEGY / DATA CHECK
+---------------------
+The Sep-9 export remains the reason v15 uses proof-first forward validation instead of claiming a historical v15 win rate. v15.1 intentionally does not broadly loosen/tighten the v15 signal model during the execution hardening pass.
+
+SECURITY / LIVE-MONEY DEFAULTS
+------------------------------
+- .env is excluded from the release; .env.example contains configuration placeholders only.
+- no private-key, seed, PEM, database, user export or runtime log is packaged.
+- caches / compiled bytecode / development backup artifacts are excluded.
+- real autopilot remains OFF unless explicitly armed and confirmed.
+- proof must be ACTIVE before non-zero live authorization.
+- explicit /bankroll remains required for live sizing by default.
+- unresolved execution state blocks new real orders.
+- optional setup_live_trading wizard defaults the per-trade amount prompt to $5.
+
+FINAL PACKAGE VALIDATION
+------------------------
+The exact final ZIP was extracted into a clean directory and the packaged contents passed:
+- 185/185 pytest tests,
+- Python compileall for 48 top-level Python files,
+- all 6 launcher bash syntax checks with executable bits retained,
+- ZIP CRC/integrity check,
+- secret/runtime-artifact scan (no .env, key/seed/PEM, DB, user export, runtime log, cache or compiled bytecode packaged).
+
+LIMITATION
+----------
+Passing software tests, database migration checks and execution hardening do not establish trading profitability. The recommended validation path remains fresh shadow/paper data before risking live capital.

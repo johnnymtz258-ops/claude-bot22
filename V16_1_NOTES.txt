@@ -1,0 +1,25 @@
+FOMO BOT v16.1 VELOCITY EDGE
+=============================
+
+Purpose
+-------
+Increase useful entry velocity without rewriting the hardened execution layer or disabling hard security checks.
+
+Main changes
+------------
+1. Proof-eligible score default lowered 70 -> 55.
+2. Fresh proof path target lowered 12 -> 8.
+3. Standard stability span lowered 45s -> 20s.
+4. Added FAST ENTRY lane: stronger live flow requirements, 2 observations / 15s stability, basic safety can qualify while premium enrichment continues.
+5. FAST ENTRY is manual/test signal only for now; real live autopilot does not accept FAST ENTRY.
+6. STRICT breadth/historical vetoes stay strict; FAST treats them as sizing/warning context rather than automatic signal death.
+7. Regime-aware sizing: STRESS 0.60x, RISK_OFF 0.78x, RISK_ON 1.10x, UNKNOWN 0.85x. Dollar caps remain enforced.
+8. Slow-provider circuit breaker added for Birdeye/Jupiter/GeckoTerminal.
+9. Copy RPC has its own short circuit breaker.
+10. Copy wallet stream and hot-scout lane already run as independent async tasks from the broad scanner; this release preserves that architecture.
+11. Safety preflight now publishes basic safety before slower premium enrichment finishes so FAST is not forced to wait on every provider.
+12. Pre-proof TEST BUY alerts can show a small capped manual-test amount even without /bankroll. Real automatic execution remains proof/risk/bankroll gated.
+
+Important
+---------
+These changes are designed to create more qualified opportunities, not guaranteed profitable trades. Validate with fresh paper/shadow outcomes before enabling live automation.

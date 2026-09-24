@@ -1,0 +1,87 @@
+FOMO BOT v16.0 COPY EDGE — FINAL BUILD VALIDATION
+=================================================
+Validation date: 2026-09-22
+Base: v15.3 ACTIONABLE CORE + v15.1 execution hardening + Sep-20 database
+
+PURPOSE
+-------
+v16 shifts development emphasis from adding more rejection filters to better discovery and ranking.
+It adds a public-on-chain Solana smart-wallet copy engine while retaining the existing broad
+meme scanner, social/news sources, shadow engine, Guardian, and hardened optional execution.
+GET READY scout chatter is OFF by default; internal scouting continues.
+
+COPY ENGINE
+-----------
+- Up to 20 public Solana wallets by default; one standard logsSubscribe per wallet on one WSS connection.
+- Helius RPC/WSS is used when HELIUS_API_KEY is configured; public Solana RPC/WSS is the fallback.
+- Confirmed transaction fetch + final tracked-wallet balance-delta parsing.
+- Failed transactions are ignored.
+- Multi-hop swaps resolve to the final non-base token when SOL/WSOL or USDC is the base leg.
+- Venue context recognizes Jupiter, Pump.fun/PumpSwap, Raydium, Meteora, generic swaps, and Jito hints.
+- Partial leader sells become proportional follower paper exits.
+- Duplicate WSS notifications are DB-idempotent on wallet/signature/action/token.
+- Birdeye smart/top-flow data can discover wallet candidates; risky dev/bundler/sniper/insider-tagged
+  candidates are not auto-promoted.
+- /copyanalyze reconstructs recent confirmed SOL/USDC round trips for an approximate observed-history score.
+- Paper copy is automatic and fee-aware at follower-time market price.
+
+OPTIONAL LIVE COPY SAFETY
+-------------------------
+- OFF by default and starts with COPY kill switch ON.
+- Reuses hardened live_execution.py; no second transaction signer/executor was created.
+- New buys require the copy paper gate, live executor readiness, event freshness, liquidity/chase limits,
+  wallet score, max positions, and daily-loss limit.
+- Default gate: >=48h paper age, >=20 closed copy-paper trades, positive net paper P/L.
+- Per logical follower order uses durable execution idempotency through the hardened executor.
+- Follower sells verify actual token balance and mirror leader sell fraction.
+- Exits remain permitted when the new-buy kill switch is ON.
+
+SOFTWARE / REGRESSION
+---------------------
+- 208/208 tests passed in the final development tree.
+- 11 v16 copy-engine tests cover final-balance BUY parsing, partial SELL parsing, failed tx rejection,
+  Jupiter/multi-hop parsing, Pump/Raydium/Meteora context, Jito hinting, paper partial exits,
+  DB event idempotency, default live/kill state, smart-wallet auto-discovery, risky-wallet rejection,
+  and fail-closed pre-proof live gating.
+- All Python files compile successfully.
+- 7 macOS .command launchers pass bash -n and are executable:
+  export_data.command
+  run_model_lab.command
+  setup_copy_trading.command
+  setup_edge_sources.command
+  setup_live_trading.command
+  setup_wallet_sync.command
+  start_mac.command
+
+LATEST REAL DATABASE MIGRATION
+------------------------------
+A byte-copy of FOMO_DATA_EXPORT_20260920_225327.zip/fomo_master.db was opened by v16.
+Historical counts before -> after:
+- observations: 409,078 -> 409,078
+- signals: 18,611 -> 18,611
+- evals: 86,006 -> 86,006
+- positions: 55 -> 55
+- guardian_events: 779 -> 779
+- decision_ledger: 176,739 -> 176,739
+- decision_outcomes: 512,169 -> 512,169
+- missed_opportunities: 954 -> 954
+- social_events: 53 -> 53
+- journal_actions: 23 -> 23
+- runs: 6 -> 7 (expected fresh v16 run marker)
+- lane_governor: 10 -> 13 (expected fresh build governor rows)
+
+All new copy tables were created. SQLite remained WAL with busy_timeout=10000.
+No listed historical trading/learning table lost or rewrote existing rows during migration.
+
+PACKAGING / SECURITY
+--------------------
+- .env is excluded; .env.example contains configuration placeholders only.
+- no private-key, seed, PEM, database, exported user dataset, runtime log, or compiled cache is packaged.
+- tracked_wallets.json ships empty; only PUBLIC Solana wallet addresses are accepted by copy setup.
+- ordinary copy-paper/scanning operation requires no private key.
+
+IMPORTANT LIMITATION
+--------------------
+Copying a historically profitable public wallet does not guarantee follower profit. Latency, slippage,
+leader sizing, hidden hedges, token liquidity, wallet behavior changes, and incomplete reconstructed history
+can all make follower results materially different. Paper-copy results should be reviewed before enabling live copy.

@@ -1,0 +1,31 @@
+FOMO BOT v12.2 SOURCE RESILIENCE — BUILD VALIDATION
+
+CODE / REGRESSION
+- Existing regression files from v10 through v12.1 were observed passing across the validation runs.
+- New test_v12_2.py passes all v12.2 source-resilience tests.
+- Critical v12.0 and v12.1 suites re-run after the patch: PASS.
+- All Python modules: py_compile PASS.
+- All .command launchers: bash syntax PASS.
+
+NEW V12.2 TESTS
+- copied API secret normalization
+- Birdeye /defi/networks ambiguous 400 -> documented wrapped-SOL /defi/price fallback -> CORE OK
+- X HTTP 402 -> PAYMENT REQUIRED state + timed billing hold
+- X billing hold prevents repeated rejected REST calls
+- Birdeye degraded status includes safe provider/probe detail
+
+DATABASE COMPATIBILITY
+Opened a copy of the latest supplied Aug-29 master database with v12.2.
+Counts before/after were identical:
+- observations 602,403
+- signals 1,651
+- evals 7,624
+- positions 31
+- guardian_events 255
+- signal_outcomes 101
+- missed_opportunities 115
+- decision_ledger 470
+- decision_outcomes 152
+- social_events 11
+
+No trading thresholds were loosened in this source-provider patch.

@@ -1,0 +1,14 @@
+.env
+*.db
+*.db-wal
+*.db-shm
+*.sqlite*
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.json.bak
+keypair*.json
+*id.json
+exports/
+.pytest_cache/

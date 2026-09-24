@@ -1,0 +1,40 @@
+FOMO BOT v11.3 — STABILITY GUARDIAN
+
+This is a targeted stabilization release based on the Aug-28/29 full-day v11.2 export.
+It does NOT broadly loosen entry rules and does NOT lower the normal $50k liquidity floor.
+
+MAIN CHANGES
+1. Recent-crash memory for entries
+   - A sharp 5m flush remains visible to the entry gate even after a fast rebound.
+   - Default blockers:
+     * <= -20% 5m crash anywhere in the prior 10m: wait.
+     * <= -12% 5m crash in the prior 3m: wait.
+     * <= -12% 5m crash in the prior 10m while current 1h remains below -5%: wait.
+   - This is designed to reject immediate rebound traps without permanently blocking a repaired recovery.
+
+2. GUARDIAN structural-exit persistence
+   - For SMALL positions (default <= $15), a structure-only exit above the -20% hard line must persist ~45s.
+   - For MID positions, the default persistence is ~30s.
+   - Hard price failure and >=30% liquidity loss remain immediate.
+   - A confirmed EXIT escalation bypasses the normal soft-alert cooldown.
+
+3. GUARDIAN hysteresis / less state flapping
+   - A WEAKENING position does not jump back to ENTRY on a tiny bounce.
+   - It must clear a recovery buffer and show healthier buyer/momentum structure.
+   - Repeated WEAKENING messages are suppressed unless return/drawdown/liquidity materially worsens.
+
+4. /quiet on|off|status
+   - Hides GET READY / momentum / watch chatter and routine health heartbeats.
+   - Actionable entries, GUARDIAN profit/risk alerts and critical notices remain enabled.
+   - Internal scouting continues normally.
+   - Turning quiet mode off restores the user's prior scout/momentum/watch preferences.
+
+5. Adaptive sizing remains conservative
+   - Confidence is explicitly labeled LEARNING until endpoint + path samples are mature.
+   - During LEARNING, /size can reduce the base guide but cannot recommend more than 1.00x base.
+
+6. v11.2 TLS/RugCheck hardening retained
+   - SSL verification remains enabled.
+   - certifi CA bundle, retries and provider circuit breaker remain in place.
+
+No guarantee of profit. Meme-coin liquidity can disappear and historical relationships can change.

@@ -1,0 +1,14 @@
+FOMO BOT v10.3 HARDENED
+
+Changes:
+- Fresh entries require completed RugCheck + holder-distribution verification.
+- High holder concentration / tagged dev-sniper-bundler-insider supply can hard-block.
+- Severe RugCheck markers such as holder correlation, bundled ownership, mint/freeze authority,
+  unlocked LP/liquidity, honeypot/rug markers are hard failures.
+- Liquidity warning around -15%; urgent EXIT/REDUCE around -30%.
+- Re-entry requires a completed RugCheck screen.
+- Repeated buys of the same token are merged into a weighted-average open position.
+- /sellpct and /sellusd record manual partial sales and keep the remainder open.
+- /positions shows remaining basis and partial realized P/L.
+- export_data.command packages the actual shared DB/log/performance files for review.
+- Real autopilot remains OFF unless explicitly armed.

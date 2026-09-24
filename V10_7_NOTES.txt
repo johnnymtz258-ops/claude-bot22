@@ -1,0 +1,32 @@
+FOMO BOT v10.7 FLOW+PARTIAL
+
+Why this build exists
+---------------------
+Review of the v10.6 run from roughly 19:08-22:17 UTC found that the stability gate successfully avoided catastrophic losses on the actual ENTRY OPTION alerts, but six of eight entries were low-motion/low-dollar-turnover setups. At the same time, a small number of sub-$50k-liquidity tokens produced strong moves without getting an entry because the normal liquidity floor was absolute.
+
+Changes
+-------
+1. Dollar-turnover quality gate
+   Normal ENTRY OPTION now requires 5-minute dollar volume equal to at least 0.08% of market cap. STRONG ENTRY requires 0.15%. This is aimed at blocking high-swap but economically tiny churn.
+
+2. Strict MICRO ENTRY rescue
+   The normal $50k liquidity floor stays intact. A separate MICRO ENTRY can rescue exceptional $25k-$50k liquidity microcaps only when liquidity/MC is healthy, 5m turnover is very high, buyers dominate, swaps are high, the scout move is controlled, and RugCheck + holder verification are complete. MICRO ENTRY remains manual-only; real autopilot will not buy it automatically.
+
+3. Better falling-knife handling for microcaps
+   MICRO ENTRY uses a shorter 3-minute raw-price stability window because microcap flow changes quickly. It can tolerate a slightly deeper pullback only after a measurable recovery from the recent low with positive 5m momentum and buyer pressure. Rapid raw-price breaks still block.
+
+4. Partial-sale workflow fixed
+   TAKE PARTIAL PROFIT / EXIT alerts now include the exact contract. After actually selling in Fomo, reply directly to that alert with:
+     /sellpct 50
+     /sellusd 2
+   Friendly aliases also work:
+     /sold 50%
+     /sold $2
+   The bot journals the partial sale and continues tracking the remainder. It still does not place the manual sell itself.
+
+5. Export command permissions
+   All .command files are packaged executable in this build.
+
+Important
+---------
+These filters are data-driven risk controls, not a guarantee of profit. Meme coins can gap, rug, or move faster than the scanner.

@@ -1,0 +1,71 @@
+FOMO BOT v13.1 QUALITY GOVERNOR — FINAL BUILD VALIDATION
+========================================================
+Validation date: 2026-08-30
+Source holdout: FOMO_DATA_EXPORT_20260830_190331.zip
+
+CODE / REGRESSION
+-----------------
+- 41 Python files compiled successfully.
+- 24 test files executed successfully.
+- 118 test functions/methods present in the suite; all test files passed.
+- New v13.1 regression coverage includes:
+  * v13.0 BSC `4` weak cross-chain snapshot blocked,
+  * BLUECHIP +14.37% scout-chase bug blocked,
+  * Jimothy weak downtrend STRUCTURE snapshot blocked,
+  * TripleT clean STRUCTURE snapshot preserved,
+  * HeeHaw / later weak Leafy standard downtrend entries blocked,
+  * older strong Leafy recovery-pocket example preserved,
+  * popape normal qualifying shape preserved,
+  * earlier GG-like cross-chain flow preserved,
+  * later GG-like cross-chain breakout preserved,
+  * experimental-lane quarantine governor,
+  * probation sizing caps,
+  * fee-aware TP1 scaling,
+  * tiny-position full profit lock,
+  * +8/+16 manual-chain profit targets.
+
+MAC LAUNCHERS
+-------------
+- 6 `.command` launchers passed `bash -n` syntax validation.
+- All 6 are executable in the package:
+  export_data.command
+  run_model_lab.command
+  setup_edge_sources.command
+  setup_live_trading.command
+  setup_wallet_sync.command
+  start_mac.command
+
+REAL DATABASE MIGRATION TEST
+----------------------------
+A byte-copy of the user's latest ~235MB master DB was opened by v13.1 using FOMO_STATE_DB.
+Counts before -> after:
+- observations: 1,168,690 -> 1,168,690
+- signals: 2,452 -> 2,452
+- evals: 11,281 -> 11,281
+- positions: 47 -> 47
+- guardian_events: 401 -> 401
+- decision_ledger: 17,394 -> 17,394
+- decision_outcomes: 49,469 -> 49,469
+- missed_opportunities: 200 -> 200
+- social_events: 22 -> 22
+- journal_actions: 9 -> 9
+- runs: 1 -> 2 (expected new v13.1 run marker only)
+- open recorded positions after migration: 1
+
+No existing journal, signal, observation, learning, or GUARDIAN rows were removed or rewritten by startup migration.
+
+HOLDOUT BEHAVIOR CHECK
+----------------------
+The v13.1 classifier was replayed against recorded v13.0 entry snapshots. It blocks the observed low-edge cross-chain batch and Jimothy/weak-downtrend normal snapshots while preserving TripleT and popape. Separate regression fixtures preserve the earlier profitable GG-like flow/breakout shapes and CATE-like structure shape.
+
+SECURITY / PACKAGE
+------------------
+- `.env` is not included.
+- no private-key / seed / PEM files are included.
+- `.env.example` contains placeholders/configuration only.
+- development `.bak` files and `__pycache__` are excluded.
+- real master DB/export data are NOT included in the release ZIP.
+
+LIMITATION
+----------
+Passing tests and historical replay do not guarantee profitable future trades. v13.1 intentionally adds a live Quality Governor so weak experimental-lane performance can stop new BUY alerts while scouting/learning continues.

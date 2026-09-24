@@ -1,0 +1,32 @@
+FOMOBOT v16.2 QUALITY MEASUREMENT — START HERE
+===============================================
+
+UPGRADE WITHOUT LOSING HISTORY
+1) Stop the older bot with Control+C.
+2) Unzip this release to a NEW folder.
+3) DO NOT delete ~/Library/Application Support/FomoBot/fomo_master.db.
+4) Keep your existing .env / API configuration. The release contains only .env.example.
+5) Double-click start_mac.command.
+6) In Telegram send: /status, /edge, /paperreport.
+
+WHAT v16.2 FIXES
+- FAST ENTRY now counts in the proof gate when it is already marked proof-eligible.
+- v16.1 + v16.2 paper/proof outcomes stay in one quality cohort because entry gates did not change.
+- /paperreport now shows per-tier count, win rate, net P/L, ROI and friction.
+- /edge and the paper risk circuit use the same carried-forward quality cohort.
+- The stale V15.2 report title is gone.
+
+WHAT v16.2 DOES NOT CHANGE
+- No entry thresholds were loosened.
+- No safety checks were bypassed.
+- No discovery sources were added just to increase signal count.
+- REAL autopilot is not enabled by this update.
+- FAST remains excluded from real live autopilot.
+
+AFTER STARTUP
+- /status should say v16.2 QUALITY MEASUREMENT.
+- /edge should show the carried-forward proof cohort, including eligible FAST ENTRY closes from v16.1.
+- /paperreport should show TIER BREAKDOWN.
+- Your open paper positions and learning history come from the shared external database and should still be present.
+
+Keep COPY LIVE and real autopilot OFF while proof economics are negative or immature. No trading bot can guarantee profit.

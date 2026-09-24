@@ -1,0 +1,15 @@
+FOMO BOT v10.5 RESILIENT
+
+Changes based on the overnight export and today's no-entry diagnostics:
+- Birdeye holder feature outages no longer create a blanket dead end. The bot falls back to public Solana RPC token-account concentration data.
+- RugCheck remains separately required for Solana actionable entries.
+- Young Solana tokens (default <=120m) also require a completed holder-distribution check.
+- Added a -25% 1h crash/falling-knife floor for normal entries. This directly blocks the pattern seen in SHARK/Up from the uploaded sample.
+- Safety cache refreshes much faster on young tokens (5m) and 15m on older tokens.
+- Terminal blocker diagnostics now use the same actionable v10.5 rules as the actual entry engine.
+- /status version label is unified.
+- /near shows the closest Solana candidates and exact blockers without lowering thresholds.
+- /safety CONTRACT runs the safety path immediately and reports whether Birdeye or RPC supplied holder verification.
+- Existing v10.4 re-entry confirmation, rug hard-blocks, partial-sale support, shared state and export tooling remain.
+
+No strategy can guarantee profit. These changes are designed to reduce avoidable bad entries while preserving opportunity flow when one enrichment provider is unavailable.

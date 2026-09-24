@@ -1,0 +1,50 @@
+{
+  "_comment": [
+    "Public X accounts only. Add/remove accounts as you learn which sources actually move markets.",
+    "Catalyst flashes are informational. Never buy a ticker from a post without verifying the exact contract."
+  ],
+  "x_accounts": [
+    "coinbase",
+    "binance",
+    "krakenfx",
+    "Bybit_Official",
+    "okx",
+    "solana",
+    "base",
+    "BNBCHAIN",
+    "monad_xyz",
+    "aave",
+    "ethereum",
+    "Uniswap",
+    "JupiterExchange",
+    "RaydiumProtocol"
+  ],
+  "high_impact_keywords": [
+    "will list",
+    "listing",
+    "listed",
+    "launch",
+    "mainnet",
+    "airdrop",
+    "snapshot",
+    "partnership",
+    "partners with",
+    "integration",
+    "integrates",
+    "buyback",
+    "token burn",
+    "ETF",
+    "treasury",
+    "acquisition",
+    "staking launch",
+    "migration"
+  ],
+  "rss_feeds": [
+    "https://www.coindesk.com/arc/outboundfeeds/rss/",
+    "https://cointelegraph.com/rss",
+    "https://www.reddit.com/r/CryptoMoonShots/new/.rss",
+    "https://www.reddit.com/r/solana/new/.rss",
+    "https://www.reddit.com/r/memecoins/new/.rss",
+    "https://www.reddit.com/r/SatoshiStreetBets/new/.rss"
+  ]
+}

@@ -1,0 +1,20 @@
+FOMO BOT v11.4 — SMART SIZE + AUTO-UPDATE
+
+WHY THIS RELEASE EXISTS
+The user normally trades ~$5–$20 positions, sometimes sees an entry alert 2–3 minutes late, pays meaningful friction on small exits/partials, and wants the bot to say both how much to buy and how much to sell without requiring constant /check commands.
+
+CHANGES
+1. Dollar sizing: default $5 min / $20 normal max / $30 exceptional cap. Uses live structure + historical downside + portfolio/recent-result context. No martingale. Manual buy journal remains unlocked.
+2. Exceptional sizing: >$20 is disabled in practice until calibration/path history is mature and the live setup is unusually clean. Current history is not treated as sufficient evidence merely because a score is high.
+3. Auto entry freshness: rechecks actionable alerts at ~60s and ~150s if no buy is recorded. Newest message can be replied to with /bought and carries its fresh snapshot.
+4. Late-entry logic: <=+2% normal window; roughly +2% to +5% can remain viable with reduced size; beyond ~+5% becomes do-not-chase by default. Temporary weakness is PAUSED/WAIT rather than permanently dead if a later auto-check repairs.
+5. Partial-profit economics: Guardian reports suggested percent + approximate dollars + approximate runner value. Default useful partial floor is $5.
+6. Tiny winner behavior: if a TP1 partial would be fee-heavy dust or would require dumping most of a healthy tiny position just to sell ~$5, Guardian may skip the mechanical partial and keep monitoring.
+7. Runner behavior: at large gains Guardian can recommend withdrawing approximately the original stake and leaving the remainder as a runner.
+8. Profit-giveback warning: if TP1 was reached but no partial was recorded and the trade gives most of that window back, Guardian explicitly warns and can suggest a meaningful reduction.
+9. Existing v11.3 crash-memory and Guardian hysteresis remain unchanged.
+
+DATA RATIONALE
+On the latest holdout, useful entry setups could still be valid 60–150 seconds later. PINK was around +1.8% at ~60s and +4.0% at ~150s before later making a much larger move; this supports a reduced-size LATE BUT STILL VIABLE zone instead of automatically closing every alert above +2%. Conversely, several bad setups deteriorated rapidly within the same window, which supports automatic revalidation rather than stale-alert buying.
+
+This is decision support, not a guarantee of profit.

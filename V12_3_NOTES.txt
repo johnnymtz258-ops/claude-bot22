@@ -1,0 +1,24 @@
+FOMO BOT v12.3 CONTEXT GUARD
+
+WHY THIS PATCH EXISTS
+The Aug-29 v12.2 export exposed a correctness bug that matters more than another threshold tweak. PINK signal 1556 was originally sent at 16:22:25 UTC at $0.002686 and used successfully for one trade. The same old Telegram message/context was then reused at 20:34:14 UTC to open a completely new PINK journal position at the old $0.002686 snapshot even though live market observations near the second buy were around $0.001689. That made GUARDIAN report a roughly -37% loss immediately and later roughly -50%, while the true move from the live market around the second buy was materially smaller.
+
+FIXES
+1. Entry/check Telegram snapshots now have a 5-minute validity window.
+2. New automatic checks supersede older entry contexts for the same signal.
+3. A context is consumed after one recorded purchase, preventing accidental duplicate reuse.
+4. Closed/paused auto-check messages are explicitly non-buy contexts.
+5. Position-management/GUARDIAN messages cannot be reused as buy contexts.
+6. Old pre-v12.3 contexts are treated as expired from their original timestamp even though their new valid_until column is zero after migration.
+7. Replying /bought to stale/consumed context is rejected WITHOUT locking the journal: use /buy CONTRACT AMOUNT for a fresh quote or add `price ACTUAL_AVG_ENTRY`.
+8. Explicit /buy CONTRACT no longer borrows an hours-old bot signal price/tier. If the signal is stale, it records MANUAL using a fresh live quote unless an explicit price/MC override is given.
+9. Numeric /bought without a reply now only uses a green check within 5 minutes, not 10.
+10. /sources refresh NameError fixed by using the runtime Birdeye guard from state.
+11. /scan /why AttributeError fixed by passing a real scout record to actionable_blockers instead of boolean True.
+12. Telegram command exceptions now print a short traceback in Terminal for faster diagnosis.
+13. New /sellcash records partial-sale P/L using the actual percentage sold and net cash received.
+14. New /closecash TICKER PROCEEDS records a full remaining sale using actual net Fomo cash received. This is better for small positions where fees/slippage make quote-based P/L inaccurate.
+15. New /fixentry TICKER PRICE repairs the basis of an active position only if no partial has been recorded.
+
+WHAT DID NOT CHANGE
+No entry threshold was broadly loosened. The latest Decision Ledger still shows liquidity, security, realtime, chase and momentum gates rejecting many more severe paths than clean +15 runners. v12.1 REVERSAL EDGE, v12.2 source resilience, smart sizing, automatic checks, GUARDIAN, social/on-chain discovery, strict MICRO rules and all prior state-ledger fixes remain.
