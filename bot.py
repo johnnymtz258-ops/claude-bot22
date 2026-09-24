@@ -30,6 +30,8 @@ from wallet_sync import PublicSolanaWalletSync, reconcile_balance, recent_sale_e
 from edge_engine import setup_path_quality, breadth_regime, analog_summary, risk_position_size, proof_metrics, price_move_plausible, outcome_from_path
 from execution_quality import JupiterExecutionProbe
 from path_tracker import CandidatePathTracker
+from dashboard import entry_checklist, checklist_text, record_check, record_scan, start_dashboard
+import ai_verdict
 from copy_trading import CopyTradeEngine
 
 ROOT = Path(__file__).resolve().parent
@@ -671,6 +673,9 @@ PAPER_MONITOR_SECONDS = max(3, ei("PAPER_MONITOR_SECONDS", 6))
 # Candidate path recorder: follows every evaluated coin for PATH_TRACK_HORIZON_MINUTES even
 # after it leaves the scanner lists, with exact first-touch times for exit backtests.
 PATH_TRACKER_ENABLED = eb("PATH_TRACKER_ENABLED", True)
+# Local live dashboard (http://localhost:DASHBOARD_PORT); read-only, never trades.
+DASHBOARD_ENABLED = eb("DASHBOARD_ENABLED", True)
+DASHBOARD_PORT = ei("DASHBOARD_PORT", 8787)
 PATH_TRACK_HORIZON_MINUTES = max(30, min(360, ei("PATH_TRACK_HORIZON_MINUTES", 120)))
 PATH_TRACK_POLL_SECONDS = max(10, ei("PATH_TRACK_POLL_SECONDS", 30))
 PATH_TRACK_MAX_ACTIVE = max(20, ei("PATH_TRACK_MAX_ACTIVE", 300))
@@ -6904,7 +6909,10 @@ async def send_wide_signal(http,db,state,limiter,key,pair,tier,score,confirmed,r
     ctx=dict(rts=rts,social=social,market_regime=str((regime or {}).get("label") or "NEUTRAL"),sources=(source_ctx or {}).get("sources"))
     if not token or db.position_by_token(token):
         return False
+    rows=entry_checklist(pair,safety,risks,min_liq=ENTRY_MIN_LIQUIDITY,min_turnover_pct=entry_min_turnover_pct(),
+                         holder_warn=HOLDER_WARN,entry_min_5m=OPTION_MIN_5M,entry_max_5m=OPTION_MAX_5M,chase_ok=chase_ok)
     if not chase_ok:
+        record_check(pair,rows,"DROP: ran past entry")
         db.log_decision(pair,"ENTRY_CHASE",tier,score,confirmed,[f"wide: {chase_note or 'price ran past the action band'}"],min_seconds=60,**ctx)
         return False
     probe=state.get("execution_probe")
@@ -6914,6 +6922,7 @@ async def send_wide_signal(http,db,state,limiter,key,pair,tier,score,confirmed,r
         except Exception:
             intel={}
         if (intel or {}).get("hard_block"):
+            record_check(pair,rows,"DROP: Jupiter safety veto")
             db.log_decision(pair,"ENTRY_EXECUTION",tier,score,confirmed,[f"Jupiter token safety veto: {intel.get('reason')}"],min_seconds=60,**ctx)
             return False
     now=time.time()
@@ -6926,7 +6935,7 @@ async def send_wide_signal(http,db,state,limiter,key,pair,tier,score,confirmed,r
         db.log_decision(pair,"ENTRY_RATE_LIMIT",tier,score,confirmed,["wide: per-token cooldown"],min_seconds=60,**ctx)
         return False
     wide_tier="WIDE "+str(tier)
-    track=alert_track_record_line(db,wide_tier)
+    track=alert_track_record_line(db,wide_tier)+"\n"+checklist_text(rows)
     await shadow_auto_open(http,db,pair,wide_tier,score,list(reasons or []),execution_info=None,source_event="WIDE_SIGNAL")
     cal=adaptive_dollar_size(db,pair,tier,score,market_regime=str((regime or {}).get("label") or "NEUTRAL"),social=social,safety=safety) if ADAPTIVE_CONFIDENCE_ENABLED else {}
     cal=_test_signal_calibration(db,cal,"TEST")
@@ -6942,6 +6951,19 @@ async def send_wide_signal(http,db,state,limiter,key,pair,tier,score,confirmed,r
         db.log_decision(pair,"ENTRY_DELIVERY_FAIL",tier,score,confirmed,["Telegram did not confirm wide-signal delivery; cooldown released"],min_seconds=15,**ctx)
         return False
     _WIDE_SENT_TS.append(time.time())
+    record_check(pair,rows,"ALERT sent")
+    if ai_verdict.enabled():
+        m=metrics(pair); sym=str(nest(pair,"baseToken","symbol",default="?"))
+        summary=(f"Coin {sym} ({tier}), score {score:.0f}/100. Price ${f(pair.get('priceUsd')):.8g}, market cap ${m['mc']:,.0f}, "
+                 f"liquidity ${m['liq']:,.0f}, 5m {m['pc5']:+.1f}%, 1h {m['pc1']:+.1f}%, buys/sells 5m {int(m['buys'])}/{int(m['sells'])}.\n"
+                 f"{checklist_text(rows)}\nWarnings: {'; '.join(list(risks or [])[:6]) or 'none'}\n"
+                 f"Why it alerted: {'; '.join(list(reasons or [])[:6])}")
+        async def _followup():
+            verdict=await ai_verdict.ai_verdict(summary)
+            if verdict:
+                await send(http,f"🤖 AI second opinion — {sym}: {verdict}\n(An opinion, not a guarantee.)")
+        task=asyncio.create_task(_followup())
+        state.setdefault("ai_tasks",set()).add(task); task.add_done_callback(state["ai_tasks"].discard)
     db.log_decision(pair,"ENTRY_SENT_WIDE",tier,score,confirmed,["wide signal"],min_seconds=30,**ctx)
     signal_id=db.add_signal("EARLY",pair,score,tier,all_reasons+["signal_mode=WIDE"])
     db.log_latency(signal_id,token,"ENTRY_ALERT_WIDE_HOT" if hot else "ENTRY_ALERT_WIDE",f(pair.get("priceUsd")),f"tier={tier};confirmed={confirmed:.1f};mode=WIDE")
@@ -9401,6 +9423,7 @@ async def cycle(http, guard, limiter, db, state):
         lsafety = cached_safety(state,lchain,ltoken,pair=lp)
         lbs = actionable_blockers(lp,leader["entry"],leader["confirmed"],leader["risks"],leader["hard"],rts=lrts,scout=lscout,safety=lsafety)
         leader_text = f"{lsym} entry={leader['entry']:.1f} confirmed={leader['confirmed']:.1f} blocked={('|'.join(lbs[:2]) if lbs else 'none')}"
+    record_scan(sum(len(v) for v in found.values()),len(output))
     print(f"[scan {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}] discovered={sum(len(v) for v in found.values())} "
           f"candidates={len(output)} entry_top={top_entry:.1f} confirmed_top={top_confirmed:.1f} be_enriched={deep_used} "
           f"top_blocker={top_blocker} leader={leader_text} birdeye={guard.status_text()}")
@@ -9855,6 +9878,13 @@ async def main():
     hot_scout_task = asyncio.create_task(hot_scout_loop(http,guard,limiter,db,state)) if HOT_SCOUT_ENABLED else None
     live_exit_task = asyncio.create_task(live_exit_loop(http,db,state)) if live_executor.keypair_path else None
     paper_monitor_task = asyncio.create_task(paper_monitor_loop(http,db,state))
+    dashboard_runner=None
+    if DASHBOARD_ENABLED:
+        try:
+            dashboard_runner=await start_dashboard(db,lambda: _SIGNAL_PROFILE["value"],FEE_KEEP_FACTOR,port=DASHBOARD_PORT)
+            print(f"[dashboard] open http://localhost:{DASHBOARD_PORT} in your browser")
+        except Exception as exc:
+            print(f"[dashboard] could not start: {type(exc).__name__}: {exc}")
     path_tracker_task = asyncio.create_task(path_tracker_loop(http,db,state)) if PATH_TRACKER_ENABLED else None
     try:
         while True:
@@ -9869,6 +9899,8 @@ async def main():
             await command_task
         except asyncio.CancelledError:
             pass
+        if dashboard_runner:
+            await dashboard_runner.cleanup()
         for task in (live_exit_task, paper_monitor_task, path_tracker_task):
             if task:
                 task.cancel()

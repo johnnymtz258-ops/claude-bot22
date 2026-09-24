@@ -34,6 +34,25 @@ WHAT CHANGED IN THIS VERSION
 - Profit/loss in your journal now subtracts buy and sell fees.
 - Fake "liquidity -100%" alarms fixed (DexScreener sometimes omits liquidity).
 
+LIVE DASHBOARD
+While the bot runs, open http://localhost:8787 in your browser (same computer).
+It shows coins scanned, the PASS/WARN/DROP checklist for each alert, your open positions
+after fees, your balance curve from /bought and /sold, and each alert type's track record.
+
+CHECKLIST IN EVERY ALERT
+Liquidity depth · holder spread · volume vs mcap · rug signature · fresh/bundled wallets ·
+entry window — each marked PASS / WARN / DROP.
+
+OPTIONAL AI SECOND OPINION
+Add ANTHROPIC_API_KEY=... to your .env (key from console.anthropic.com). A few seconds
+after each WIDE alert you get a follow-up: BUY SMALL / WAIT / SKIP plus one reason.
+Costs roughly half a cent per alert. Without a key it simply stays off.
+
+FEES (FOMO OR PHANTOM)
+The bot assumes ~5% buy+sell (Fomo). If you trade mainly in Phantom, its swap fee is lower
+(about 0.85% per swap plus slippage); set FOMO_ROUNDTRIP_FRICTION_PCT=3 and
+FOMO_EXIT_FRICTION_PCT=1.5 in .env so profit/loss and break-even lines match.
+
 HONEST NOTE
 More alerts means more chances to catch runners, not guaranteed profit. In your two months
 of data, about 1 in 3 WIDE-eligible coins rose 10%+, 1 in 8 rose 30%+, and 1 in 3 fell 10%.
