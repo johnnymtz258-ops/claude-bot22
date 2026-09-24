@@ -444,6 +444,42 @@ BE_FORBIDDEN_RETRY = ei("BIRDEYE_FORBIDDEN_RETRY_SECONDS", 21600)
 BE_DISCOVERY_ENTRY_ONLY = eb("BIRDEYE_DISCOVERY_ENTRY_CHAINS_ONLY", True)
 HOLDER_WARN = ef("TOP10_HOLDER_WARN_PCT", 50)
 HOLDER_BLOCK = ef("TOP10_HOLDER_BLOCK_PCT", 75)
+# WIDE signal profile (default). Two months of decision outcomes showed the strict
+# confirmation stages (stability, tape, edge/regime/history, commitment, capital
+# confirmation, path, execution cost, proof/lane quarantine) did not pick better coins
+# than the first live-price qualification, while they cut ~876 scanned coins per cycle
+# to ~3 alerts a day. WIDE alerts as soon as a coin qualifies at the live price and keeps
+# only the protections that measurably helped: anti-chase, rug-critical security,
+# liquidity floor, holder verification, crash floor, the Jupiter suspicious-token veto
+# and a per-token cooldown. "/signals strict" restores the original pipeline.
+SIGNAL_PROFILE_DEFAULT = os.getenv("SIGNAL_PROFILE", "wide").strip().lower()
+if SIGNAL_PROFILE_DEFAULT not in {"wide","strict"}: SIGNAL_PROFILE_DEFAULT = "wide"
+_SIGNAL_PROFILE = {"value": SIGNAL_PROFILE_DEFAULT}
+WIDE_ENTRY_MIN_MCAP = ef("WIDE_ENTRY_MIN_MARKET_CAP_USD", 60000)
+WIDE_ENTRY_MAX_MCAP = ef("WIDE_ENTRY_MAX_MARKET_CAP_USD", 25_000_000)
+WIDE_FAST_MAX_MCAP = ef("WIDE_FAST_MAX_MARKET_CAP_USD", 10_000_000)
+WIDE_TURNOVER_FACTOR = max(0.1, min(1.0, ef("WIDE_TURNOVER_FACTOR", 0.5)))
+WIDE_HOLDER_BLOCK_PCT = max(HOLDER_BLOCK, ef("WIDE_TOP10_HOLDER_BLOCK_PCT", 90))
+WIDE_TOKEN_COOLDOWN_MINUTES = max(30, ei("WIDE_TOKEN_COOLDOWN_MINUTES", 180))
+# In the Sep export WIDE would have alerted ~40 coins/day; the hourly cap stops a busy hour
+# from flooding Telegram.
+WIDE_MAX_ALERTS_PER_HOUR = max(1, ei("WIDE_MAX_ALERTS_PER_HOUR", 8))
+_WIDE_SENT_TS = deque()
+# Only these RugCheck findings still block in WIDE mode: they mean you may be unable to
+# sell, supply can be inflated, or the token is already rugged.
+CRITICAL_RISK_MARKERS = ("freeze authority", "mint authority", "honeypot", "blacklist", "rugged", "rug pull")
+
+
+def wide_mode():
+    return _SIGNAL_PROFILE.get("value") == "wide"
+
+
+def entry_mcap_range():
+    return (WIDE_ENTRY_MIN_MCAP, WIDE_ENTRY_MAX_MCAP) if wide_mode() else (ENTRY_MIN_MCAP, ENTRY_MAX_MCAP)
+
+
+def entry_min_turnover_pct():
+    return ENTRY_MIN_VOLUME_TURNOVER_PCT * (WIDE_TURNOVER_FACTOR if wide_mode() else 1.0)
 
 TG = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 CHAT = os.getenv("TELEGRAM_CHAT_ID", "").strip()
@@ -624,7 +660,7 @@ SOCIAL_CONTRACT_ALERTS = eb("SOCIAL_CONTRACT_ALERTS", True)
 SOCIAL_MIN_MENTIONS = ei("SOCIAL_MIN_MENTIONS", 2)
 PAPER_AUTO_DEFAULT = eb("PAPER_AUTOPILOT_DEFAULT", True)
 PAPER_POSITION_USD = max(1.0, min(10.0, ef("PAPER_POSITION_USD", 5)))
-PAPER_MAX_OPEN = max(3, min(12, ei("PAPER_MAX_OPEN_POSITIONS", 8)))
+PAPER_MAX_OPEN = max(3, min(40, ei("PAPER_MAX_OPEN_POSITIONS", 20)))
 # A paper simulation whose price stays implausible this long is closed as unmeasurable.
 PAPER_GLITCH_MAX_MINUTES = max(5, ei("PAPER_GLITCH_MAX_MINUTES", 20))
 # A paper position with no price at all this long (delisted/unindexed) would block one of the
@@ -748,6 +784,10 @@ GUARDIAN_REPEAT_LIQ_WORSE_PCT = max(5.0, ef("GUARDIAN_REPEAT_LIQ_WORSE_PCT", 10.
 # transient percentage dip when the exit itself consumes a meaningful share of value.
 FOMO_ROUNDTRIP_FRICTION_PCT = max(0.0, ef("FOMO_ROUNDTRIP_FRICTION_PCT", 5.0))
 FOMO_EXIT_FRICTION_PCT = max(0.0, ef("FOMO_EXIT_FRICTION_PCT", 2.5))
+# Journal P/L is net of trading-app fees: buy fee = round trip - exit fee.
+FOMO_BUY_FEE_PCT = max(0.0, FOMO_ROUNDTRIP_FRICTION_PCT - FOMO_EXIT_FRICTION_PCT)
+FEE_KEEP_FACTOR = (1 - FOMO_BUY_FEE_PCT / 100.0) * (1 - FOMO_EXIT_FRICTION_PCT / 100.0)
+BREAKEVEN_MOVE_PCT = (1 / max(FEE_KEEP_FACTOR, 1e-9) - 1) * 100.0
 SMALL_POSITION_USD = max(1.0, ef("SMALL_POSITION_USD", 15.0))
 SMALL_POSITION_HARD_STOP_PCT = min(CAPITAL_HARD_STOP_PCT, max(RISK_LINE, ef("SMALL_POSITION_HARD_STOP_PCT", CAPITAL_HARD_STOP_PCT)))
 MID_POSITION_HARD_STOP_PCT = min(CAPITAL_HARD_STOP_PCT, max(RISK_LINE, ef("MID_POSITION_HARD_STOP_PCT", CAPITAL_HARD_STOP_PCT)))
@@ -1456,6 +1496,12 @@ class Database:
         self.set_meta("last_green_check_signal_id", str(int(signal_id)))
         self.set_meta("last_green_check_ts", str(int(time.time())))
 
+    def latest_buy_alert(self, max_age_seconds=1800):
+        """Most recent BUY alert (EARLY signal) sent within max_age_seconds, else None."""
+        row=self.conn.execute("select * from signals where kind='EARLY' and ts>=? order by ts desc limit 1",
+                              (int(time.time()-max_age_seconds),)).fetchone()
+        return dict(row) if row else None
+
     def recent_green_check(self, max_age_seconds=300):
         sid = int(self.get_meta("last_green_check_signal_id", "0") or 0)
         ts = int(self.get_meta("last_green_check_ts", "0") or 0)
@@ -1587,7 +1633,7 @@ class Database:
         """
         cutoff = int(time.time() - max(1, float(minutes)) * 60)
         version = str(build_version or VERSION)
-        events = ("ENTRY_COOLDOWN","ENTRY_STABILITY","ENTRY_TAPE","ENTRY_EDGE","ENTRY_REGIME","ENTRY_HISTORY","ENTRY_COMMIT","ENTRY_PATH","ENTRY_EXECUTION","ENTRY_CHASE","ENTRY_SLIPPAGE","ENTRY_RATE_LIMIT","ENTRY_DELIVERY_FAIL","LANE_SHADOW","CAPITAL_SHADOW","PROOF_SHADOW","RESEARCH_SHADOW","RISK_PAUSE","EDGE_ARMED","PAPER_SHADOW","RUNNER_RADAR","ENTRY_SENT","ENTRY_SENT_HOT","ENTRY_SENT_TEST")
+        events = ("ENTRY_COOLDOWN","ENTRY_STABILITY","ENTRY_TAPE","ENTRY_EDGE","ENTRY_REGIME","ENTRY_HISTORY","ENTRY_COMMIT","ENTRY_PATH","ENTRY_EXECUTION","ENTRY_CHASE","ENTRY_SLIPPAGE","ENTRY_RATE_LIMIT","ENTRY_DELIVERY_FAIL","LANE_SHADOW","CAPITAL_SHADOW","PROOF_SHADOW","RESEARCH_SHADOW","RISK_PAUSE","EDGE_ARMED","PAPER_SHADOW","RUNNER_RADAR","ENTRY_SENT","ENTRY_SENT_HOT","ENTRY_SENT_TEST","ENTRY_SENT_WIDE")
         marks = ",".join("?" for _ in events)
         rows = self.conn.execute(
             f"select event,count(*) as n from decision_ledger where ts>=? and build_version=? and event in ({marks}) group by event",
@@ -2177,7 +2223,7 @@ class Database:
         rem = f(row["remaining_fraction"], 1.0)
         rem_qty = f(row["quantity"]) * rem
         rem_cost = f(row["amount_usd"]) * rem
-        final_leg_pnl = rem_qty * close_price - rem_cost
+        final_leg_pnl = rem_qty * close_price * FEE_KEEP_FACTOR - rem_cost
         total_pnl = f(row["realized_pnl_partial"]) + final_leg_pnl
         prior_quality=str(row["pnl_quality"] or "ESTIMATED") if "pnl_quality" in row.keys() else "ESTIMATED"
         quality="MIXED" if prior_quality in {"CASH_PARTIAL","CASH_VERIFIED"} and rem < 0.999 else "ESTIMATED"
@@ -2264,7 +2310,7 @@ class Database:
         sold_fraction_original = rem * fraction
         sold_qty = f(row["quantity"]) * sold_fraction_original
         sold_cost = f(row["amount_usd"]) * sold_fraction_original
-        pnl = sold_qty * close_price - sold_cost
+        pnl = sold_qty * close_price * FEE_KEEP_FACTOR - sold_cost
         new_rem = max(0.0, rem * (1.0 - fraction))
         new_partial = f(row["realized_pnl_partial"]) + pnl
         prior_quality=str(row["pnl_quality"] or "ESTIMATED") if "pnl_quality" in row.keys() else "ESTIMATED"
@@ -3457,7 +3503,8 @@ async def holder_context(http, guard, token):
             top10=f(payload.get("top10HoldPercent") if isinstance(payload,dict) else None,-1)
             reasons=[]; risks=[]; score=0; hard=False
             if 0<=top10<=100:
-                if top10>=HOLDER_BLOCK: hard=True; score-=30; risks.append(f"top-10 wallets hold ~{top10:.1f}% — HARD BLOCK")
+                if top10>=(WIDE_HOLDER_BLOCK_PCT if wide_mode() else HOLDER_BLOCK): hard=True; score-=30; risks.append(f"top-10 wallets hold ~{top10:.1f}% — HARD BLOCK")
+                elif top10>=HOLDER_BLOCK: score-=20; risks.append(f"top-10 wallets hold ~{top10:.1f}% — WIDE mode warning")
                 elif top10>=HOLDER_WARN: score-=12; risks.append(f"top-10 wallets hold ~{top10:.1f}%")
                 else: score+=2; reasons.append(f"top-10 wallet concentration ~{top10:.1f}%")
             return score,(risks if score<0 else reasons),hard,True
@@ -3532,19 +3579,25 @@ async def holder_context(http, guard, token):
         score -= 30
         hard = True
         risks.append(f"high tagged-cohort supply ~{risky_supply:.1f}% — HARD BLOCK")
-    elif risky_supply >= TAGGED_COHORT_HARD_BLOCK_PCT:
+    elif risky_supply >= TAGGED_COHORT_HARD_BLOCK_PCT and not wide_mode():
         score -= 25
         hard = True
         risks.append(f"elevated tagged-cohort supply ~{risky_supply:.1f}% — HARD BLOCK")
+    elif risky_supply >= TAGGED_COHORT_HARD_BLOCK_PCT:
+        score -= 20
+        risks.append(f"elevated tagged-cohort supply ~{risky_supply:.1f}% — WIDE mode warning")
     elif risky_supply >= 10:
         score -= 8
         risks.append(f"tagged-cohort supply ~{risky_supply:.1f}%")
 
     if top10 is not None:
-        if top10 >= HOLDER_BLOCK:
+        if top10 >= (WIDE_HOLDER_BLOCK_PCT if wide_mode() else HOLDER_BLOCK):
             score -= 30
             hard = True
             risks.append(f"very high top-10 holder concentration ~{top10:.1f}% — HARD BLOCK")
+        elif top10 >= HOLDER_BLOCK:
+            score -= 20
+            risks.append(f"high top-10 holder concentration ~{top10:.1f}% — WIDE mode warning")
         elif top10 >= HOLDER_WARN:
             score -= 12
             risks.append(f"top-10 holder concentration ~{top10:.1f}%")
@@ -3671,6 +3724,12 @@ async def rugcheck_summary(http, token):
     )
     keyword_danger = [m for m in hard_name_markers if m in all_risk_names]
     hard = (score >= RUGCHECK_BLOCK_SCORE if score >= 0 else False) or bool(danger) or bool(keyword_danger)
+    soft_hard = False
+    if hard and wide_mode():
+        danger_text = " | ".join(danger).lower()
+        critical = [m for m in CRITICAL_RISK_MARKERS if m in all_risk_names or m in danger_text]
+        if not critical:
+            hard, soft_hard = False, True
     notes = []
     if score >= 0:
         notes.append(f"RugCheck risk {score:.0f}/100 (lower is better)")
@@ -3680,6 +3739,9 @@ async def rugcheck_summary(http, token):
         notes.append("RugCheck hard-risk marker: " + ", ".join(keyword_danger[:3]))
     elif warnings and score >= RUGCHECK_WARN_SCORE:
         notes.append("RugCheck warnings: " + ", ".join(warnings[:3]))
+    if soft_hard:
+        notes.append("⚠️ WIDE mode: these RugCheck flags are shown as warnings, not blocks — check before buying")
+        return -12, notes, False, True
     return (-35 if hard else (5 if 0 <= score < RUGCHECK_WARN_SCORE else 0)), notes, hard, True
 
 
@@ -5172,7 +5234,8 @@ def classify_entry_tier(pair, entry_score, confirmed_score, risks, hard_block, r
     # broader buyers and stronger real turnover; deeper washouts use REVERSAL ENTRY.
     if m["liq"] < ENTRY_MIN_LIQUIDITY:
         return None, [f"liquidity {usd(m['liq'])} < {usd(ENTRY_MIN_LIQUIDITY)}"]
-    if not (ENTRY_MIN_MCAP <= m["mc"] <= ENTRY_MAX_MCAP):
+    mc_lo, mc_hi = entry_mcap_range()
+    if not (mc_lo <= m["mc"] <= mc_hi):
         return None, ["market cap outside entry range"]
     if "sells dominate" in risk_text or "net-selling" in risk_text:
         return None, ["sell pressure dominates"]
@@ -5194,8 +5257,8 @@ def classify_entry_tier(pair, entry_score, confirmed_score, risks, hard_block, r
     if not (OPTION_MIN_5M <= m["pc5"] <= OPTION_MAX_5M):
         if not breakout_rescue_ok(pair, entry_score, risks, rts or {}, scout_move):
             return None, [f"5m move {m['pc5']:+.1f}% outside entry window"]
-    if turnover_pct < ENTRY_MIN_VOLUME_TURNOVER_PCT:
-        return None, [f"5m dollar turnover {turnover_pct:.3f}% of market cap < {ENTRY_MIN_VOLUME_TURNOVER_PCT:.3f}%"]
+    if turnover_pct < entry_min_turnover_pct():
+        return None, [f"5m dollar turnover {turnover_pct:.3f}% of market cap < {entry_min_turnover_pct():.3f}%"]
     if ratio < OPTION_MIN_BUY_SELL:
         return None, [f"buy/sell {ratio:.2f}x < {OPTION_MIN_BUY_SELL:.2f}x"]
     if swaps < OPTION_MIN_SWAPS:
@@ -5272,7 +5335,7 @@ def classify_fast_entry_tier(pair, entry_score, confirmed_score, risks, hard_blo
     if f(entry_score) < FAST_ENTRY_MIN_SCORE and f(confirmed_score) < FAST_ENTRY_MIN_CONFIRMED:
         return None,[f"fast lane needs entry {FAST_ENTRY_MIN_SCORE:.0f}+ or confirmed {FAST_ENTRY_MIN_CONFIRMED:.0f}+"]
     if m["liq"] < FAST_ENTRY_MIN_LIQUIDITY: return None,[f"fast liquidity {usd(m['liq'])} < {usd(FAST_ENTRY_MIN_LIQUIDITY)}"]
-    if not (FAST_ENTRY_MIN_MCAP <= m["mc"] <= FAST_ENTRY_MAX_MCAP): return None,["market cap outside fast lane"]
+    if not (FAST_ENTRY_MIN_MCAP <= m["mc"] <= (WIDE_FAST_MAX_MCAP if wide_mode() else FAST_ENTRY_MAX_MCAP)): return None,["market cap outside fast lane"]
     if liq_mc < FAST_ENTRY_MIN_LIQ_MC: return None,[f"fast liq/MC {100*liq_mc:.1f}% < {100*FAST_ENTRY_MIN_LIQ_MC:.1f}%"]
     if turnover < FAST_ENTRY_MIN_TURNOVER_PCT: return None,[f"fast turnover {turnover:.2f}% < {FAST_ENTRY_MIN_TURNOVER_PCT:.2f}%"]
     if ratio < FAST_ENTRY_MIN_BUY_SELL: return None,[f"fast B/S {ratio:.2f}x < {FAST_ENTRY_MIN_BUY_SELL:.2f}x"]
@@ -5917,7 +5980,9 @@ def beginner_alert(kind,pair,score,action,reasons,risks,hits,wallet_checked,secu
                   f"| normal range ${calibration.get('size_min_usd',0):.0f}-${calibration.get('size_normal_max_usd',0):.0f} "
                   f"| exceptional cap ${calibration.get('size_exceptional_max_usd',0):.0f}{exceptional_note}{reason_note}\n")
     mode=str(signal_mode or "LIVE").upper()
-    if mode=="TEST":
+    if mode=="WIDE":
+        action_line="🟢 ACTION: BUY SIGNAL — WIDE MODE (qualified at the live price; strict confirmation filters skipped). Unproven lane: start with test size."
+    elif mode=="TEST":
         action_line="🟠 ACTION: BUY NOW SIGNAL — TEST-SIZE / MANUAL ONLY; strategy proof is not ACTIVE yet"
     elif mode=="PAPER":
         action_line="🧪 ACTION: PAPER BUY NOW SIGNAL — LIVE RISK IS BLOCKED; use this to watch/test, not as live sizing guidance"
@@ -5941,6 +6006,7 @@ def beginner_alert(kind,pair,score,action,reasons,risks,hits,wallet_checked,secu
         f"WATCH OUT FOR: {bad}\n"
         f"{size_note}"
         f"Profit checkpoints for this lane: +{p1:.0f}% / +{p2:.0f}% | soft risk reference ~${risk_line:.8g}.\n"
+        f"Fees: ~{FOMO_ROUNDTRIP_FRICTION_PCT:.1f}% buy+sell, so the coin must rise ~+{BREAKEVEN_MOVE_PCT:.1f}% before you are in profit.\n"
         f"Do not chase above ${max_chase:.8g} (+{MAX_CHASE:.0f}%).\n"
         f"Contract: {contract}\n"
         "Paste the CONTRACT into Fomo — names/tickers can be duplicated.\n\n"
@@ -6825,6 +6891,65 @@ async def send_preproof_actionable_signal(http,db,state,limiter,key,pair,tier,sc
     return True
 
 
+async def send_wide_signal(http,db,state,limiter,key,pair,tier,score,confirmed,reasons,risks,hits,safety,rts,regime,social,source_ctx,
+                           kind="EARLY",chase_ok=True,chase_note="",hot=False):
+    """WIDE profile alert: sent as soon as a coin qualifies at the live price.
+
+    Kept protections: anti-chase (caller), rug-critical security (tier classification),
+    the Jupiter suspicious/banned-token veto, open-position check and a per-token cooldown.
+    Every WIDE alert also opens a paper simulation under tier "WIDE <tier>" so its own track
+    record builds up separately from the strict lanes (and never feeds the proof gate).
+    """
+    token=str(nest(pair,"baseToken","address",default="")); chain=str(pair.get("chainId") or "").lower()
+    ctx=dict(rts=rts,social=social,market_regime=str((regime or {}).get("label") or "NEUTRAL"),sources=(source_ctx or {}).get("sources"))
+    if not token or db.position_by_token(token):
+        return False
+    if not chase_ok:
+        db.log_decision(pair,"ENTRY_CHASE",tier,score,confirmed,[f"wide: {chase_note or 'price ran past the action band'}"],min_seconds=60,**ctx)
+        return False
+    probe=state.get("execution_probe")
+    if probe is not None and chain=="solana":
+        try:
+            intel=await probe.token_intel(http,token)
+        except Exception:
+            intel={}
+        if (intel or {}).get("hard_block"):
+            db.log_decision(pair,"ENTRY_EXECUTION",tier,score,confirmed,[f"Jupiter token safety veto: {intel.get('reason')}"],min_seconds=60,**ctx)
+            return False
+    now=time.time()
+    while _WIDE_SENT_TS and now-_WIDE_SENT_TS[0]>3600:
+        _WIDE_SENT_TS.popleft()
+    if len(_WIDE_SENT_TS)>=WIDE_MAX_ALERTS_PER_HOUR:
+        db.log_decision(pair,"ENTRY_RATE_LIMIT",tier,score,confirmed,[f"wide: {WIDE_MAX_ALERTS_PER_HOUR} alerts/hour cap"],min_seconds=60,**ctx)
+        return False
+    if not limiter.allowed_action("entry:"+key,cooldown=WIDE_TOKEN_COOLDOWN_MINUTES*60):
+        db.log_decision(pair,"ENTRY_RATE_LIMIT",tier,score,confirmed,["wide: per-token cooldown"],min_seconds=60,**ctx)
+        return False
+    wide_tier="WIDE "+str(tier)
+    track=alert_track_record_line(db,wide_tier)
+    await shadow_auto_open(http,db,pair,wide_tier,score,list(reasons or []),execution_info=None,source_event="WIDE_SIGNAL")
+    cal=adaptive_dollar_size(db,pair,tier,score,market_regime=str((regime or {}).get("label") or "NEUTRAL"),social=social,safety=safety) if ADAPTIVE_CONFIDENCE_ENABLED else {}
+    cal=_test_signal_calibration(db,cal,"TEST")
+    all_reasons=list(reasons or [])+["WIDE mode: qualified at the live price; strict confirmation stages skipped"]
+    msg=beginner_alert(kind,pair,score,tier,all_reasons,list(risks or []),hits,
+                       bool((safety or {}).get("wallet_checked")),bool((safety or {}).get("security_checked")),
+                       bool((safety or {}).get("holder_checked")),bool((safety or {}).get("trader_checked")),
+                       rts=rts,safety=safety,tier=tier,confirmed_score=confirmed,calibration=cal,market_regime=regime,
+                       social=social,source_ctx=source_ctx,signal_mode="WIDE",track_record=track)
+    mid=await send(http,msg)
+    if TG and CHAT and mid is None:
+        limiter.release_action("entry:"+key)
+        db.log_decision(pair,"ENTRY_DELIVERY_FAIL",tier,score,confirmed,["Telegram did not confirm wide-signal delivery; cooldown released"],min_seconds=15,**ctx)
+        return False
+    _WIDE_SENT_TS.append(time.time())
+    db.log_decision(pair,"ENTRY_SENT_WIDE",tier,score,confirmed,["wide signal"],min_seconds=30,**ctx)
+    signal_id=db.add_signal("EARLY",pair,score,tier,all_reasons+["signal_mode=WIDE"])
+    db.log_latency(signal_id,token,"ENTRY_ALERT_WIDE_HOT" if hot else "ENTRY_ALERT_WIDE",f(pair.get("priceUsd")),f"tier={tier};confirmed={confirmed:.1f};mode=WIDE")
+    db.map_telegram_signal(mid,signal_id); db.map_trade_context(mid,signal_id,pair,tier)
+    schedule_entry_followups(http,db,state,signal_id)
+    return True
+
+
 async def paper_auto_open(http,db,signal,pair,tier,execution_info=None):
     if not bool_pref(db,"paper_auto",PAPER_AUTO_DEFAULT): return None
     if db.paper_position_by_token(signal["token"]): return None
@@ -7315,6 +7440,7 @@ async def handle_commands(http, db, state):
         normalized = re.sub(r"^/(sellpct|sellusd)(?=[$\d])", lambda m: "/" + m.group(1) + " ", normalized, flags=re.I)
         normalized = re.sub(r"^/sold(?=[$\d])", "/sold ", normalized, flags=re.I)
         normalized = re.sub(r"^/sell(?=[$\d])", "/sell ", normalized, flags=re.I)
+        normalized = re.sub(r"^/sold\b", "/sell", normalized, flags=re.I)
 
         if not normalized.startswith("/"):
             continue
@@ -7322,9 +7448,23 @@ async def handle_commands(http, db, state):
         parts = normalized.split()
         cmd = parts[0].split("@")[0].lower()
 
-        if cmd == "/help":
+        if cmd == "/help" and not (len(parts)>=2 and parts[1].lower()=="all"):
             await send(http,
-                f"FOMO BOT {VERSION} — SIMPLE COMMANDS\n"
+                "FOMO BOT — THE ONLY COMMANDS YOU NEED\n\n"
+                "Reply to any alert for the coin:\n"
+                "  /bought 10 — you bought $10 (alert age doesn't matter; live price is used)\n"
+                "  /sold 5 — you sold $5 of it | /sold 30% — sold 30% | /sold — sold it all\n\n"
+                "Anytime:\n"
+                "  /positions — your coins and profit/loss after fees\n"
+                "  /undo — undo your last /bought or /sold\n"
+                "  /status — is the bot healthy?\n"
+                "  /signals wide|strict — more alerts (default) or only fully filtered ones\n"
+                "  /trackrecord — how each alert type has really performed\n\n"
+                "Not replying to an alert? Add the coin: /bought 10 CONTRACT or /sold 5 TICKER\n"
+                "/help all — every advanced command")
+        elif cmd == "/help":
+            await send(http,
+                f"FOMO BOT {VERSION} — ALL COMMANDS\n"
                 "/scan CONTRACT or TICKER — live scan\n"
                 "/check — optional fresh re-check before buying or adding\n"
                 "/bought 5 — reply after buying; records the exact alert/check snapshot\n"
@@ -7582,6 +7722,19 @@ async def handle_commands(http, db, state):
                 await send(http,"♻️ No empty token accounts to close in the bot wallet.")
             else:
                 await send(http,f"♻️ Rent reclaim did not run: {str(result.get('error') or 'unknown')[:300]}")
+            continue
+
+        elif cmd == "/signals":
+            arg=parts[1].lower() if len(parts)>=2 else "status"
+            if arg in {"wide","strict"}:
+                _SIGNAL_PROFILE["value"]=arg; db.set_meta("signal_profile",arg)
+            lo,hi=entry_mcap_range()
+            await send(http,
+                f"SIGNAL PROFILE: {_SIGNAL_PROFILE['value'].upper()}\n"
+                "WIDE = alert as soon as a coin qualifies at the live price (many more alerts). Kept: anti-chase, rug-critical security "
+                "(freeze/mint authority, honeypot), liquidity floor, holder check, crash floor, per-coin cooldown.\n"
+                "STRICT = the original full confirmation pipeline (few alerts).\n"
+                f"Entry market-cap range now ${lo:,.0f}–${hi:,.0f}. WIDE alerts build their own track record (/trackrecord).")
             continue
 
         elif cmd == "/trackrecord":
@@ -8372,14 +8525,9 @@ async def handle_commands(http, db, state):
             context = db.trade_context_from_message(reply_message_id)
             reply_signal = db.signal_from_telegram_message(reply_message_id)
             reply_contract = _reply_contract(msg)
-            if context:
-                context_ok, context_reason = db.context_buy_status(context)
-                if not context_ok:
-                    await send(http,
-                        f"⛔ THAT ENTRY SNAPSHOT IS {context_reason.upper()}. I will not reuse an old Telegram price as a new fill.\n"
-                        "If you already bought in Fomo, record it with `/buy CONTRACT AMOUNT` (uses a fresh live quote) "
-                        "or `/buy CONTRACT AMOUNT price YOUR_ACTUAL_AVG_ENTRY`. Manual journaling is still unlocked.")
-                    continue
+            # Replying /bought to ANY alert works, however old it is: the coin is taken from the
+            # alert and the entry price is the live price when you record the buy (closest to
+            # your real fill, since you record right after buying). No contract re-typing.
 
             # Parse explicit overrides: `price 0.0003` / `price=...` and `mc 300000` / `mc=...`.
             def _override_value(tokens, keys):
@@ -8407,12 +8555,15 @@ async def handle_commands(http, db, state):
             elif reply_contract:
                 query=reply_contract; amount=_parse_usd(arg_tokens,DEFAULT_POSITION)
             elif len(parts)>=2:
-                # If first argument is numeric, use the most recent green check. Otherwise it is ticker/contract.
+                # "/bought 10 CONTRACT" or "/bought 10" (= the most recent buy alert). Otherwise
+                # the first argument is a ticker/contract ("/buy CONTRACT 10").
                 first_amt=_parse_usd(parts[1:2],-1)
-                if first_amt>=0:
-                    signal=db.recent_green_check(300); amount=_parse_usd(parts[1:],DEFAULT_POSITION)
+                if first_amt>=0 and len(parts)>=3 and _parse_usd(parts[2:3],-1)<0:
+                    query=parts[2]; amount=first_amt
+                elif first_amt>=0:
+                    signal=db.recent_green_check(300) or db.latest_buy_alert(30*60); amount=_parse_usd(parts[1:],DEFAULT_POSITION)
                     if not signal:
-                        await send(http,"I don't know which coin you mean. Reply /bought 5 to the exact entry/check message, or use /buy CONTRACT 5.")
+                        await send(http,"Which coin? Reply /bought 10 to its alert, or send /bought 10 CONTRACT.")
                         continue
                 else:
                     query=parts[1]; amount=_parse_usd(parts[2:],DEFAULT_POSITION)
@@ -8420,11 +8571,6 @@ async def handle_commands(http, db, state):
                 await send(http,"Reply /bought 5 to an entry/check message, or use /buy CONTRACT 5. Optional: `price 0.0003` or `mc 300000`.")
                 continue
 
-            if signal and not context and reply_message_id and time.time()-f(signal.get("ts"))>ENTRY_CONTEXT_TTL_SECONDS:
-                await send(http,
-                    "⛔ That bot entry message is too old to reuse as a fill. If you already bought, use `/buy CONTRACT AMOUNT` "
-                    "for a fresh quote or add `price YOUR_ACTUAL_AVG_ENTRY`.")
-                continue
 
             if not signal and query:
                 signal,_=db.find_buy_signal(query,hours=24)
@@ -8465,10 +8611,10 @@ async def handle_commands(http, db, state):
             source="exact price override" if entry_price else ""
             if not entry_price and mc_override and live_price>0 and live_mcap>0:
                 entry_price=live_price*(mc_override/live_mcap); source=f"entry MC ${mc_override:,.0f}"
-            if not entry_price and snapshot_price>0:
-                entry_price=snapshot_price; source="Telegram alert/check snapshot"
             if not entry_price and live_price>0:
-                entry_price=live_price; source="current live quote"
+                entry_price=live_price; source="live price when you recorded the buy"
+            if not entry_price and snapshot_price>0:
+                entry_price=snapshot_price; source="alert price (live quote unavailable)"
             if entry_price<=0:
                 await send(http,"I don't have a usable entry price. Reply to the original alert/check, or use `/buy CONTRACT 5 price YOUR_FILL_PRICE`.")
                 continue
@@ -8503,8 +8649,8 @@ async def handle_commands(http, db, state):
             lag=""
             if live_price>0 and snapshot_price>0:
                 lag_move=(live_price/max(snapshot_price,1e-18)-1)*100
-                if abs(lag_move)>=2:
-                    lag=f"\nLive quote is now {lag_move:+.1f}% from the message snapshot; the journal still used the snapshot you replied to."
+                if abs(lag_move)>=1:
+                    lag=f"\nPrice moved {lag_move:+.1f}% between the alert and your buy (your fill delay is included)."
             recorded_tier=str(signal.get("action") or "MANUAL")
             plan=hold_plan(pair or {"chainId":signal.get("chain"),"baseToken":{"address":signal["token"]},"priceUsd":entry_price,
                                     "marketCap":snapshot_mcap,"liquidity":{"usd":snapshot_liq}},tier=recorded_tier)
@@ -8513,8 +8659,9 @@ async def handle_commands(http, db, state):
                 f"✅ {'ADDITIONAL BUY AVERAGED' if merged else 'PURCHASE RECORDED'} — {signal.get('symbol','?')}\n"
                 f"Tracked amount: ${amount:.2f}\nEntry reference: ${entry_price:.8g} ({source})\n"
                 f"Trade horizon: {plan['label']} — {plan['window']}\n"
-                f"Risk reference: ${entry_price*(1-f(rp.get('soft'),RISK_LINE)/100):.8g} | Profit checkpoints +{p1:.0f}% / +{p2:.0f}%"
-                f"{lag}\n\nNo manual journal lock was applied. The bot did not place an order.")
+                f"Risk reference: ${entry_price*(1-f(rp.get('soft'),RISK_LINE)/100):.8g} | Profit checkpoints +{p1:.0f}% / +{p2:.0f}%\n"
+                f"Break-even after ~{FOMO_ROUNDTRIP_FRICTION_PCT:.1f}% fees: ${entry_price*(1+BREAKEVEN_MOVE_PCT/100):.8g} (+{BREAKEVEN_MOVE_PCT:.1f}%)"
+                f"{lag}\n\nTo record a sale, reply to any alert for this coin: /sold 5 ($5), /sold 30% or /sold (everything). Wrong? /undo")
             continue
 
         elif cmd == "/undo":
@@ -8922,6 +9069,14 @@ async def hot_scout_pass(http,guard,limiter,db,state):
             db.log_decision(live,"HOT_WAIT","WATCH",final_entry,confirmed,
                             actionable_blockers(live,final_entry,confirmed,risks,hard,rts=rts,scout=scout,safety=safety),
                             rts=rts,social=pulse,market_regime=str(regime.get("label") or "NEUTRAL"),sources=source_ctx.get("sources"))
+            continue
+        if wide_mode():
+            wide_move=(f(live.get("priceUsd"))/max(f(scout.get("price")),1e-18)-1)*100
+            if await send_wide_signal(http,db,state,limiter,chain+":"+token,live,tier,final_entry,confirmed,reasons+tier_reasons,
+                                      risks,hits,safety,rts,regime,pulse,source_ctx,kind=kind,
+                                      chase_ok=(-CHECK_MAX_DROP_FROM_ALERT_PCT<=wide_move<=MAX_CHASE),
+                                      chase_note=f"hot-scout move {wide_move:+.2f}% outside live action band",hot=True):
+                sent+=1
             continue
         stable,stable_blocks,_=entry_stability_check(db,live,tier)
         tape_ok,tape_blocks,_=entry_tape_preservation(db,live,tier) if stable else (False,[],{})
@@ -9400,6 +9555,14 @@ async def cycle(http, guard, limiter, db, state):
                         live_pair, final_entry_score, c["confirmed"], c["risks"], c["hard"],
                         rts=rts, safety=safety, scout_move=live_move
                     )
+                    if live_tier and wide_mode():
+                        slip_cap=max(ENTRY_MAX_DECISION_SLIPPAGE,2.5)
+                        await send_wide_signal(http,db,state,limiter,key,live_pair,live_tier,final_entry_score,c["confirmed"],
+                                               c["reasons"]+tier_reasons+live_reasons,c["risks"],c["hits"],safety,rts,regime,
+                                               c.get("social"),c.get("source_ctx"),kind=c["kind"],
+                                               chase_ok=decision_slippage<=slip_cap,
+                                               chase_note=f"decision-to-live move {decision_slippage:+.2f}% > {slip_cap:.1f}%")
+                        continue
                     stability_ok, stability_blockers, stability_info = entry_stability_check(db, live_pair, live_tier)
                     tape_ok,tape_blockers,tape_info = entry_tape_preservation(db,live_pair,live_tier) if live_tier and stability_ok else (False,[],{})
                     edge_ok,edge_blockers,edge_info = capital_edge_gate(db,live_pair,live_tier,final_entry_score,c["confirmed"]) if live_tier and stability_ok and tape_ok else (False,[],{})
@@ -9633,6 +9796,10 @@ async def main():
     print(f"[start] chains={','.join(CHAINS)} entry={ENTRY_SCORE} confirmed={CONF_SCORE} scan={INTERVAL}s")
     http = HTTP(); guard = BirdeyeGuard(); limiter = AlertLimiter(); db = Database(); live_executor = LiveExecutor(); execution_probe = JupiterExecutionProbe()
     copy_engine = CopyTradeEngine(db, live_executor, VERSION)
+    saved_profile=str(db.get_meta("signal_profile","") or "").lower()
+    if saved_profile in {"wide","strict"}:
+        _SIGNAL_PROFILE["value"]=saved_profile
+    print(f"[signals] profile {_SIGNAL_PROFILE['value'].upper()} (/signals wide|strict)")
     if BE_KEY:
         core_status = await guard.probe_core(http, force=True)
         if core_status == 200:

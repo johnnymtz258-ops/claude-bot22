@@ -1,0 +1,41 @@
+FOMOBOT — QUICK START
+=====================
+
+INSTALL
+1. Stop the old bot (Control + C in its window).
+2. Unzip this download. It makes a new folder.
+3. Copy your .env into the new folder (Finder: Command+Shift+. shows hidden files; choose Replace).
+   Never delete ~/Library/Application Support/FomoBot/fomo_master.db — it holds your history.
+4. Double-click start_mac.command.
+
+THE ONLY COMMANDS YOU NEED (reply to any alert for the coin)
+  /bought 10     you bought $10. Works on old alerts too; the live price is used as your entry.
+  /sold 5        you sold $5 of it        /sold 30%   sold 30%        /sold   sold everything
+Anytime:
+  /positions     your coins and profit/loss after fees
+  /undo          undo your last /bought or /sold
+  /status        is the bot healthy?
+  /signals wide  lots of alerts (default)          /signals strict   only fully filtered alerts
+  /trackrecord   how each alert type has really performed
+Not replying to an alert?  /bought 10 CONTRACT   or   /sold 5 TICKER
+/help shows this list; /help all shows every advanced command (all old commands still work).
+
+WHAT CHANGED IN THIS VERSION
+- WIDE signal mode (default): alerts as soon as a coin qualifies at the live price.
+  About 40 alerts/day instead of ~4 in your data. Kept: anti-chase, rug-critical checks
+  (freeze/mint authority, honeypot, blacklist), liquidity floor, holder check, crash floor,
+  a 3-hour per-coin cooldown and max 8 WIDE alerts per hour.
+  Market-cap range widened to $60k-$25M. Softer security flags (bundled launch, insider
+  wallets, holder concentration under 90%) are shown as warnings instead of blocking.
+- Every alert shows the break-even move after fees (~5% buy+sell => ~+5.2%) and its alert
+  type's real track record. WIDE alerts build their own record ("WIDE ENTRY OPTION" etc.).
+- /bought never says "entry is old" anymore, and never asks you to retype the contract.
+- /sold 5 records a $5 partial sale (it used to close the whole position).
+- Profit/loss in your journal now subtracts buy and sell fees.
+- Fake "liquidity -100%" alarms fixed (DexScreener sometimes omits liquidity).
+
+HONEST NOTE
+More alerts means more chances to catch runners, not guaranteed profit. In your two months
+of data, about 1 in 3 WIDE-eligible coins rose 10%+, 1 in 8 rose 30%+, and 1 in 3 fell 10%.
+The average after fees was still negative. Use small test sizes, take profits, and check
+/trackrecord after a few days: it will show whether WIDE alerts are actually making money.

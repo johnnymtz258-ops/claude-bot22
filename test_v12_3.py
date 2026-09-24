@@ -87,7 +87,7 @@ def test_static_command_fixes_present():
     src=Path(bot.__file__).read_text()
     for needle in ['VERSION = "v16.2 QUALITY MEASUREMENT"','source_guard=state.get("guard")',
                    'live_scout = db.recent_signal','/closecash TICKER 17.99','/sellcash TICKER 30 4.03','/fixentry TICKER PRICE',
-                   'I will not reuse an old Telegram price as a new fill']:
+                   'alert age doesn\'t matter; live price is used']:
         assert needle in src,needle
 
 

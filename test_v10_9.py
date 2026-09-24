@@ -80,7 +80,7 @@ def test_v109_static_contracts():
     src=Path(bot.__file__).read_text()
     for needle in [
         'VERSION = "v11.5 ENTRY CONFIRM + PROFIT REMINDER"',
-        'No manual journal lock was applied',
+        'Wrong? /undo',
         'telegram_trade_context',
         'FLOW ENTRY',
         'SECOND_LEG_ENABLED',
