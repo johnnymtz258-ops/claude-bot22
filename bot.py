@@ -652,7 +652,12 @@ PROOF_FIRST_REQUIRE_EX_BEST_POSITIVE = eb("PROOF_FIRST_REQUIRE_EX_BEST_POSITIVE"
 # core setup can emit an actionable TEST BUY alert while the fresh proof cohort is still
 # learning. Real autopilot and full live sizing remain locked behind proof/risk gates.
 ACTIONABLE_SIGNAL_POLICY_DEFAULT = os.getenv("ACTIONABLE_SIGNAL_POLICY", "actionable").strip().lower()
-if ACTIONABLE_SIGNAL_POLICY_DEFAULT not in {"strict","actionable"}: ACTIONABLE_SIGNAL_POLICY_DEFAULT = "actionable"
+if ACTIONABLE_SIGNAL_POLICY_DEFAULT not in {"strict","actionable","proven"}: ACTIONABLE_SIGNAL_POLICY_DEFAULT = "actionable"
+# Every BUY alert shows the measured paper record of its alert type. "proven" policy only
+# sends pre-proof alerts for types whose record passes the same noise-guarded test as the
+# proof gate over this window.
+TRACK_RECORD_DAYS = max(3, min(60, ei("TRACK_RECORD_DAYS", 14)))
+TRACK_RECORD_MIN_TRADES = max(5, ei("TRACK_RECORD_MIN_TRADES", 10))
 TEST_BUY_MAX_USD = max(1.0, min(5.0, ef("TEST_BUY_MAX_USD", 3.0)))
 TEST_BUY_SIZE_MULT = max(0.10, min(0.75, ef("TEST_BUY_SIZE_MULT", 0.50)))
 BANKROLL_RISK_PCT = max(0.10, min(1.0, ef("BANKROLL_RISK_PCT", 0.50)))
@@ -4492,7 +4497,41 @@ def proof_health_label(db):
 
 def signal_policy(db):
     raw=str(db.get_meta("signal_policy","") or ACTIONABLE_SIGNAL_POLICY_DEFAULT).strip().lower()
-    return raw if raw in {"strict","actionable"} else ACTIONABLE_SIGNAL_POLICY_DEFAULT
+    return raw if raw in {"strict","actionable","proven"} else ACTIONABLE_SIGNAL_POLICY_DEFAULT
+
+
+def tier_track_record(db, tier, days=None):
+    """Measured paper/shadow results of one alert type (net of simulated fees)."""
+    days=int(days or TRACK_RECORD_DAYS)
+    cutoff=int(time.time()-days*86400)
+    rows=[dict(r) for r in db.conn.execute("""select token,amount_usd,realized_pnl from paper_positions
+        where active=0 and tier=? and close_ts>=? and coalesce(close_reason,'') not like 'price data unreliable%'
+        order by close_ts desc""",(str(tier or ''),cutoff)).fetchall()]
+    n=len(rows)
+    wins=sum(1 for r in rows if f(r.get("realized_pnl"))>0)
+    rois=[f(r.get("realized_pnl"))/f(r.get("amount_usd")) * 100 for r in rows if f(r.get("amount_usd"))>0]
+    avg=statistics.mean(rois) if rois else 0.0
+    proof=proof_metrics(rows,min_paths=TRACK_RECORD_MIN_TRADES,min_unique_tokens=max(3,TRACK_RECORD_MIN_TRADES//2),
+                        min_net_roi_pct=PROOF_FIRST_MIN_NET_ROI_PCT,min_t_stat=PROOF_FIRST_MIN_T_STAT,
+                        require_ex_best_positive=PROOF_FIRST_REQUIRE_EX_BEST_POSITIVE)
+    return {"tier":str(tier or ''),"days":days,"n":n,"wins":wins,"win_rate":(wins/n if n else 0.0),"avg_roi_pct":avg,
+            "net_usd":sum(f(r.get("realized_pnl")) for r in rows),"proven":proof.get("status")=="ACTIVE",
+            "reason":proof.get("reason","")}
+
+
+def alert_track_record_line(db, tier):
+    r=tier_track_record(db,tier)
+    head=f"📊 TRACK RECORD ({r['tier'] or 'this alert type'}, paper, last {r['days']}d): "
+    if r["n"]==0:
+        return head+"no completed tests yet — completely unproven."
+    stats=f"{r['n']} tests | {r['win_rate']*100:.0f}% wins | avg {r['avg_roi_pct']:+.1f}% per trade after fees"
+    if r["n"]<TRACK_RECORD_MIN_TRADES:
+        return head+stats+" — too few tests to trust."
+    if r["proven"]:
+        return head+stats+" ✅ positive and consistent so far."
+    if r["avg_roi_pct"]<0:
+        return head+stats+"\n⚠️ This alert type has LOST money in testing. Treat it as a gamble and only use money you can afford to lose."
+    return head+stats+" — not yet distinguishable from luck."
 
 
 def _test_signal_calibration(db, calibration, mode):
@@ -4546,6 +4585,11 @@ def entry_signal_mode(db,tier,score):
         return {"send":True,"mode":"LIVE","reason":"all proof/risk/live-sizing gates passed","proof":proof,"risk":risk,"lane":lane,"core":core,"perf":perf,"bank":bank}
     if signal_policy(db)=="strict":
         return {"send":False,"mode":"BLOCKED","reason":"; ".join(live_blockers),"proof":proof,"risk":risk,"lane":lane,"core":core,"perf":perf,"bank":bank}
+    if signal_policy(db)=="proven":
+        record=tier_track_record(db,tier)
+        if not record["proven"]:
+            return {"send":False,"mode":"BLOCKED","reason":f"proven policy: {tier} paper record not proven ({record['n']} tests, avg {record['avg_roi_pct']:+.1f}%)",
+                    "proof":proof,"risk":risk,"lane":lane,"core":core,"perf":perf,"bank":bank}
     severe=bool(risk.get("paused") or lane.get("paused") or core.get("paused") or perf.get("paused") or proof.get("status")=="QUARANTINED")
     return {"send":True,"mode":"PAPER" if severe else "TEST","reason":"; ".join(live_blockers),"proof":proof,"risk":risk,"lane":lane,"core":core,"perf":perf,"bank":bank}
 
@@ -5762,7 +5806,7 @@ def reentry_alert(pair,setup):
             f"Contract: {base.get('address','')}\n"
             "This is a second-chance setup, not a guarantee.")
 
-def beginner_alert(kind,pair,score,action,reasons,risks,hits,wallet_checked,security_checked,holder_checked,trader_checked,rts=None,safety=None,rescued=False,tier="ENTRY OPTION",confirmed_score=0,calibration=None,market_regime=None,social=None,source_ctx=None,signal_mode="LIVE",signal_note=""):
+def beginner_alert(kind,pair,score,action,reasons,risks,hits,wallet_checked,security_checked,holder_checked,trader_checked,rts=None,safety=None,rescued=False,tier="ENTRY OPTION",confirmed_score=0,calibration=None,market_regime=None,social=None,source_ctx=None,signal_mode="LIVE",signal_note="",track_record=""):
     base = pair.get("baseToken") or {}
     m = metrics(pair)
     price = f(pair.get("priceUsd"))
@@ -5824,6 +5868,8 @@ def beginner_alert(kind,pair,score,action,reasons,risks,hits,wallet_checked,secu
         action_line="✅ ACTION: BUY NOW — LIVE-QUALIFIED ENTRY OPPORTUNITY"
     if signal_note:
         action_line += f"\nAuthorization: {signal_note[:240]}"
+    if track_record:
+        action_line += f"\n{track_record}"
     return (
         f"{entry_tier_emoji(tier)} {base.get('name') or 'Unknown name'} ({base.get('symbol') or '?'}) — {tier}\n"
         f"{action_line}\n"
@@ -6645,7 +6691,8 @@ async def send_preproof_actionable_signal(http,db,state,limiter,key,pair,tier,sc
                        bool((safety or {}).get("wallet_checked")),bool((safety or {}).get("security_checked")),
                        bool((safety or {}).get("holder_checked")),bool((safety or {}).get("trader_checked")),
                        rts=rts,safety=safety,tier=tier,confirmed_score=confirmed,calibration=cal,market_regime=regime,
-                       social=social,source_ctx=source_ctx,signal_mode=mode,signal_note=auth.get("reason") or "")
+                       social=social,source_ctx=source_ctx,signal_mode=mode,signal_note=auth.get("reason") or "",
+                       track_record=alert_track_record_line(db,tier))
     mid=await send(http,msg)
     if TG and CHAT and mid is None:
         limiter.release_action("entry:"+key)
@@ -7168,7 +7215,8 @@ async def handle_commands(http, db, state):
                 "/leaders — top internal Runner Radar / edge candidates (WATCH ONLY)\n"
                 "/bankroll 100 — bankroll for risk-based size guidance; /bankroll 0 clears it\n"
                 "/shadow on|off — continuous proof-first forward simulator\n"
-                "/signalpolicy actionable|strict — show qualified TEST BUY signals before proof, or require full proof\n"
+                "/signalpolicy actionable|proven|strict — all qualified TEST BUY signals, only alert types with a proven paper record, or require full proof\n"
+                "/trackrecord — measured paper results for every alert type\n"
                 "/autotest — test local Jupiter/wallet setup WITHOUT trading\n"
                 "/execstatus — execution journal, RPC failover, pending tx + failure audit\n"
                 "/autolive arm -> /autolive confirm — optional REAL Jupiter autopilot\n"
@@ -7368,13 +7416,22 @@ async def handle_commands(http, db, state):
 
         elif cmd == "/signalpolicy":
             arg=parts[1].lower() if len(parts)>=2 else "status"
-            if arg in {"actionable","strict"}:
+            if arg in {"actionable","strict","proven"}:
                 db.set_meta("signal_policy",arg)
             pol=signal_policy(db)
             await send(http,
                 f"ENTRY SIGNAL POLICY: {pol.upper()}\n"
                 "ACTIONABLE = fully-qualified proof-eligible core setups can send TEST BUY signals before proof is ACTIVE; real autopilot/full sizing stay locked.\n"
-                "STRICT = only send BUY NOW after proof/risk/live-sizing gates are fully open.")
+                f"PROVEN = only send TEST BUY signals for alert types whose last {TRACK_RECORD_DAYS}d paper record is positive and consistent (≥{TRACK_RECORD_MIN_TRADES} tests).\n"
+                "STRICT = only send BUY NOW after proof/risk/live-sizing gates are fully open.\n"
+                "Every BUY alert shows its alert type's measured track record. Use /trackrecord to see all types.")
+            continue
+
+        elif cmd == "/trackrecord":
+            tiers=[r[0] for r in db.conn.execute("""select tier from paper_positions where active=0 and close_ts>=?
+                group by tier order by count(*) desc""",(int(time.time()-TRACK_RECORD_DAYS*86400),)).fetchall() if r[0]]
+            lines=[alert_track_record_line(db,t) for t in tiers] or [f"No completed paper tests in the last {TRACK_RECORD_DAYS} days."]
+            await send(http,"📊 ALERT TRACK RECORDS\n\n"+"\n\n".join(lines)+f"\n\nSignal policy: {signal_policy(db).upper()} (/signalpolicy proven sends only proven types).")
             continue
 
         elif cmd == "/shadow":
@@ -8717,7 +8774,7 @@ async def hot_scout_pass(http,guard,limiter,db,state):
             sent_test=await send_preproof_actionable_signal(http,db,state,limiter,key,live,tier,final_entry,confirmed,
                 reasons+tier_reasons,risks,hits,safety,rts,regime,pulse,source_ctx,exec_info,kind=kind,hot=True)
             if sent_test: sent+=1
-            elif signal_policy(db)=="strict": limiter.release_action("entry:"+key)
+            elif signal_policy(db) in {"strict","proven"}: limiter.release_action("entry:"+key)
             continue
         all_reasons=reasons+tier_reasons+["fast hot-scout revalidation passed",edge_reason,"v15 stateful + historical-risk + execution-quality gates passed"]
         calibration=adaptive_dollar_size(db,live,tier,final_entry,market_regime=str(regime.get("label") or "NEUTRAL"),
@@ -8725,7 +8782,8 @@ async def hot_scout_pass(http,guard,limiter,db,state):
         message=beginner_alert(kind,live,final_entry,tier,all_reasons,risks,hits,
                        bool(safety.get("wallet_checked")),bool(safety.get("security_checked")),
                        bool(safety.get("holder_checked")),bool(safety.get("trader_checked")),rts=rts,safety=safety,
-                       tier=tier,confirmed_score=confirmed,calibration=calibration,market_regime=regime,social=pulse,source_ctx=source_ctx)
+                       tier=tier,confirmed_score=confirmed,calibration=calibration,market_regime=regime,social=pulse,source_ctx=source_ctx,
+                       track_record=alert_track_record_line(db,tier))
         mid=await send(http,message)
         if TG and CHAT and mid is None:
             limiter.release_action("entry:"+key)
@@ -9210,7 +9268,7 @@ async def cycle(http, guard, limiter, db, state):
                         if auth.get("mode")!="LIVE":
                             sent_test=await send_preproof_actionable_signal(http,db,state,limiter,key,live_pair,live_tier,final_entry_score,c["confirmed"],
                                 c["reasons"]+tier_reasons+live_reasons,c["risks"],c["hits"],safety,rts,regime,c.get("social"),c.get("source_ctx"),execution_info,kind=c["kind"],hot=False)
-                            if not sent_test and signal_policy(db)=="strict": limiter.release_action("entry:"+key)
+                            if not sent_test and signal_policy(db) in {"strict","proven"}: limiter.release_action("entry:"+key)
                             continue
                         else:
                             all_reasons = c["reasons"] + tier_reasons + live_reasons + [edge_reason,"v15 stateful + historical-risk + execution-quality gates passed"]
@@ -9223,7 +9281,8 @@ async def cycle(http, guard, limiter, db, state):
                                 c["kind"],live_pair,final_entry_score,live_tier,all_reasons,c["risks"],c["hits"],
                                 c["wallet_checked"],c["security_checked"],c["holder_checked"],c["trader_checked"],
                                 rts=rts,safety=safety,rescued=False,tier=live_tier,confirmed_score=c["confirmed"],calibration=calibration,
-                                market_regime=regime,social=c.get("social"),source_ctx=c.get("source_ctx"))
+                                market_regime=regime,social=c.get("social"),source_ctx=c.get("source_ctx"),
+                                track_record=alert_track_record_line(db,live_tier))
                             telegram_message_id = await send(http,message)
                             if TG and CHAT and telegram_message_id is None:
                                 limiter.release_action("entry:"+key)
