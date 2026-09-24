@@ -724,6 +724,9 @@ AUTO_LIVE_MONITOR_SECONDS = max(3, ei("AUTO_LIVE_MONITOR_SECONDS", 5))
 AUTO_LIVE_EXITS_WHEN_OFF = eb("AUTO_LIVE_EXITS_WHEN_OFF", True)
 # A confirmed-but-unaccounted intent older than this is treated as a crash orphan.
 AUTO_LIVE_ORPHAN_AGE_SECONDS = max(60, ei("AUTO_LIVE_ORPHAN_AGE_SECONDS", 300))
+# Close empty token accounts in the bot wallet to recover their ~0.002 SOL rent each.
+AUTO_RECLAIM_RENT = eb("AUTO_RECLAIM_RENT", True)
+RECLAIM_EVERY_MINUTES = max(5, ei("RECLAIM_EVERY_MINUTES", 30))
 
 # v11.3 STABILITY GUARDIAN — continuous position supervision + adaptive calibration.
 GUARDIAN_ENABLED = eb("GUARDIAN_ENABLED", True)
@@ -7101,6 +7104,31 @@ async def live_autopilot_track_positions(http,db,state):
             await _auto_sell(http,db,state,pos,1.0,reason,None,True)
 
 
+def reclaim_exclusions(db):
+    """Mints that must keep their token account: open positions or unfinished executions."""
+    mints={str(p["token"]) for p in db.auto_open_positions()}
+    mints|={str(r[0]) for r in db.conn.execute("""select token from execution_intents
+        where state in ('SIGNED','SUBMITTING','AMBIGUOUS','CONFIRMED_UNRECONCILED')""").fetchall()}
+    try:
+        mints|={str(r[0]) for r in db.conn.execute("select token from copy_live_positions where active=1").fetchall()}
+    except sqlite3.Error:
+        pass
+    return mints
+
+
+async def reclaim_rent_once(http,db,state,announce=True):
+    ex=state.get("live_executor")
+    if not ex or not ex.keypair_path:
+        return {"ok":False,"closed":0,"error":"live wallet not configured"}
+    result=await ex.reclaim_rent(http,exclude_mints=reclaim_exclusions(db))
+    if result.get("closed") and announce:
+        await send(http,f"♻️ Reclaimed {result.get('lamports',0)/1_000_000_000:.5f} SOL of rent from {result['closed']} empty token account(s).\n"
+                        f"Tx: https://solscan.io/tx/{result.get('signature','')}")
+    if not result.get("ok"):
+        print(f"[reclaim] {result.get('error')}")
+    return result
+
+
 async def live_exit_loop(http,db,state):
     """Fast, independent live-position supervision: reconciliation + exits only.
 
@@ -7115,6 +7143,9 @@ async def live_exit_loop(http,db,state):
                 if ex and ex.keypair_path and ex.ready():
                     await reconcile_unresolved_execution_intents(http,db,state)
                     await live_autopilot_track_positions(http,db,state)
+                    if AUTO_RECLAIM_RENT and time.time()-state.get("last_reclaim",0)>=RECLAIM_EVERY_MINUTES*60:
+                        state["last_reclaim"]=time.time()
+                        await reclaim_rent_once(http,db,state)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -7244,6 +7275,7 @@ async def handle_commands(http, db, state):
                 "/shadow on|off — continuous proof-first forward simulator\n"
                 "/signalpolicy actionable|proven|strict — all qualified TEST BUY signals, only alert types with a proven paper record, or require full proof\n"
                 "/trackrecord — measured paper results for every alert type\n"
+                "/reclaim — close empty token accounts in the bot wallet and recover their SOL rent\n"
                 "/autotest — test local Jupiter/wallet setup WITHOUT trading\n"
                 "/execstatus — execution journal, RPC failover, pending tx + failure audit\n"
                 "/autolive arm -> /autolive confirm — optional REAL Jupiter autopilot\n"
@@ -7452,6 +7484,16 @@ async def handle_commands(http, db, state):
                 f"PROVEN = only send TEST BUY signals for alert types whose last {TRACK_RECORD_DAYS}d paper record is positive and consistent (≥{TRACK_RECORD_MIN_TRADES} tests).\n"
                 "STRICT = only send BUY NOW after proof/risk/live-sizing gates are fully open.\n"
                 "Every BUY alert shows its alert type's measured track record. Use /trackrecord to see all types.")
+            continue
+
+        elif cmd == "/reclaim":
+            result=await reclaim_rent_once(http,db,state,announce=False)
+            if result.get("closed"):
+                await send(http,f"♻️ Reclaimed {result.get('lamports',0)/1_000_000_000:.5f} SOL from {result['closed']} empty token account(s).\nTx: https://solscan.io/tx/{result.get('signature','')}")
+            elif result.get("ok"):
+                await send(http,"♻️ No empty token accounts to close in the bot wallet.")
+            else:
+                await send(http,f"♻️ Rent reclaim did not run: {str(result.get('error') or 'unknown')[:300]}")
             continue
 
         elif cmd == "/trackrecord":

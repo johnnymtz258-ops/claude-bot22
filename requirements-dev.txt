@@ -1,0 +1,5 @@
+# Test / research tooling only. The bot itself needs just requirements.txt.
+-r requirements.txt
+pytest
+solders          # verifies hand-built Solana transactions against the Solana SDK
+scikit-learn     # optional walk-forward model check in research_report.py

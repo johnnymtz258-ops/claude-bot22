@@ -29,6 +29,9 @@ JUPITER_BASE = "https://api.jup.ag/swap/v2"
 DEX = "https://api.dexscreener.com"
 
 _B58_ALPHABET = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+CLOSE_ACCOUNT_IX = 9  # SPL Token / Token-2022 CloseAccount
 
 
 def b58encode(raw: bytes) -> str:
@@ -46,6 +49,56 @@ def b58encode(raw: bytes) -> str:
         n, r = divmod(n, 58)
         chars.append(_B58_ALPHABET[r])
     return (b"1" * zeros + bytes(reversed(chars or b""))).decode()
+
+
+def b58decode(value: str) -> bytes:
+    raw = str(value or "").strip().encode()
+    n = 0
+    for ch in raw:
+        idx = _B58_ALPHABET.find(bytes([ch]))
+        if idx < 0:
+            raise ValueError("invalid base58 character")
+        n = n * 58 + idx
+    body = n.to_bytes((n.bit_length() + 7) // 8, "big") if n else b""
+    zeros = len(raw) - len(raw.lstrip(b"1"))
+    return b"\x00" * zeros + body
+
+
+def _shortvec(n: int) -> bytes:
+    out = bytearray()
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        if n:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            return bytes(out)
+
+
+def build_close_accounts_message(owner: bytes, accounts: list, recent_blockhash: bytes) -> bytes:
+    """Legacy message closing empty token accounts; rent returns to ``owner``.
+
+    ``accounts`` is a list of (token_account_pubkey_bytes, token_program_id_bytes). The owner
+    is fee payer, lamport destination and close authority. Accounts with a non-zero balance
+    cannot be closed by the token program, so a stale balance read can only make the
+    transaction fail, never move tokens.
+    """
+    if len(owner) != 32 or len(recent_blockhash) != 32:
+        raise ValueError("owner and blockhash must be 32 bytes")
+    accts = [(bytes(a), bytes(p)) for a, p in accounts]
+    if not accts or any(len(a) != 32 or len(p) != 32 for a, p in accts):
+        raise ValueError("invalid account list")
+    programs = list(dict.fromkeys(p for _, p in accts))
+    keys = [owner] + [a for a, _ in accts] + programs
+    if len(set(keys)) != len(keys):
+        raise ValueError("duplicate account keys")
+    header = bytes([1, 0, len(programs)])  # 1 writable signer; programs are read-only unsigned
+    ixs = bytearray()
+    for i, (_, prog) in enumerate(accts):
+        prog_idx = 1 + len(accts) + programs.index(prog)
+        ixs += bytes([prog_idx]) + _shortvec(3) + bytes([1 + i, 0, 0]) + _shortvec(1) + bytes([CLOSE_ACCOUNT_IX])
+    return header + _shortvec(len(keys)) + b"".join(keys) + recent_blockhash + _shortvec(len(accts)) + bytes(ixs)
 
 
 def _read_shortvec(buf: bytes, offset: int):
@@ -686,6 +739,79 @@ class LiveExecutor:
             "order": order, "execute": execute_result, "chain": chain, "idempotency_key": idem,
             "jupiter_http": execute_http,
         }
+
+    async def empty_token_accounts(self, http, mints=None):
+        """Zero-balance token accounts this wallet can close (fail-closed on any RPC error)."""
+        owner = self.address()
+        if not owner:
+            return {"ok": False, "error": "wallet address unavailable", "accounts": []}
+        filters = [{"mint": m} for m in mints] if mints else [{"programId": TOKEN_PROGRAM_ID}, {"programId": TOKEN_2022_PROGRAM_ID}]
+        found = {}
+        for flt in filters:
+            res = await self._rpc_checked(http, "getTokenAccountsByOwner",
+                                          [owner, flt, {"encoding": "jsonParsed", "commitment": "confirmed"}])
+            if not res.get("ok") or not isinstance(res.get("value"), dict):
+                return {"ok": False, "error": res.get("error", "token account RPC failed"), "accounts": []}
+            for item in res["value"].get("value") or []:
+                try:
+                    acct = item["account"]; info = acct["data"]["parsed"]["info"]
+                    if int(info["tokenAmount"]["amount"]) != 0:
+                        continue
+                    program = str(acct.get("owner") or "")
+                    close_auth = info.get("closeAuthority")
+                    withheld = 0
+                    for ext in info.get("extensions") or []:
+                        if ext.get("extension") == "transferFeeAmount":
+                            withheld = int(((ext.get("state") or {}).get("withheldAmount")) or 0)
+                    if (program not in {TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID} or info.get("mint") == WSOL_MINT
+                            or info.get("owner") != owner or info.get("state") != "initialized"
+                            or (close_auth and close_auth != owner) or withheld):
+                        continue
+                    found[item["pubkey"]] = {"pubkey": item["pubkey"], "program": program, "mint": info.get("mint"),
+                                             "lamports": int(acct.get("lamports") or 0)}
+                except Exception:
+                    continue
+        return {"ok": True, "accounts": list(found.values())}
+
+    async def reclaim_rent(self, http, mints=None, exclude_mints=(), max_accounts=8):
+        """Close empty token accounts (<= max_accounts per transaction) to recover their rent.
+
+        Each account created by a buy holds ~0.00204 SOL of rent that stays locked after a
+        full sell. On $5-$10 trades that is several percent per trade.
+        """
+        if not self.capable:
+            return {"ok": False, "closed": 0, "error": "LIVE_TRADING_ENABLED is off"}
+        ok_key, key_msg = self.keypair_integrity()
+        if not ok_key:
+            return {"ok": False, "closed": 0, "error": key_msg}
+        found = await self.empty_token_accounts(http, mints)
+        if not found.get("ok"):
+            return {"ok": False, "closed": 0, "error": found.get("error")}
+        exclude = {str(m) for m in exclude_mints or ()}
+        accounts = [a for a in found["accounts"] if a["mint"] not in exclude][:max(1, int(max_accounts))]
+        if not accounts:
+            return {"ok": True, "closed": 0, "lamports": 0}
+        bh = await self._rpc_checked(http, "getLatestBlockhash", [{"commitment": "confirmed"}])
+        try:
+            blockhash = str(bh["value"]["value"]["blockhash"])
+        except Exception:
+            return {"ok": False, "closed": 0, "error": f"blockhash unavailable: {bh.get('error', '')}"}
+        key, pub = load_keypair(self.keypair_path)
+        message = build_close_accounts_message(pub, [(b58decode(a["pubkey"]), b58decode(a["program"])) for a in accounts],
+                                               b58decode(blockhash))
+        signature_raw = key.sign(message)
+        tx = _shortvec(1) + signature_raw + message
+        signature = b58encode(signature_raw)
+        sent = await self._rpc_checked(http, "sendTransaction", [base64.b64encode(tx).decode(),
+                                       {"encoding": "base64", "preflightCommitment": "confirmed", "maxRetries": 3}])
+        if not sent.get("ok"):
+            return {"ok": False, "closed": 0, "error": f"send failed: {sent.get('error')}", "signature": signature}
+        chain = await self.confirm_signature(http, signature, timeout_seconds=min(45.0, self.confirm_timeout + 10))
+        if not chain.get("confirmed"):
+            return {"ok": False, "closed": 0, "signature": signature,
+                    "error": f"close not confirmed: {chain.get('err') or 'timeout'}"}
+        return {"ok": True, "closed": len(accounts), "lamports": sum(a["lamports"] for a in accounts),
+                "signature": signature, "mints": [a["mint"] for a in accounts]}
 
     async def reconcile_intent(self, http, intent, db=None):
         """Re-check one unresolved execution without submitting anything new."""
