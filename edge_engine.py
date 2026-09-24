@@ -243,3 +243,97 @@ def proof_metrics(rows: Sequence[Mapping], min_paths: int = 12, min_unique_token
             "profit_factor":pf,"win_rate":win,"avg_win":statistics.mean(wins) if wins else 0.0,
             "avg_loss":statistics.mean(losses) if losses else 0.0,"unique_tokens":unique,
             "unique_needed":min_unique_tokens,"net_roi_pct":net_roi,"min_net_roi_pct":float(min_net_roi_pct)}
+
+
+# ---------------------------------------------------------------------------
+# Price-data integrity (v16.2 reliability patch)
+#
+# Two months of exported data contained forward "returns" such as +383,398% in an hour.
+# Those are price-feed errors (wrong pool, decimals, stale quotes), not trades. Left in,
+# they poison analog vetoes, lane health, paper P/L and could even unlock the proof gate.
+
+def price_move_plausible(price_ratio, liq_ratio=None, min_ratio: float = 10.0, slack: float = 4.0) -> bool:
+    """AMM sanity check for extreme moves.
+
+    In a constant-product pool a move produced by trading scales pool liquidity (USD,
+    both sides) by roughly sqrt(price change). A 100x "pump" whose liquidity did not grow
+    ~10x, or a 100x "crash" whose liquidity did not shrink, is almost always bad data.
+    Moves inside [1/min_ratio, min_ratio] are always accepted. ``slack`` allows for
+    liquidity adds/removals (e.g. bonding-curve migration) around the ideal sqrt scaling.
+    """
+    try:
+        pr = float(price_ratio)
+    except (TypeError, ValueError):
+        return False
+    if not (pr > 0) or math.isnan(pr) or math.isinf(pr):
+        return False
+    if 1.0 / float(min_ratio) < pr < float(min_ratio):
+        return True
+    try:
+        lr = float(liq_ratio) if liq_ratio is not None else None
+    except (TypeError, ValueError):
+        lr = None
+    if lr is None or math.isnan(lr):
+        return False
+    if lr <= 0:
+        return pr < 1.0  # liquidity vanished: consistent with a rug, never with a pump
+    expect = math.sqrt(pr)
+    return lr >= expect / slack if pr >= min_ratio else lr <= expect * slack
+
+
+def clean_price_path(points: Sequence, entry_price: float, entry_liq: float = 0.0,
+                     spike_ratio: float = 5.0) -> tuple[list, int]:
+    """Remove bad samples from a forward price path.
+
+    ``points`` are (ts, price) or (ts, price, liquidity) tuples in time order. A sample is
+    dropped when it is non-positive, an isolated one-sample spike (>= spike_ratio away from
+    both neighbours), an unconfirmed jump in the final sample, or an implausible move
+    versus the entry per :func:`price_move_plausible`. Returns (clean [(ts, price)], dropped).
+    """
+    entry = _f(entry_price)
+    rows = []
+    for p in points or []:
+        ts = p[0]; price = _f(p[1]); liq = _f(p[2]) if len(p) > 2 else None
+        if price > 0:
+            rows.append((ts, price, liq))
+    dropped = len(points or []) - len(rows)
+    keep = []
+    n = len(rows)
+    for i, (ts, price, liq) in enumerate(rows):
+        prev_p = rows[i - 1][1] if i > 0 else (entry if entry > 0 else None)
+        next_p = rows[i + 1][1] if i + 1 < n else None
+        spike = False
+        if prev_p and next_p:
+            up = price >= spike_ratio * prev_p and price >= spike_ratio * next_p
+            down = price * spike_ratio <= prev_p and price * spike_ratio <= next_p
+            spike = up or down
+        elif prev_p and next_p is None and i > 0:
+            spike = price >= spike_ratio * prev_p  # unconfirmed final jump up
+        if not spike and entry > 0 and entry_liq and liq is not None:
+            spike = not price_move_plausible(price / entry, liq / entry_liq if entry_liq > 0 else None)
+        if spike:
+            dropped += 1
+        else:
+            keep.append((ts, price))
+    return keep, dropped
+
+
+OUTCOME_MAX_PLAUSIBLE_PCT = 1000.0
+
+
+def outcome_from_path(points: Sequence, entry_price: float, entry_liq: float = 0.0,
+                      max_plausible_pct: float = OUTCOME_MAX_PLAUSIBLE_PCT):
+    """Max/min/final return from a cleaned path plus integrity metadata, or None."""
+    entry = _f(entry_price)
+    if entry <= 0:
+        return None
+    clean, dropped = clean_price_path(points, entry, entry_liq)
+    if len(clean) < 2:
+        return None
+    prices = [p for _, p in clean]
+    out = {"max_return_pct": (max(prices) / entry - 1) * 100, "min_return_pct": (min(prices) / entry - 1) * 100,
+           "final_return_pct": (prices[-1] / entry - 1) * 100, "samples": len(clean),
+           "last_obs_ts": int(clean[-1][0]), "dropped": dropped}
+    total = len(clean) + dropped
+    out["suspect"] = int(out["max_return_pct"] > max_plausible_pct or (total > 0 and dropped / total > 0.3))
+    return out

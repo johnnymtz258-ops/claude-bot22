@@ -63,10 +63,22 @@ def _bayes_rate(successes: int, n: int, prior: float = 0.50, strength: float = 6
     return (successes + prior * strength) / max(n + strength, 1.0)
 
 
+def _has_column(conn, table: str, column: str) -> bool:
+    try:
+        return any(r[1] == column for r in conn.execute(f"pragma table_info({table})"))
+    except Exception:
+        return False
+
+
+def _clean_evals_sql(conn, alias: str = "e") -> str:
+    """Exclude checkpoint returns flagged as price-feed glitches (column added in v16.2 patch)."""
+    return f" and coalesce({alias}.suspect,0)=0" if _has_column(conn, "evals", "suspect") else ""
+
+
 def _query_returns(conn, where_sql: str, params: tuple, checkpoint: int, limit: int = 160) -> list[float]:
     sql = f"""select e.return_pct
         from evals e join signals s on s.id=e.signal_id
-        where s.kind='EARLY' and e.checkpoint_min=? and {where_sql}
+        where s.kind='EARLY' and e.checkpoint_min=?{_clean_evals_sql(conn)} and {where_sql}
         order by s.ts desc limit ?"""
     rows = conn.execute(sql, (checkpoint, *params, int(limit))).fetchall()
     return [f(r[0]) for r in rows]
@@ -127,9 +139,10 @@ def path_cohort(conn, tier: str, chain: str = "solana", horizon: int = 60) -> di
         exists=conn.execute("select 1 from sqlite_master where type='table' and name='signal_outcomes'").fetchone()
         if not exists:
             return {"n":0,"clean15":0.5,"severe15":0.25,"ruglike":0.08,"median_max":None,"median_min":None}
-        rows=conn.execute("""select o.max_return_pct,o.min_return_pct
+        clean=" and coalesce(o.suspect,0)=0" if _has_column(conn,"signal_outcomes","suspect") else ""
+        rows=conn.execute(f"""select o.max_return_pct,o.min_return_pct
             from signal_outcomes o join signals s on s.id=o.signal_id
-            where s.kind='EARLY' and s.action=? and lower(s.chain)=? and o.horizon_min=?
+            where s.kind='EARLY' and s.action=? and lower(s.chain)=? and o.horizon_min=?{clean}
             order by s.ts desc limit 160""",(str(tier or 'ENTRY OPTION'),str(chain or '').lower(),int(horizon))).fetchall()
     except Exception:
         rows=[]
@@ -721,9 +734,9 @@ def walk_forward_summary(conn, checkpoint: int = 30, train_fraction: float = 0.7
     unseen slice? Keeping the holdout chronological makes daily review less vulnerable
     to fitting yesterday's winners.
     """
-    rows=conn.execute("""select s.ts,s.action,s.score,e.return_pct
+    rows=conn.execute(f"""select s.ts,s.action,s.score,e.return_pct
         from signals s join evals e on e.signal_id=s.id
-        where s.kind='EARLY' and e.checkpoint_min=? and e.return_pct is not null
+        where s.kind='EARLY' and e.checkpoint_min=? and e.return_pct is not null{_clean_evals_sql(conn)}
         order by s.ts asc""",(int(checkpoint),)).fetchall()
     rows=[(int(r[0]),str(r[1] or ''),f(r[2]),f(r[3])) for r in rows]
     n=len(rows)

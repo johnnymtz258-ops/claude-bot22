@@ -27,7 +27,7 @@ from pumpportal_radar import PumpPortalRadar
 from live_execution import LiveExecutor, WSOL_MINT
 from adaptive_engine import confidence_report, dollar_size_guide, position_state, transition_is_material, guardian_message, walk_forward_summary, format_walk_forward
 from wallet_sync import PublicSolanaWalletSync, reconcile_balance, recent_sale_evidence
-from edge_engine import setup_path_quality, breadth_regime, analog_summary, risk_position_size, proof_metrics
+from edge_engine import setup_path_quality, breadth_regime, analog_summary, risk_position_size, proof_metrics, price_move_plausible, outcome_from_path
 from execution_quality import JupiterExecutionProbe
 from copy_trading import CopyTradeEngine
 
@@ -624,6 +624,8 @@ SOCIAL_MIN_MENTIONS = ei("SOCIAL_MIN_MENTIONS", 2)
 PAPER_AUTO_DEFAULT = eb("PAPER_AUTOPILOT_DEFAULT", True)
 PAPER_POSITION_USD = max(1.0, min(10.0, ef("PAPER_POSITION_USD", 5)))
 PAPER_MAX_OPEN = max(3, min(12, ei("PAPER_MAX_OPEN_POSITIONS", 8)))
+# A paper simulation whose price stays implausible this long is closed as unmeasurable.
+PAPER_GLITCH_MAX_MINUTES = max(5, ei("PAPER_GLITCH_MAX_MINUTES", 20))
 # v15 proof-first shadow simulator. It remains independent of Telegram/live execution so
 # the strategy keeps producing unbiased forward evidence even when the user makes no trades.
 SHADOW_SIM_ALWAYS_ON = eb("SHADOW_SIM_ALWAYS_ON", True)
@@ -1119,6 +1121,16 @@ class Database:
             ("proof_eligible","integer default 0"), ("proof_reason","text default ''")]:
             if col not in paper_existing:
                 self.conn.execute(f"alter table paper_positions add column {col} {decl}")
+        # v16.2 reliability patch: integrity metadata for forward outcomes. Price-feed glitches
+        # (+383,398% "returns") and paths truncated when a coin leaves the scanner lists are
+        # flagged instead of silently feeding vetoes, lane health and calibration.
+        for table,cols in (("decision_outcomes",[("samples","integer default 0"),("last_obs_ts","integer default 0"),("suspect","integer default 0")]),
+                           ("signal_outcomes",[("samples","integer default 0"),("last_obs_ts","integer default 0"),("suspect","integer default 0")]),
+                           ("evals",[("suspect","integer default 0")])):
+            have={r[1] for r in self.conn.execute(f"pragma table_info({table})")}
+            for col,decl in cols:
+                if col not in have:
+                    self.conn.execute(f"alter table {table} add column {col} {decl}")
         # The latest export is large enough that repeated outcome/observation scans need indexes.
         self.conn.execute("create index if not exists idx_decision_ts_chain on decision_ledger(ts,chain)")
         self.conn.execute("create index if not exists idx_outcome_horizon_decision on decision_outcomes(horizon_min,decision_id)")
@@ -1304,7 +1316,7 @@ class Database:
         window = int(window or PERF_WINDOW)
         rows = self.conn.execute("""select e.return_pct
             from evals e join signals s on s.id=e.signal_id
-            where e.checkpoint_min=? and s.kind in ('EARLY','PAPER_ENTRY')
+            where e.checkpoint_min=? and coalesce(e.suspect,0)=0 and s.kind in ('EARLY','PAPER_ENTRY')
             order by s.ts desc limit ?""", (checkpoint, window)).fetchall()
         vals = [f(r[0]) for r in rows]
         if not vals:
@@ -1591,9 +1603,9 @@ class Database:
                         due[row["id"]].append(cp)
         return [(dict(next(r for r in rows if r["id"] == sid)), cps) for sid, cps in list(due.items())[:20]]
 
-    def add_eval(self, signal_id, checkpoint, price, ret):
-        self.conn.execute("insert or ignore into evals values(?,?,?,?,?)",
-                          (signal_id, checkpoint, int(time.time()), price, ret))
+    def add_eval(self, signal_id, checkpoint, price, ret, suspect=False):
+        self.conn.execute("insert or ignore into evals(signal_id,checkpoint_min,ts,price,return_pct,suspect) values(?,?,?,?,?,?)",
+                          (signal_id, checkpoint, int(time.time()), price, ret, 1 if suspect else 0))
         self.conn.commit()
 
     def add_catalyst(self, source, title, text, url):
@@ -1690,6 +1702,12 @@ class Database:
                           (int(time.time()),f(price),reason,gross,fees,pnl,pid))
         self.conn.commit(); return pnl
 
+    def paper_close_unmeasurable(self, pid, reason):
+        """Close a simulation whose price feed stayed implausible: no P/L, never proof evidence."""
+        self.conn.execute("""update paper_positions set active=0,close_ts=?,close_price=entry_price,close_reason=?,
+            gross_pnl=0,fees_usd=0,realized_pnl=0,proof_eligible=0 where id=? and active=1""",(int(time.time()),str(reason),int(pid)))
+        self.conn.commit()
+
     def paper_stats(self, days=7, shadow_only=False, build_version=None, proof_only=False):
         cutoff=int(time.time()-days*86400)
         sql="select * from paper_positions where active=0 and close_ts>=?"; args=[cutoff]
@@ -1750,7 +1768,7 @@ class Database:
         rows=self.conn.execute("""select d.pc5,d.pc1,d.mcap,d.liquidity,d.buy_sell,d.swaps,d.turnover_pct,
                    o.max_return_pct,o.min_return_pct,o.final_return_pct,d.ts,d.token,d.event
             from decision_ledger d join decision_outcomes o on o.decision_id=d.id
-            where d.chain='solana' and d.ts>=? and o.horizon_min=30
+            where d.chain='solana' and d.ts>=? and o.horizon_min=30 and coalesce(o.suspect,0)=0
               and d.event in ('ENTRY_SENT','ENTRY_SENT_HOT','ENTRY_SENT_TEST','ENTRY_STABILITY','ENTRY_TAPE','ENTRY_COMMIT','ENTRY_EDGE','NEAR_ENTRY')
             order by d.ts desc limit ?""",(cutoff,int(limit))).fetchall()
         # Deduplicate repeated telemetry from the same token within 15 minutes so a
@@ -2288,7 +2306,7 @@ class Database:
     def outcome_stats(self, hours=24):
         cutoff=int(time.time()-hours*3600)
         rows=self.conn.execute("""select o.* from signal_outcomes o join signals s on s.id=o.signal_id
-            where s.ts>=?""",(cutoff,)).fetchall()
+            where s.ts>=? and coalesce(o.suspect,0)=0""",(cutoff,)).fetchall()
         return [dict(r) for r in rows]
 
     def daily_stats(self):
@@ -2296,7 +2314,7 @@ class Database:
         signals = self.conn.execute("select count(*) from signals where ts>=?", (cutoff,)).fetchone()[0]
         early = self.conn.execute("select count(*) from signals where ts>=? and kind='EARLY'", (cutoff,)).fetchone()[0]
         eval30 = [r[0] for r in self.conn.execute("""select e.return_pct from evals e join signals s on s.id=e.signal_id
-            where s.ts>=? and e.checkpoint_min=30""", (cutoff,)).fetchall()]
+            where s.ts>=? and e.checkpoint_min=30 and coalesce(e.suspect,0)=0""", (cutoff,)).fetchall()]
         realized = self.conn.execute("select coalesce(sum(realized_pnl),0) from positions where close_ts>=?", (cutoff,)).fetchone()[0]
         return {
             "signals": signals, "early": early, "eval30": eval30,
@@ -4186,7 +4204,7 @@ def lane_health(db, tier):
     if state=="QUARANTINED":
         shadow_rows=db.conn.execute("""select o.max_return_pct,o.min_return_pct,o.final_return_pct
             from decision_outcomes o join decision_ledger d on d.id=o.decision_id
-            where o.horizon_min=30 and d.event='LANE_SHADOW' and d.tier=? and d.build_version=? and d.id>?
+            where o.horizon_min=30 and coalesce(o.suspect,0)=0 and d.event='LANE_SHADOW' and d.tier=? and d.build_version=? and d.id>?
             order by d.id desc limit ?""",(tier,VERSION,decision_floor,max(LANE_HEALTH_WINDOW,LANE_HEALTH_RECOVERY_MIN_SIGNALS))).fetchall()
         sm=_lane_metrics(shadow_rows)
         if sm["n"]>=LANE_HEALTH_RECOVERY_MIN_SIGNALS and sm["passes"]:
@@ -4202,7 +4220,7 @@ def lane_health(db, tier):
 
     rows=db.conn.execute("""select o.max_return_pct,o.min_return_pct,o.final_return_pct
         from signal_outcomes o join signals s on s.id=o.signal_id
-        where o.horizon_min=30 and s.kind='EARLY' and s.action=? and s.id>?
+        where o.horizon_min=30 and coalesce(o.suspect,0)=0 and s.kind='EARLY' and s.action=? and s.id>?
         order by s.id desc limit ?""",(tier,signal_floor,LANE_HEALTH_WINDOW)).fetchall()
     lm=_lane_metrics(rows); n=lm["n"]
     if n < LANE_HEALTH_MIN_SIGNALS:
@@ -4269,7 +4287,7 @@ def capital_core_health(db):
     if state=="QUARANTINED":
         rows=db.conn.execute("""select o.max_return_pct,o.min_return_pct,o.final_return_pct
             from decision_outcomes o join decision_ledger d on d.id=o.decision_id
-            where o.horizon_min=30 and d.event='CAPITAL_SHADOW' and d.build_version=? and d.id>?
+            where o.horizon_min=30 and coalesce(o.suspect,0)=0 and d.event='CAPITAL_SHADOW' and d.build_version=? and d.id>?
             order by d.id desc limit ?""",(VERSION,floor,max(CAPITAL_CORE_WINDOW,CAPITAL_CORE_RECOVERY_PATHS))).fetchall()
         m=_capital_core_metrics(rows)
         if m["n"]>=CAPITAL_CORE_RECOVERY_PATHS and m["passes"]:
@@ -4280,7 +4298,7 @@ def capital_core_health(db):
                 "recovery_needed":CAPITAL_CORE_RECOVERY_PATHS,"reason":str(gov.get("reason") or ""),**m}
     rows=db.conn.execute("""select o.max_return_pct,o.min_return_pct,o.final_return_pct
         from decision_outcomes o join decision_ledger d on d.id=o.decision_id
-        where o.horizon_min=30 and d.build_version=? and d.id>?
+        where o.horizon_min=30 and coalesce(o.suspect,0)=0 and d.build_version=? and d.id>?
           and d.event in ('ENTRY_SENT','ENTRY_SENT_HOT','ENTRY_SENT_TEST')
           and d.tier in ('ENTRY OPTION','STRONG ENTRY','FLOW ENTRY','REVERSAL ENTRY','FAST ENTRY')
         order by d.id desc limit ?""",(VERSION,floor,CAPITAL_CORE_WINDOW)).fetchall()
@@ -4376,7 +4394,7 @@ def token_trauma_context(db, chain, token, now=None):
     row=db.conn.execute("""select d.ts,d.symbol,o.min_return_pct,o.max_return_pct,o.final_return_pct
         from decision_ledger d join decision_outcomes o on o.decision_id=d.id
         where d.chain=? and d.token=? and d.ts>=? and d.ts<?
-          and d.event in ('ENTRY_SENT','ENTRY_SENT_HOT','ENTRY_SENT_TEST') and o.horizon_min=30
+          and d.event in ('ENTRY_SENT','ENTRY_SENT_HOT','ENTRY_SENT_TEST') and o.horizon_min=30 and coalesce(o.suspect,0)=0
           and o.min_return_pct<=?
         order by d.ts desc limit 1""",
         (str(chain or '').lower(),str(token or ''),cutoff,now,TOKEN_TRAUMA_DRAWDOWN_PCT)).fetchone()
@@ -5974,8 +5992,32 @@ async def evaluate_signals(http, db):
         if current <= 0:
             continue
         ret = (current / max(signal["price"],1e-18) - 1)*100
+        entry_liq=f(signal.get("liquidity"))
+        suspect=not price_move_plausible(current/max(f(signal["price"]),1e-18),
+                                         (f(nest(pair,"liquidity","usd",default=0))/entry_liq) if entry_liq>0 else None)
         for cp in checkpoints:
-            db.add_eval(signal["id"], cp, current, ret)
+            db.add_eval(signal["id"], cp, current, ret, suspect=suspect)
+
+
+def _capture_outcome_row(db, table, key_col, key, chain, token, start_ts, entry, entry_liq, horizon, now):
+    """Compute one forward outcome from cleaned observations and store it with integrity data.
+
+    Returns True when a row was written. Paths with no usable samples are written as
+    suspect once their horizon is 2h stale, so they stop being retried every pass.
+    """
+    end=int(start_ts)+horizon*60
+    obs=db.conn.execute("""select ts,price,liquidity from observations where chain=? and token=?
+        and ts>=? and ts<=? and price>0 order by ts asc""",(chain,token,int(start_ts),end)).fetchall()
+    out=outcome_from_path([(r["ts"],r["price"],r["liquidity"]) for r in obs],entry,entry_liq)
+    if out is None:
+        if now-end < 2*3600:
+            return False
+        out={"max_return_pct":0.0,"min_return_pct":0.0,"final_return_pct":0.0,"samples":0,"last_obs_ts":0,"suspect":1}
+    db.conn.execute(f"""insert or ignore into {table}({key_col},horizon_min,completed_ts,max_return_pct,min_return_pct,
+        final_return_pct,samples,last_obs_ts,suspect) values(?,?,?,?,?,?,?,?,?)""",
+        (key,horizon,now,out["max_return_pct"],out["min_return_pct"],out["final_return_pct"],
+         out["samples"],out["last_obs_ts"],out["suspect"]))
+    return True
 
 
 def capture_signal_outcomes(db):
@@ -5990,17 +6032,12 @@ def capture_signal_outcomes(db):
             order by s.ts asc limit 60""",
             (now-horizon*60, now-8*3600, horizon)).fetchall()
         for row in rows:
-            sig=dict(row); end=sig["ts"]+horizon*60
-            obs=db.conn.execute("""select ts,price from observations
-                where chain=? and token=? and ts>=? and ts<=? and price>0 order by ts asc""",
-                (sig["chain"],sig["token"],sig["ts"],end)).fetchall()
-            if len(obs)<2 or f(sig.get("price"))<=0:
+            sig=dict(row)
+            if f(sig.get("price"))<=0:
                 continue
-            entry=f(sig["price"]); prices=[f(x["price"]) for x in obs if f(x["price"])>0]
-            if len(prices)<2: continue
-            maxret=(max(prices)/entry-1)*100; minret=(min(prices)/entry-1)*100; final=(prices[-1]/entry-1)*100
-            db.conn.execute("""insert or ignore into signal_outcomes(signal_id,horizon_min,completed_ts,max_return_pct,min_return_pct,final_return_pct)
-                values(?,?,?,?,?,?)""",(sig["id"],horizon,now,maxret,minret,final)); added+=1
+            if _capture_outcome_row(db,"signal_outcomes","signal_id",sig["id"],sig["chain"],sig["token"],sig["ts"],
+                                    f(sig["price"]),f(sig.get("liquidity")),horizon,now):
+                added+=1
     if added: db.conn.commit()
     return added
 
@@ -6020,18 +6057,11 @@ def capture_decision_outcomes(db):
               and not exists(select 1 from decision_outcomes o where o.decision_id=d.id and o.horizon_min=?)
             order by d.ts asc limit 100""",(now-horizon*60,now-10*3600,horizon)).fetchall()
         for row in rows:
-            d=dict(row); entry=f(d.get("price")); end=int(d["ts"])+horizon*60
-            if entry<=0: continue
-            obs=db.conn.execute("""select ts,price from observations where chain=? and token=?
-                and ts>=? and ts<=? and price>0 order by ts asc""",
-                (d["chain"],d["token"],int(d["ts"]),end)).fetchall()
-            prices=[f(x["price"]) for x in obs if f(x["price"])>0]
-            if len(prices)<2: continue
-            maxret=(max(prices)/entry-1)*100; minret=(min(prices)/entry-1)*100; final=(prices[-1]/entry-1)*100
-            db.conn.execute("""insert or ignore into decision_outcomes(
-                decision_id,horizon_min,completed_ts,max_return_pct,min_return_pct,final_return_pct)
-                values(?,?,?,?,?,?)""",(int(d["id"]),horizon,now,maxret,minret,final))
-            added+=1
+            d=dict(row)
+            if f(d.get("price"))<=0: continue
+            if _capture_outcome_row(db,"decision_outcomes","decision_id",int(d["id"]),d["chain"],d["token"],d["ts"],
+                                    f(d["price"]),f(d.get("liquidity")),horizon,now):
+                added+=1
     if added: db.conn.commit()
     return added
 
@@ -6417,13 +6447,40 @@ def _parse_usd(tokens, default=None):
     return default
 
 
-async def track_paper_positions(http,db):
+_PAPER_GLITCH_SINCE={}
+
+
+def paper_price_glitch(pos,current,liq,now=None):
+    """True while a paper position's latest price is implausible versus its entry.
+
+    A glitch never moves peaks or triggers exits. If it persists past
+    PAPER_GLITCH_MAX_MINUTES the caller closes the simulation as unmeasurable.
+    """
+    now=float(now if now is not None else time.time())
+    entry=f(pos.get("entry_price")); entry_liq=f(pos.get("entry_liquidity"))
+    ok=price_move_plausible(current/max(entry,1e-18),(liq/entry_liq) if entry_liq>0 else None)
+    pid=int(pos["id"])
+    if ok:
+        _PAPER_GLITCH_SINCE.pop(pid,None)
+        return False
+    _PAPER_GLITCH_SINCE.setdefault(pid,now)
+    return True
+
+
+async def track_paper_positions(http,db,prices=None):
+    """Advance paper/shadow simulations. ``prices`` maps token -> pair (batched fetch)."""
     events=[]
     for pos in db.paper_open_positions():
-        pair=await pair_for_token(http,pos["chain"],pos["token"])
+        pair=(prices or {}).get(pos["token"]) if prices is not None else await pair_for_token(http,pos["chain"],pos["token"])
         if not pair: continue
         current=f(pair.get("priceUsd")); m=metrics(pair)
         if current<=0: continue
+        if paper_price_glitch(pos,current,m["liq"]):
+            since=_PAPER_GLITCH_SINCE.get(int(pos["id"]),time.time())
+            if time.time()-since>=PAPER_GLITCH_MAX_MINUTES*60:
+                db.paper_close_unmeasurable(pos["id"],"price data unreliable (feed glitch) — excluded from proof")
+                _PAPER_GLITCH_SINCE.pop(int(pos["id"]),None)
+            continue
         ret=(current/max(pos["entry_price"],1e-18)-1)*100
         peak=max(f(pos.get("peak_price") or pos["entry_price"]),current)
         if peak>f(pos.get("peak_price") or pos["entry_price"]): db.paper_update_peak(pos["id"],peak)
@@ -7467,7 +7524,7 @@ async def handle_commands(http, db, state):
             bad=sum(1 for x in h60 if f(x.get("min_return_pct"))<=-15)
             cutoff=int(time.time()-24*3600)
             drows=db.conn.execute("""select d.event,o.max_return_pct,o.min_return_pct from decision_outcomes o
-                join decision_ledger d on d.id=o.decision_id where d.ts>=? and o.horizon_min=60""",(cutoff,)).fetchall()
+                join decision_ledger d on d.id=o.decision_id where d.ts>=? and o.horizon_min=60 and coalesce(o.suspect,0)=0""",(cutoff,)).fetchall()
             blocked=[dict(x) for x in drows if str(x["event"]) in {"NEAR_ENTRY","HOT_WAIT"}]
             shadow=[dict(x) for x in drows if str(x["event"])=="LANE_SHADOW"]
             blocked_runners=sum(1 for x in blocked if f(x.get("max_return_pct"))>=15 and f(x.get("min_return_pct"))>-10)
@@ -8405,7 +8462,7 @@ async def daily_report(http, db):
         st=str(p.get("guardian_state") or "ENTRY").replace("_"," "); states[st]=states.get(st,0)+1
     stateline=", ".join(f"{k} {v}" for k,v in states.items()) or "none"
     d60=db.conn.execute("""select d.event,o.max_return_pct,o.min_return_pct from decision_outcomes o
-        join decision_ledger d on d.id=o.decision_id where d.ts>=? and o.horizon_min=60""",(cutoff,)).fetchall()
+        join decision_ledger d on d.id=o.decision_id where d.ts>=? and o.horizon_min=60 and coalesce(o.suspect,0)=0""",(cutoff,)).fetchall()
     blocked=[dict(x) for x in d60 if str(x["event"]) in {"NEAR_ENTRY","HOT_WAIT"}]
     shadow=[dict(x) for x in d60 if str(x["event"])=="LANE_SHADOW"]
     blocked_good=sum(1 for x in blocked if f(x.get("max_return_pct"))>=15 and f(x.get("min_return_pct"))>-10)
