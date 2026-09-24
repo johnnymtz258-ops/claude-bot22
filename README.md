@@ -1,5 +1,7 @@
 # FomoBot v16.2 QUALITY MEASUREMENT
 
+> **Overnight data review (Sep 24):** two months of your data show no measurable edge yet: paper trades lose ~3.9% per trade after fees and your journaled trades lost 9.7%. The bot now shows each alert type's real track record in every BUY alert, records unbiased price paths for fast research, rejects price-feed glitches, and can reclaim token-account rent. See `OVERNIGHT_REPORT.txt`.
+>
 > **Reliability patch applied.** See `V16_2_RELIABILITY_NOTES.txt`. Live stop-losses no longer freeze on an unrelated stuck transaction. Dropped transactions no longer lock live trading forever. Exits run in their own loop and survive `/autolive off`. Copy positions have their own stop-loss and max hold. Fills are measured from the transaction itself. The proof gate needs a statistically consistent edge that doesn't depend on one lucky trade before it allows real money.
 
 ## What v16 changes

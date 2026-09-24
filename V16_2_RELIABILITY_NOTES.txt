@@ -82,3 +82,36 @@ Compact review export (added after the initial patch)
     wallet address is removed as well. No keypair or seed phrase is ever read.
 14. start_mac.command rotates bot.log to bot.log.1 at each (re)start once it exceeds 50 MB;
     previously it grew forever.
+
+Data-driven upgrades (after analysing the 2-month export)
+----------------------------------------------------------
+What the data showed (Aug 29 - Sep 24):
+- 389 closed paper/shadow trades: 13% wins, profit factor 0.40, -3.9% per trade after
+  simulated fees (-1.4% before fees). Every build lost, v15.1 included.
+- 59 journaled real trades: net -$69.72 on $720 traded (-9.7%); biggest losses were rugs.
+- Across 24,874 deduplicated candidates the median forward move was ~0% at 30/60/120 min.
+  No score/feature quintile was positive in both halves of the period, later filter stages
+  did not pick better coins than early ones, and a walk-forward model's top picks were still
+  negative after fees in 3 of 4 folds. Conclusion: no measurable edge yet; fees (~2.6%
+  round trip) make every variant lose.
+
+15. Price-feed glitch guard. Forward "returns" like +383,398% were data errors. An AMM
+    plausibility check (a trading-driven k-fold move scales pool liquidity ~sqrt(k)) and
+    single-spike removal now protect outcomes, checkpoint evals and paper trades. Suspect
+    rows are flagged and skipped by every reader (analog veto, lane/capital health, token
+    trauma, adaptive calibration, reports). A glitched paper price never books a take-profit.
+16. Outcome coverage. Outcomes record sample count and last observation time; paths with no
+    usable data are closed as suspect instead of being retried forever.
+17. Fast paper monitor. Paper exits run every PAPER_MONITOR_SECONDS (6) with one batched
+    request per 30 tokens. Before, the ~8% risk stop realized -15% on average because prices
+    were checked once per slow scan.
+18. Track record in every BUY alert, /trackrecord, and /signalpolicy proven (only alert types
+    whose paper record passes the proof-gate noise test).
+19. Candidate path tracker (path_tracker.py). Follows every evaluated coin for 2h after the
+    decision even when it leaves the scanner lists, with exact first-touch times for
+    +10..+100% / -5..-50%. Fixes the survivorship bias in old outcomes and allows exact
+    backtests of any take-profit/stop rule on ~1,000 candidates per day.
+20. research_report.py / research_report.command: the full analysis above, reproducible in
+    ~15 seconds on the live database or on an export.
+21. Rent reclaim (/reclaim, automatic every 30 min for the live bot wallet): closes empty token
+    accounts to recover ~0.002 SOL each. Transaction format verified against the Solana SDK.

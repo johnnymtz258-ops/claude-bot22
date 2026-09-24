@@ -1,0 +1,87 @@
+FOMOBOT — OVERNIGHT REVIEW (Sep 24)
+===================================
+
+THE BOTTOM LINE
+---------------
+I analysed two months of your bot's data (Aug 29 - Sep 24). The honest result:
+the bot does not have a money-making edge yet. Every version lost money in testing,
+including v15.1 and v16.2. This is common: most trading bots never find one.
+Fees are the biggest single reason the losses are as large as they are.
+
+What I built tonight doesn't hide that. It makes the bot tell you the truth in every
+alert, protects its data from glitches, and lets us test new ideas in days instead of
+weeks. If a real edge exists, it can now be found and proven quickly. If it doesn't,
+the bot keeps you from paying for that lesson with real money.
+
+
+THE NUMBERS
+-----------
+Paper trades (the bot's own simulated trades, with fees):
+  389 trades | 13% winners | -$76.63 total | about -3.9% per trade after fees
+  Before fees about -1.4% per trade, so fees (~2.6% per buy+sell) more than double the loss.
+  Every version lost:  v15.0 -$45.03 | v15.1 -$6.61 | v16.0 -$11.50 | v16.1 -$12.10
+
+Your recorded real trades (/bought and /sell):
+  59 trades | 22 winners | -$69.72 on $720 traded (-9.7%)
+  Biggest losses: SHARK -$24.98 and USWS -$7.99 (both rugged to ~zero), catonfone -$11.27
+  Best: CATE +$10.59, JEANCOIN +$6.84, STACY +$5.02
+
+Every coin the bot looked at (24,874 of them, one per coin per 30 minutes):
+  The typical coin was flat 30, 60 and 120 minutes later. No setting of score, market cap,
+  liquidity, momentum, buy/sell ratio or volume beat fees in both halves of the month.
+  The bot's extra filter stages did not pick better coins than its first-pass list.
+  A machine-learning model could spot which coins would move a lot, but not which
+  direction. Its top picks hit +50% 43% of the time but -15% 79% of the time.
+
+Where the paper losses came from:
+  224 trades closed by the 30-minute time stop at about -1.4% (then fees on top)
+   92 trades hit the stop-loss, and lost 15% on average although the stop is ~8%
+      (prices were checked too slowly, so coins fell past the stop)
+   37 take-profits won +29% on average: the bot does catch runners,
+      just not often enough to pay for everything else.
+
+
+WHAT CHANGED TONIGHT (all tested: 272 automated tests pass)
+------------------------------------------------------------
+1. Every BUY alert now shows its track record, for example:
+   "TRACK RECORD (ENTRY OPTION, paper, last 14d): 107 tests | 19% wins | avg -5.3% per
+    trade after fees. This alert type has LOST money in testing..."
+   /trackrecord shows every alert type.
+2. New /signalpolicy proven: only alert you for alert types whose record is positive AND
+   consistent (the same statistical test that guards real money). Today nothing passes,
+   so you would get no BUY alerts until something earns it.
+3. Price glitch protection. The data had fake moves like +383,398% in one hour (a price-feed
+   error). These can no longer count as wins, trigger fake take-profits, or unlock
+   real-money trading.
+4. Faster paper exits: checked every 6 seconds instead of once per slow scan, so paper
+   results match what a live bot would really get.
+5. Price-path recorder: every coin the bot considers is now followed for 2 hours, even after
+   it drops off the trending lists, with the exact second it first hit +10/20/30/50/100%
+   or -5/8/10/15/25/50%. That's around 1,000 coins a day of clean data, enough to test any
+   take-profit/stop rule exactly in days instead of waiting weeks for paper trades.
+6. One-click research: double-click research_report.command to rerun this whole analysis
+   yourself in about 15 seconds.
+7. Rent reclaim (/reclaim): each coin bought from the bot wallet locks ~0.002 SOL in a token
+   account. The bot now gets it back after selling. This only applies to the live bot wallet,
+   not your Phantom/Fomo wallet.
+(Earlier today: stop-loss and transaction-safety fixes for live trading. See
+ V16_2_RELIABILITY_NOTES.txt.)
+
+
+WHAT I RECOMMEND
+----------------
+1. Install the new version (instructions in the chat). Keep your .env and never delete
+   ~/Library/Application Support/FomoBot/fomo_master.db.
+2. Send /signalpolicy proven in Telegram. The alerts you've been trading have lost money in
+   testing; this stops them until one type proves itself. Prefer to keep seeing them? Then
+   at least read the TRACK RECORD line before buying.
+3. Don't put in new real money for now. Keep real autopilot OFF and don't set /bankroll.
+4. Check your trading app's fee. The paper results assume ~2.6% per buy+sell including
+   slippage. If your app charges ~1% per swap, fees alone cost you ~2% per round trip, and
+   that's before price moves.
+5. Leave the bot running about a week, then run export_review.command and send me the file.
+   With ~7,000 recorded price paths I can test exit rules exactly and check whether any
+   corner of the market has a real edge. If one exists, we build around it. If not, you'll
+   know for sure without having lost more money finding out.
+
+No bot can promise profit. What this version does is tell you the truth quickly.
