@@ -1,4 +1,4 @@
-"""Hardened optional local Solana execution for FomoBot v15.2.
+"""Hardened optional local Solana execution for FomoBot.
 
 The execution path is deliberately fail-closed:
 - wallet secrets stay in a local Solana CLI-style JSON keypair file;
@@ -107,7 +107,8 @@ def keypair_fingerprint(path: str | Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
-def _wallet_signer_index(tx_raw: bytes, pub: bytes):
+def _message_layout(tx_raw: bytes):
+    """Return (sigs_start, sig_count, message_start, message, header_start, keys_start, account_count)."""
     sig_count, after_count, _ = _read_shortvec(tx_raw, 0)
     sigs_start = after_count
     message_start = sigs_start + sig_count * 64
@@ -117,8 +118,29 @@ def _wallet_signer_index(tx_raw: bytes, pub: bytes):
     header_start = 1 if (message[0] & 0x80) else 0
     if len(message) < header_start + 4:
         raise ValueError("transaction header truncated")
-    required_signers = message[header_start]
     account_count, keys_start, _ = _read_shortvec(message, header_start + 3)
+    return sigs_start, sig_count, message_start, message, header_start, keys_start, account_count
+
+
+def transaction_recent_blockhash(tx_b64: str) -> str:
+    """Base58 recent blockhash of a legacy/v0 transaction (empty string if unparsable).
+
+    Stored with each execution intent so reconciliation can prove that a transaction
+    which never appeared on chain can no longer land (its blockhash expired).
+    """
+    try:
+        raw = base64.b64decode(tx_b64)
+        _, _, _, message, _, keys_start, account_count = _message_layout(raw)
+        start = keys_start + account_count * 32
+        bh = message[start:start + 32]
+        return b58encode(bh) if len(bh) == 32 else ""
+    except Exception:
+        return ""
+
+
+def _wallet_signer_index(tx_raw: bytes, pub: bytes):
+    sigs_start, sig_count, message_start, message, header_start, keys_start, account_count = _message_layout(tx_raw)
+    required_signers = message[header_start]
     if account_count < required_signers:
         raise ValueError("invalid signer/account count")
     keys_end = keys_start + account_count * 32
@@ -182,6 +204,18 @@ class LiveExecutor:
             self.max_price_impact = float(os.getenv("AUTO_LIVE_MAX_PRICE_IMPACT_PCT", "4"))
         except Exception:
             self.max_price_impact = 4.0
+        try:
+            # Exits must be able to get out of a collapsing memecoin. A 4% entry cap on a
+            # stop-loss sell would refuse the exit exactly when liquidity is thinning.
+            self.max_exit_price_impact = max(self.max_price_impact, float(os.getenv("AUTO_LIVE_MAX_EXIT_PRICE_IMPACT_PCT", "25")))
+        except Exception:
+            self.max_exit_price_impact = max(self.max_price_impact, 25.0)
+        try:
+            # A transaction that never appeared on chain is only declared dead after its
+            # blockhash is provably expired and at least this many seconds have passed.
+            self.expiry_grace_seconds = max(120.0, float(os.getenv("LIVE_EXPIRY_GRACE_SECONDS", "180")))
+        except Exception:
+            self.expiry_grace_seconds = 180.0
         try:
             self.max_fill_slippage = float(os.getenv("AUTO_LIVE_MAX_FILL_SLIPPAGE_PCT", "6"))
         except Exception:
@@ -366,6 +400,95 @@ class LiveExecutor:
             await asyncio.sleep(0.8)
         return {"confirmed": False, "failed": False, "err": None, "slot": (last or {}).get("slot") if isinstance(last, dict) else None, "status": last, "timeout": True}
 
+    async def _signature_status_once(self, http, signature):
+        """One status lookup. Returns (rpc_ok, row_or_None) so an RPC failure is never read as 'not found'."""
+        result = await self._rpc_checked(http, "getSignatureStatuses", [[signature], {"searchTransactionHistory": True}])
+        if not result.get("ok") or not isinstance(result.get("value"), dict):
+            return False, None
+        vals = result["value"].get("value") or []
+        return True, (vals[0] if vals else None)
+
+    async def tx_owner_deltas(self, http, signature, mints, owner=None, attempts=3):
+        """Exact balance changes of this wallet caused by one confirmed transaction.
+
+        Wallet-wide before/after balances are corrupted by concurrent swaps (autopilot and
+        copy engine share one wallet), token-account rent and lagging failover RPCs. The
+        transaction's own pre/post balances are exact. Returns {mint: signed raw delta}
+        or None when the transaction cannot be read. SOL delta includes network fees and
+        rent, i.e. the true cash cost/proceeds.
+        """
+        owner = owner or self.address()
+        if not owner or not signature:
+            return None
+        tx = None
+        for attempt in range(max(1, int(attempts))):
+            res = await self._rpc_checked(http, "getTransaction", [signature, {
+                "encoding": "jsonParsed", "commitment": "confirmed", "maxSupportedTransactionVersion": 0}])
+            tx = res.get("value") if res.get("ok") else None
+            if isinstance(tx, dict) or not res.get("ok"):
+                break
+            # Confirmed signatures can take a moment to become fetchable on some RPCs.
+            if attempt + 1 < attempts:
+                await asyncio.sleep(0.6)
+        if not isinstance(tx, dict):
+            return None
+        meta = tx.get("meta") or {}
+        if not isinstance(meta, dict) or meta.get("err") is not None:
+            return None
+        keys = []
+        for item in ((tx.get("transaction") or {}).get("message") or {}).get("accountKeys") or []:
+            keys.append(item if isinstance(item, str) else str((item or {}).get("pubkey") or ""))
+
+        def token_total(field, mint):
+            total = 0
+            for bal in meta.get(field) or []:
+                if str(bal.get("owner") or "") == owner and str(bal.get("mint") or "") == mint:
+                    total += int(((bal.get("uiTokenAmount") or {}).get("amount")) or 0)
+            return total
+
+        out = {}
+        try:
+            for mint in mints:
+                delta = token_total("postTokenBalances", mint) - token_total("preTokenBalances", mint)
+                if mint == WSOL_MINT:
+                    if owner not in keys:
+                        return None
+                    i = keys.index(owner)
+                    delta += int(meta["postBalances"][i]) - int(meta["preBalances"][i])
+                out[mint] = delta
+        except Exception:
+            return None
+        return out
+
+    async def _blockhash_expired(self, http, intent):
+        """True only when chain state proves the signed transaction can never land."""
+        try:
+            ctx = json.loads(intent.get("context_json") or "{}")
+        except Exception:
+            ctx = {}
+        age = time.time() - float(intent.get("created_ts") or time.time())
+        if age < self.expiry_grace_seconds:
+            return False
+        blockhash = str(ctx.get("recent_blockhash") or "")
+        if blockhash:
+            res = await self._rpc_checked(http, "isBlockhashValid", [blockhash, {"commitment": "confirmed"}])
+            if not res.get("ok") or not isinstance(res.get("value"), dict):
+                return False
+            if res["value"].get("value") is not False:
+                return False
+        elif age < 1800:
+            # Legacy intents recorded before the blockhash was journaled: blockhashes
+            # live ~60-90s, so 30 minutes without a trace is far beyond any landing window.
+            return False
+        # Blockhash is dead; confirm twice that the signature never landed.
+        for attempt in range(2):
+            ok, row = await self._signature_status_once(http, str(intent.get("signature") or ""))
+            if not ok or row is not None:
+                return False
+            if attempt == 0:
+                await asyncio.sleep(1.0)
+        return True
+
     async def _stable_post_balance(self, http, mint, pre_raw, attempts=5):
         last = None
         for i in range(max(1, attempts)):
@@ -380,7 +503,7 @@ class LiveExecutor:
 
     async def swap(self, http, input_mint: str, output_mint: str, amount_raw: int, *,
                    db=None, idempotency_key="", side="", token="", symbol="", tier="",
-                   signal_id=None, position_id=None, amount_usd=0.0, context=None):
+                   signal_id=None, position_id=None, amount_usd=0.0, context=None, max_price_impact=None):
         issues = self.readiness()
         if issues:
             return {"ok": False, "error": "; ".join(issues), "error_kind": "NOT_READY", "retryable": False}
@@ -448,8 +571,11 @@ class LiveExecutor:
             impact = abs(impact_raw) * (100 if abs(impact_raw) <= 1 else 1)
         except Exception:
             impact = 0.0
-        if impact and impact > self.max_price_impact:
-            return {"ok": False, "error": f"price impact {impact:.2f}% exceeds {self.max_price_impact:.2f}%", "error_kind": "PRICE_IMPACT", "retryable": False}
+        if max_price_impact is None:
+            max_price_impact = self.max_exit_price_impact if "SELL" in str(side).upper() else self.max_price_impact
+        if impact and impact > float(max_price_impact):
+            return {"ok": False, "error": f"price impact {impact:.2f}% exceeds {float(max_price_impact):.2f}%", "error_kind": "PRICE_IMPACT",
+                    "retryable": "SELL" in str(side).upper()}
 
         ok_key, key_msg = self.keypair_integrity()
         if not ok_key:
@@ -461,6 +587,8 @@ class LiveExecutor:
             return {"ok": False, "error": f"local transaction signing failed: {exc}", "error_kind": "SIGNING", "retryable": False}
 
         expected_output = int(order.get("outAmount") or order.get("outputAmount") or 0)
+        context = dict(context or {})
+        context.setdefault("recent_blockhash", transaction_recent_blockhash(signed))
         if db is not None:
             intent, created = db.create_execution_intent(
                 idempotency_key=idem, side=side, token=token, symbol=symbol, tier=tier,
@@ -512,11 +640,19 @@ class LiveExecutor:
             return {"ok": False, "executed": False, "ambiguous": True, "error": detail, "error_kind": "CONFIRM_TIMEOUT",
                     "retryable": True, "signature": signature, "order": order, "execute": execute_result}
 
-        post_out = await self._stable_post_balance(http, output_mint, pre_out.get("raw"))
-        post_in = await self._mint_balance_checked(http, input_mint)
         actual_output = None
-        if post_out.get("ok"):
-            actual_output = max(0, int(post_out.get("raw") or 0) - int(pre_out.get("raw") or 0))
+        actual_input = None
+        deltas = await self.tx_owner_deltas(http, signature, [input_mint, output_mint])
+        if deltas and deltas.get(output_mint, 0) > 0:
+            actual_output = int(deltas[output_mint])
+            actual_input = max(0, -int(deltas.get(input_mint, 0))) or None
+            post_out = {"ok": True, "raw": int(pre_out.get("raw") or 0) + actual_output}
+            post_in = {"ok": False, "raw": None}
+        else:
+            post_out = await self._stable_post_balance(http, output_mint, pre_out.get("raw"))
+            post_in = await self._mint_balance_checked(http, input_mint)
+            if post_out.get("ok"):
+                actual_output = max(0, int(post_out.get("raw") or 0) - int(pre_out.get("raw") or 0))
         if actual_output is None or actual_output <= 0:
             detail = "Solana confirmed execution but output-wallet delta is not yet verifiable"
             if db is not None:
@@ -545,7 +681,7 @@ class LiveExecutor:
                                        confirmed_slot=chain.get("slot"), error_kind=("EXCESS_FILL_SLIPPAGE" if warning else ""), detail=warning)
         return {
             "ok": True, "executed": True, "reconciled": True, "warning": warning,
-            "signature": signature, "input_raw": amount_raw, "output_raw": actual_output,
+            "signature": signature, "input_raw": amount_raw, "actual_input_raw": actual_input, "output_raw": actual_output,
             "expected_output_raw": expected_output, "slippage_pct": slippage_pct,
             "order": order, "execute": execute_result, "chain": chain, "idempotency_key": idem,
             "jupiter_http": execute_http,
@@ -572,7 +708,25 @@ class LiveExecutor:
                 db.update_execution_intent(idem, state="FAILED", error_kind="CHAIN_FAILED", detail=str(chain.get("err")), confirmed_slot=chain.get("slot"))
             return {"resolved": True, "state": "FAILED", "chain": chain}
         if not chain.get("confirmed"):
+            if await self._blockhash_expired(http, intent):
+                detail = "transaction never landed and its blockhash expired; safe to treat as not executed"
+                if db is not None:
+                    db.update_execution_intent(idem, state="FAILED", error_kind="EXPIRED_NOT_LANDED", detail=detail)
+                return {"resolved": True, "state": "FAILED", "expired": True, "chain": chain}
             return {"resolved": False, "state": "AMBIGUOUS", "chain": chain}
+        input_mint = str(intent.get("input_mint") or "")
+        output_mint = str(intent.get("output_mint") or "")
+        deltas = await self.tx_owner_deltas(http, signature, [m for m in (input_mint, output_mint) if m])
+        if deltas and deltas.get(output_mint, 0) > 0:
+            actual = int(deltas[output_mint])
+            actual_input = max(0, -int(deltas.get(input_mint, 0))) or None
+            expected = int(intent.get("expected_output_raw") or 0)
+            slip = (1.0 - actual / expected) * 100.0 if expected > 0 else None
+            if db is not None:
+                db.update_execution_intent(idem, state="CONFIRMED", actual_output_raw=str(actual), slippage_pct=slip,
+                                           confirmed_slot=chain.get("slot"), error_kind="", detail="reconciled from transaction balances")
+            return {"resolved": True, "state": "CONFIRMED", "actual_output_raw": actual, "actual_input_raw": actual_input,
+                    "slippage_pct": slip, "chain": chain}
         pre_out = intent.get("pre_output_raw")
         try:
             pre_out = int(pre_out) if pre_out is not None else None

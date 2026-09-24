@@ -640,6 +640,10 @@ PROOF_FIRST_REQUIRE_MATURE = eb("PROOF_FIRST_REQUIRE_MATURE", True)
 PROOF_ELIGIBLE_MIN_SCORE = max(50.0, min(90.0, ef("PROOF_ELIGIBLE_MIN_SCORE", 55.0)))
 PROOF_FIRST_MIN_UNIQUE_TOKENS = max(3, min(PROOF_FIRST_MIN_PATHS, ei("PROOF_FIRST_MIN_UNIQUE_TOKENS", 6)))
 PROOF_FIRST_MIN_NET_ROI_PCT = max(0.0, min(10.0, ef("PROOF_FIRST_MIN_NET_ROI_PCT", 1.0)))
+# Noise guards: small fat-tailed samples must show a consistent per-trade edge and must
+# not depend on one outlier before live capital is authorized.
+PROOF_FIRST_MIN_T_STAT = max(0.0, min(4.0, ef("PROOF_FIRST_MIN_T_STAT", 1.3)))
+PROOF_FIRST_REQUIRE_EX_BEST_POSITIVE = eb("PROOF_FIRST_REQUIRE_EX_BEST_POSITIVE", True)
 # v15.3 decouples signal visibility from live-capital authorization. A fully-qualified
 # core setup can emit an actionable TEST BUY alert while the fresh proof cohort is still
 # learning. Real autopilot and full live sizing remain locked behind proof/risk gates.
@@ -696,6 +700,14 @@ AUTO_LIVE_ALLOW_FRESH_DEFAULT = eb("AUTO_LIVE_ALLOW_FRESH_DEFAULT", False)
 AUTO_LIVE_FRESH_SIZE_MULT = ef("AUTO_LIVE_FRESH_SIZE_MULTIPLIER", 0.50)
 AUTO_LIVE_ALLOW_REENTRY = eb("AUTO_LIVE_ALLOW_REENTRY", False)
 AUTO_LIVE_ENTRY_LOOKBACK_MIN = ei("AUTO_LIVE_ENTRY_LOOKBACK_MINUTES", 5)
+# Live exits run in their own fast loop so a slow or failing discovery scan can never
+# delay or skip a stop-loss.
+AUTO_LIVE_MONITOR_SECONDS = max(3, ei("AUTO_LIVE_MONITOR_SECONDS", 5))
+# /autolive off stops NEW buys. By default the bot keeps protecting positions it already
+# bought (stop/trail/liquidity exits) instead of silently abandoning them.
+AUTO_LIVE_EXITS_WHEN_OFF = eb("AUTO_LIVE_EXITS_WHEN_OFF", True)
+# A confirmed-but-unaccounted intent older than this is treated as a crash orphan.
+AUTO_LIVE_ORPHAN_AGE_SECONDS = max(60, ei("AUTO_LIVE_ORPHAN_AGE_SECONDS", 300))
 
 # v11.3 STABILITY GUARDIAN — continuous position supervision + adaptive calibration.
 GUARDIAN_ENABLED = eb("GUARDIAN_ENABLED", True)
@@ -1256,6 +1268,24 @@ class Database:
 
     def has_unresolved_execution(self):
         return bool(self.conn.execute("select 1 from execution_intents where state in ('SIGNED','SUBMITTING','AMBIGUOUS','CONFIRMED_UNRECONCILED') limit 1").fetchone())
+
+    def has_unresolved_execution_for_token(self, token):
+        return bool(self.conn.execute("select 1 from execution_intents where token=? and state in ('SIGNED','SUBMITTING','AMBIGUOUS','CONFIRMED_UNRECONCILED') limit 1",
+                                      (str(token),)).fetchone())
+
+    def unaccounted_confirmed_intents(self, min_age=300, limit=20):
+        """CONFIRMED on chain but never written to the journal (process died in between).
+
+        Only intents created after this accounting floor was introduced are considered, so
+        historical rows from builds that never marked intents ACCOUNTED are not re-applied.
+        """
+        floor=int(self.get_meta("intent_accounting_floor_ts","0") or 0)
+        if floor<=0:
+            floor=int(time.time()); self.set_meta("intent_accounting_floor_ts",floor)
+        cutoff=int(time.time())-max(0,int(min_age))
+        return [dict(r) for r in self.conn.execute(
+            """select * from execution_intents where state='CONFIRMED' and created_ts>=? and updated_ts<=?
+               order by created_ts asc limit ?""",(floor,cutoff,int(limit))).fetchall()]
 
     def set_meta(self, key, value):
         self.conn.execute("insert or replace into meta(key,value) values(?,?)", (key, str(value)))
@@ -4425,7 +4455,9 @@ def proof_candidate_eligibility(tier, score):
 def proof_first_health(db):
     return proof_metrics(db.proof_shadow_rows(PROOF_FIRST_WINDOW),min_paths=PROOF_FIRST_MIN_PATHS,
                          min_unique_tokens=PROOF_FIRST_MIN_UNIQUE_TOKENS,
-                         min_net_roi_pct=PROOF_FIRST_MIN_NET_ROI_PCT)
+                         min_net_roi_pct=PROOF_FIRST_MIN_NET_ROI_PCT,
+                         min_t_stat=PROOF_FIRST_MIN_T_STAT,
+                         require_ex_best_positive=PROOF_FIRST_REQUIRE_EX_BEST_POSITIVE)
 
 
 def proof_health_label(db):
@@ -4433,7 +4465,9 @@ def proof_health_label(db):
     pf=h.get("profit_factor")
     pf_txt="—" if pf is None else ("∞" if math.isinf(pf) else f"{pf:.2f}")
     return (f"{h['status']} ({h['n']}/{PROOF_FIRST_MIN_PATHS}; unique {h.get('unique_tokens',0)}/{PROOF_FIRST_MIN_UNIQUE_TOKENS}; "
-            f"net ${h.get('pnl',0):+.2f}; ROI {f(h.get('net_roi_pct')):+.1f}%; PF {pf_txt})")
+            f"net ${h.get('pnl',0):+.2f}; ROI {f(h.get('net_roi_pct')):+.1f}%; PF {pf_txt}"
+            + (f"; t {h['t_stat']:.2f}" if isinstance(h.get('t_stat'),(int,float)) and math.isfinite(h['t_stat']) else "")
+            + (f" — {h['reason']}" if h.get('status')!='ACTIVE' and h.get('reason') else "") + ")")
 
 
 def signal_policy(db):
@@ -6573,17 +6607,32 @@ async def reconcile_unresolved_execution_intents(http,db,state,limit=20):
     if not ex or not ex.keypair_path:
         return {"checked":0,"resolved":0,"remaining":len(db.unresolved_execution_intents(limit))}
     checked=resolved=0
-    for intent in db.unresolved_execution_intents(limit):
+    work=[(i,False) for i in db.unresolved_execution_intents(limit)]
+    work+=[(i,True) for i in db.unaccounted_confirmed_intents(AUTO_LIVE_ORPHAN_AGE_SECONDS,limit)]
+    for intent,orphan in work:
         checked+=1
-        result=await ex.reconcile_intent(http,intent,db=db)
+        if orphan:
+            # Chain truth is already stored; only the journal write is missing.
+            result={"resolved":True,"state":"CONFIRMED","actual_output_raw":intent.get("actual_output_raw")}
+        else:
+            result=await ex.reconcile_intent(http,intent,db=db)
         if not result.get("resolved") or result.get("state")!="CONFIRMED":
+            if result.get("resolved"):
+                resolved+=1
             continue
         try:
             ctx=json.loads(intent.get("context_json") or "{}")
         except Exception:
             ctx={}
         side=str(intent.get("side") or "").upper()
-        actual_raw=int(result.get("actual_output_raw") or 0)
+        actual_raw=int(f(result.get("actual_output_raw")))
+        if side.startswith("COPY_"):
+            copy_engine=state.get("copy_engine")
+            if copy_engine and actual_raw>0 and hasattr(copy_engine,"account_confirmed_intent"):
+                solusd=f(await ex.sol_usd(http))
+                if solusd>0 and copy_engine.account_confirmed_intent(intent,actual_raw,solusd,result.get("actual_input_raw")):
+                    resolved+=1
+            continue
         if side=="BUY" and actual_raw>0:
             sig=None
             if intent.get("signal_id"):
@@ -6591,8 +6640,15 @@ async def reconcile_unresolved_execution_intents(http,db,state,limit=20):
             if not sig:
                 sig={"id":intent.get("signal_id"),"chain":"solana","token":intent.get("token") or "",
                      "symbol":intent.get("symbol") or "?","name":intent.get("symbol") or "?"}
-            if not db.position_by_token(sig["token"]):
-                pid=db.record_auto_buy_atomic(sig,f(ctx.get("current_price")),f(intent.get("amount_usd")),f(ctx.get("liquidity")),
+            spent_usd=f(intent.get("amount_usd"))
+            if result.get("actual_input_raw") and f(ctx.get("solusd"))>0:
+                spent_usd=(f(result.get("actual_input_raw"))/1_000_000_000)*f(ctx.get("solusd"))
+            already=db.conn.execute("select id from positions where buy_signature=? and coalesce(buy_signature,'')!='' limit 1",
+                                    (str(intent.get("signature") or ""),)).fetchone()
+            if already:
+                db.update_execution_intent(str(intent.get("idempotency_key") or ""),position_id=int(already[0]),state="ACCOUNTED")
+            elif not db.position_by_token(sig["token"]):
+                pid=db.record_auto_buy_atomic(sig,f(ctx.get("current_price")),spent_usd,f(ctx.get("liquidity")),
                                               str(intent.get("tier") or ""),str(intent.get("signature") or ""),actual_raw,
                                               intent_key=str(intent.get("idempotency_key") or ""))
                 db.update_execution_intent(str(intent.get("idempotency_key") or ""),position_id=pid,state="ACCOUNTED")
@@ -6602,7 +6658,9 @@ async def reconcile_unresolved_execution_intents(http,db,state,limit=20):
         elif side=="SELL" and actual_raw>0:
             pid=int(intent.get("position_id") or ctx.get("position_id") or 0)
             row=db.conn.execute("select * from positions where id=?",(pid,)).fetchone() if pid else None
-            if row and int(row["active"] or 0):
+            sell_booked=db.conn.execute("select 1 from auto_trade_events where side='SELL' and signature=? and coalesce(signature,'')!='' limit 1",
+                                        (str(intent.get("signature") or ""),)).fetchone()
+            if row and int(row["active"] or 0) and not sell_booked:
                 pos=dict(row); solusd=f(ctx.get("solusd")); proceeds=(actual_raw/1_000_000_000)*solusd if solusd>0 else f(ctx.get("proceeds"))
                 sell_raw=int(ctx.get("sell_raw") or intent.get("amount_raw") or 0); final=bool(ctx.get("final")); flag=ctx.get("flag")
                 rem=f(pos.get("remaining_fraction") or 1.0); recorded=max(1,int(pos.get("auto_token_raw_remaining") or sell_raw or 1))
@@ -6704,7 +6762,8 @@ async def live_autopilot_try_entry(http,db,state,signal):
                            ("\nNew live orders are locked until chain reconciliation completes." if result.get("executed") or result.get("ambiguous") else ""))
             return
 
-        actual_usd=(f(result.get("input_raw"))/1_000_000_000)*solusd
+        spent_raw=f(result.get("actual_input_raw")) or f(result.get("input_raw"))
+        actual_usd=(spent_raw/1_000_000_000)*solusd
         pid=db.record_auto_buy_atomic(signal,current,actual_usd,m["liq"],tier,result.get("signature",""),result.get("output_raw",0),intent_key=idem)
         calnote=(f"Adaptive risk sizing: {auto_cal.get('confidence',0):.0f}/100; {auto_mult:.2f}x of configured auto size\n" if auto_cal else "")
         warning=(f"\nExecution warning: {result.get('warning')}" if result.get("warning") else "")
@@ -6779,13 +6838,16 @@ async def _auto_sell(http,db,state,pos,fraction,reason,flag=None,final=False):
 
 async def live_autopilot_track_positions(http,db,state):
     ex=state.get("live_executor")
-    if not ex or not bool_pref(db,"live_auto",False) or not ex.ready():
+    if not ex or not ex.ready():
         return
-    # Never submit a second real transaction while any prior signed execution is
-    # unresolved. This intentionally favors manual intervention over duplicate fills.
-    if db.has_unresolved_execution():
+    if not bool_pref(db,"live_auto",False) and not AUTO_LIVE_EXITS_WHEN_OFF:
         return
     for pos in db.auto_open_positions():
+        # Never submit a second transaction for a token whose prior signed execution is
+        # unresolved (duplicate-fill risk). Unrelated positions keep their stop-losses:
+        # a stuck intent on one token must not disable exits on every other position.
+        if db.has_unresolved_execution_for_token(pos["token"]):
+            continue
         pair=await pair_for_token(http,"solana",pos["token"])
         if not pair:
             continue
@@ -6834,6 +6896,29 @@ async def live_autopilot_track_positions(http,db,state):
             await _auto_sell(http,db,state,pos,1.0,reason,None,True)
 
 
+async def live_exit_loop(http,db,state):
+    """Fast, independent live-position supervision: reconciliation + exits only.
+
+    Runs outside the discovery scan so provider errors or slow scans never skip a
+    stop-loss. Never opens positions.
+    """
+    state["live_exit_loop_running"]=True
+    try:
+        while True:
+            try:
+                ex=state.get("live_executor")
+                if ex and ex.keypair_path and ex.ready():
+                    await reconcile_unresolved_execution_intents(http,db,state)
+                    await live_autopilot_track_positions(http,db,state)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"[live-exit error] {type(exc).__name__}: {exc}")
+            await asyncio.sleep(AUTO_LIVE_MONITOR_SECONDS)
+    finally:
+        state["live_exit_loop_running"]=False
+
+
 async def live_autopilot_cycle(http,db,state):
     ex=state.get("live_executor")
     if not ex or not bool_pref(db,"live_auto",False):
@@ -6845,9 +6930,10 @@ async def live_autopilot_cycle(http,db,state):
 
     # Reconciliation always runs before any new order. Exits remain allowed for known
     # positions, but unresolved execution state blocks additional entries.
-    if db.has_unresolved_execution():
-        await reconcile_unresolved_execution_intents(http,db,state)
-    await live_autopilot_track_positions(http,db,state)
+    if not state.get("live_exit_loop_running"):
+        if db.has_unresolved_execution():
+            await reconcile_unresolved_execution_intents(http,db,state)
+        await live_autopilot_track_positions(http,db,state)
     gate=live_execution_gate(db,include_capacity=True)
     if not gate.get("allowed"):
         return
@@ -7041,7 +7127,9 @@ async def handle_commands(http, db, state):
             ex=state.get("live_executor"); subcmd=parts[1].lower() if len(parts)>=2 else "status"
             if subcmd=="off":
                 set_bool_pref(db,"live_auto",False); db.set_meta("live_auto_armed_until","0")
-                await send(http,"🛑 REAL AUTOPILOT OFF. No new automatic orders will be submitted. Existing positions remain in the journal and manual Telegram risk alerts continue.")
+                await send(http,"🛑 REAL AUTOPILOT OFF. No new automatic buys will be submitted." +
+                           (" Positions the autopilot already bought keep their automatic stop/trailing/liquidity exits (AUTO_LIVE_EXITS_WHEN_OFF=true)." if AUTO_LIVE_EXITS_WHEN_OFF
+                            else " Existing positions remain in the journal and manual Telegram risk alerts continue; automatic exits are OFF."))
             elif subcmd=="arm":
                 issues=ex.readiness() if ex else ["executor unavailable"]; gate=live_execution_gate(db,include_capacity=False)
                 if issues:
@@ -9219,6 +9307,7 @@ async def main():
     pumpportal_task = asyncio.create_task(pumpportal.run()) if pumpportal.enabled else None
     guardian_task = asyncio.create_task(guardian_loop(http,db,state)) if GUARDIAN_ENABLED else None
     hot_scout_task = asyncio.create_task(hot_scout_loop(http,guard,limiter,db,state)) if HOT_SCOUT_ENABLED else None
+    live_exit_task = asyncio.create_task(live_exit_loop(http,db,state)) if live_executor.keypair_path else None
     try:
         while True:
             try:
@@ -9232,6 +9321,12 @@ async def main():
             await command_task
         except asyncio.CancelledError:
             pass
+        if live_exit_task:
+            live_exit_task.cancel()
+            try:
+                await live_exit_task
+            except asyncio.CancelledError:
+                pass
         if guardian_task:
             guardian_task.cancel()
             try:

@@ -1,5 +1,7 @@
 # FomoBot v16.2 QUALITY MEASUREMENT
 
+> **Reliability patch applied.** See `V16_2_RELIABILITY_NOTES.txt`. Live stop-losses no longer freeze on an unrelated stuck transaction. Dropped transactions no longer lock live trading forever. Exits run in their own loop and survive `/autolive off`. Copy positions have their own stop-loss and max hold. Fills are measured from the transaction itself. The proof gate needs a statistically consistent edge that doesn't depend on one lucky trade before it allows real money.
+
 ## What v16 changes
 
 v16 adds a public-on-chain smart-wallet copy engine on top of the hardened v15.3 scanner. The goal is to improve **discovery**, not to stack more loss filters. GET READY scout chatter is OFF by default; internal scouting still runs. Telegram prioritizes actual core BUY signals and smart-wallet copy events.

@@ -29,6 +29,7 @@ import aiohttp
 import websockets
 
 from live_execution import WSOL_MINT
+from edge_engine import proof_metrics
 
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 DEXSCREENER = "https://api.dexscreener.com"
@@ -245,6 +246,16 @@ class CopyTradeEngine:
         self.rpc_slow_seconds = max(0.5, _f(os.getenv("COPY_RPC_SLOW_SECONDS", "3"), 3))
         self.rpc_trip_count = max(2, _i(os.getenv("COPY_RPC_CIRCUIT_TRIP_COUNT", "5"), 5))
         self.rpc_open_seconds = max(5, _i(os.getenv("COPY_RPC_CIRCUIT_OPEN_SECONDS", "15"), 15))
+        # Independent follower exits. The leader's sell is only one exit trigger: a missed
+        # websocket message, a leader that transfers instead of swapping, or a leader that
+        # holds through a rug must not leave follower capital unprotected.
+        self.live_stop_pct = _clamp(_f(os.getenv("COPY_LIVE_STOP_LOSS_PCT", "20"), 20), 3, 90)
+        self.live_max_hold_min = max(15, _i(os.getenv("COPY_LIVE_MAX_HOLD_MINUTES", os.getenv("COPY_PAPER_MAX_HOLD_MINUTES", "360")), 360))
+        # Paper copies apply the same stop so paper results predict live behaviour.
+        self.paper_stop_pct = _clamp(_f(os.getenv("COPY_PAPER_STOP_LOSS_PCT", str(self.live_stop_pct)), self.live_stop_pct), 3, 90)
+        self.risk_monitor_seconds = max(3, _i(os.getenv("COPY_RISK_MONITOR_SECONDS", "10"), 10))
+        self.live_min_unique_tokens = max(1, _i(os.getenv("COPY_LIVE_MIN_UNIQUE_TOKENS", "5"), 5))
+        self.live_min_net_roi_pct = max(0.0, _f(os.getenv("COPY_LIVE_MIN_NET_ROI_PCT", "1.0"), 1.0))
         self.rpc_failures = 0
         self.rpc_open_until = 0.0
         self.queue = asyncio.Queue(maxsize=1000)
@@ -299,6 +310,10 @@ class CopyTradeEngine:
             live_cols={r[1] for r in c.execute("pragma table_info(copy_live_positions)")}
             if "cost_remaining" not in live_cols:
                 c.execute("alter table copy_live_positions add column cost_remaining real default 0")
+            if "entry_price" not in live_cols:
+                c.execute("alter table copy_live_positions add column entry_price real default 0")
+            if "close_reason" not in live_cols:
+                c.execute("alter table copy_live_positions add column close_reason text default ''")
             c.execute("""create table if not exists copy_wallet_candidates(
                 address text primary key, first_ts integer, last_ts integer,
                 buy_count integer default 0, distinct_tokens integer default 0,
@@ -667,50 +682,122 @@ class CopyTradeEngine:
         idem=f"copybuy:{wallet}:{signature}"
         result=await self.live_executor.swap(http, WSOL_MINT, ev["token"], amount_raw,
             db=self.db,idempotency_key=idem,side="COPY_BUY",token=ev["token"],symbol=ctx.get("symbol") or "?",
-            tier="COPY EDGE",amount_usd=size,context={"leader_wallet":wallet,"leader_signature":signature,"wallet_score":score})
+            tier="COPY EDGE",amount_usd=size,context={"leader_wallet":wallet,"leader_signature":signature,"wallet_score":score,
+                                                      "symbol":ctx.get("symbol") or "?","current_price":_f(ctx.get("price"))})
         if result.get("ok"):
             raw=int(result.get("output_raw") or 0)
+            spent=size
+            if result.get("actual_input_raw"):
+                spent=(_f(result.get("actual_input_raw"))/1_000_000_000)*solusd
             with self.db.transaction():
-                self.db.conn.execute("""insert into copy_live_positions(wallet,token,symbol,open_ts,amount_usd,cost_remaining,token_raw_initial,token_raw_remaining,buy_signature)
-                    values(?,?,?,?,?,?,?,?,?)""",(wallet,ev["token"],ctx.get("symbol") or "?",int(time.time()),size,size,str(raw),str(raw),result.get("signature") or ""))
+                self.db.conn.execute("""insert into copy_live_positions(wallet,token,symbol,open_ts,amount_usd,cost_remaining,token_raw_initial,token_raw_remaining,buy_signature,entry_price)
+                    values(?,?,?,?,?,?,?,?,?,?)""",(wallet,ev["token"],ctx.get("symbol") or "?",int(time.time()),spent,spent,str(raw),str(raw),result.get("signature") or "",_f(ctx.get("price"))))
+                self._mark_accounted(idem)
+        return result
+
+    def _mark_accounted(self, idem):
+        """Mark a copy execution intent as written to the journal (call inside a transaction)."""
+        if idem:
+            self.db.conn.execute("update execution_intents set state='ACCOUNTED',updated_ts=? where idempotency_key=?",
+                                 (int(time.time()), str(idem)))
+
+    def _apply_live_sell(self, pos, *, sell_raw, raw_remaining, out_raw, solusd, signature, fraction, reason, idem=""):
+        """Atomically book one follower sell against its copy position. Returns realized P/L."""
+        proceeds=(out_raw/1_000_000_000)*solusd if solusd>0 else 0.0
+        frac=_clamp(sell_raw/max(raw_remaining,1),0.0,1.0)
+        cost_left=_f(pos.get("cost_remaining"),_f(pos.get("amount_usd"))) or _f(pos.get("amount_usd"))
+        cost_sold=cost_left*frac
+        pnl=proceeds-cost_sold
+        new_raw=max(0,raw_remaining-sell_raw); new_cost=max(0.0,cost_left-cost_sold)
+        final=new_raw<=max(1,int(_i(pos.get("token_raw_initial"))*0.01)) or fraction>=0.99
+        with self.db.transaction():
+            if final:
+                self.db.conn.execute("update copy_live_positions set active=0,close_ts=?,token_raw_remaining='0',cost_remaining=0,sell_signature=?,realized_pnl=realized_pnl+?,close_reason=? where id=?",
+                    (int(time.time()),signature or "",pnl,str(reason),int(pos["id"])))
+            else:
+                self.db.conn.execute("update copy_live_positions set token_raw_remaining=?,cost_remaining=?,sell_signature=?,realized_pnl=realized_pnl+? where id=?",
+                    (str(new_raw),new_cost,signature or "",pnl,int(pos["id"])))
+            self._mark_accounted(idem)
+        return pnl
+
+    def _unresolved_for_token(self, token):
+        fn=getattr(self.db,"has_unresolved_execution_for_token",None)
+        return bool(fn(token)) if fn else False
+
+    async def _live_exit(self, http, pos, fraction, reason, idem, ctx=None, leader_context=None):
+        """Sell some/all of a follower position. Exits never depend on the copy-live toggle
+        or kill switch: those only stop NEW buys."""
+        if not self.live_executor or not self.live_executor.ready():
+            return None
+        if self._unresolved_for_token(pos["token"]):
+            return {"ok":False,"blocked":True,"reason":"prior execution for this token still unresolved"}
+        raw_remaining=max(0,_i(pos.get("token_raw_remaining")))
+        if raw_remaining<=0:
+            return None
+        actual=await self.live_executor.token_raw_balance(http,pos["token"])
+        if actual is None:
+            return {"ok":False,"blocked":True,"reason":"token balance unavailable"}
+        raw_remaining=min(raw_remaining,int(actual))
+        if raw_remaining<=0:
+            return {"ok":False,"blocked":True,"reason":"wallet holds none of this token"}
+        sell_raw=raw_remaining if fraction>=0.99 else max(1,int(raw_remaining*_clamp(fraction,0.05,1.0)))
+        context={"copy_position_id":int(pos["id"]),"sell_raw":sell_raw,"raw_remaining":raw_remaining,
+                 "fraction":fraction,"reason":reason}
+        context.update(leader_context or {})
+        result=await self.live_executor.swap(http,pos["token"],WSOL_MINT,sell_raw,
+            db=self.db,idempotency_key=idem,side="COPY_SELL",token=pos["token"],symbol=(ctx or {}).get("symbol") or pos.get("symbol") or "?",
+            tier="COPY EDGE",position_id=int(pos["id"]),context=context)
+        if result.get("ok"):
+            solusd=await self._sol_usd(http)
+            result["pnl_usd"]=self._apply_live_sell(pos,sell_raw=sell_raw,raw_remaining=raw_remaining,out_raw=int(result.get("output_raw") or 0),
+                                                    solusd=solusd,signature=result.get("signature") or "",fraction=fraction,reason=reason,idem=idem)
         return result
 
     async def _maybe_live_sell(self, http, wallet, signature, ev, ctx, fraction):
-        if self.db.get_meta("copy_live_enabled", "0") != "1" or not self.live_executor:
+        if not self.live_executor:
             return None
         pos=self._live_position(wallet,ev["token"])
         if not pos:
             return None
-        # Exits remain allowed when the strategy is kill-switched; the kill switch only blocks new buys.
-        raw_remaining=max(0,_i(pos.get("token_raw_remaining")))
-        if raw_remaining<=0:
-            return None
-        actual=await self.live_executor.token_raw_balance(http,ev["token"])
-        if actual is None:
-            return {"ok":False,"blocked":True,"reason":"token balance unavailable"}
-        raw_remaining=min(raw_remaining,int(actual))
-        sell_raw=max(1,int(raw_remaining*_clamp(fraction,0.05,1.0)))
-        idem=f"copysell:{wallet}:{signature}:{pos['id']}"
-        result=await self.live_executor.swap(http,ev["token"],WSOL_MINT,sell_raw,
-            db=self.db,idempotency_key=idem,side="COPY_SELL",token=ev["token"],symbol=ctx.get("symbol") or pos.get("symbol") or "?",
-            tier="COPY EDGE",position_id=int(pos["id"]),context={"leader_wallet":wallet,"leader_signature":signature,"copy_position_id":int(pos["id"])})
-        if result.get("ok"):
-            out_raw=int(result.get("output_raw") or 0); solusd=await self._sol_usd(http)
-            proceeds=(out_raw/1_000_000_000)*solusd if solusd>0 else 0.0
-            frac=sell_raw/max(raw_remaining,1)
-            cost_sold=_f(pos.get("cost_remaining"),_f(pos.get("amount_usd")))*frac
-            pnl=proceeds-cost_sold
-            new_raw=max(0,raw_remaining-sell_raw); new_cost=max(0.0,_f(pos.get("cost_remaining"),_f(pos.get("amount_usd")))-cost_sold)
-            final=new_raw<=max(1,int(_i(pos.get("token_raw_initial"))*0.01)) or fraction>=0.99
+        # Exits remain allowed when copy-live is switched off or kill-switched; those only block new buys.
+        return await self._live_exit(http,pos,fraction,"leader wallet sell",f"copysell:{wallet}:{signature}:{pos['id']}",ctx,
+                                     {"leader_wallet":wallet,"leader_signature":signature})
+
+    def account_confirmed_intent(self, intent, actual_raw, solusd, actual_input_raw=None):
+        """Book a COPY_BUY/COPY_SELL that confirmed on chain but never reached the journal
+        (crash or restart between confirmation and the DB write). Idempotent."""
+        idem=str(intent.get("idempotency_key") or ""); sig=str(intent.get("signature") or "")
+        side=str(intent.get("side") or "").upper()
+        try:
+            ctx=json.loads(intent.get("context_json") or "{}")
+        except Exception:
+            ctx={}
+        if side=="COPY_BUY":
+            exists=self.db.conn.execute("select id from copy_live_positions where buy_signature=? limit 1",(sig,)).fetchone()
             with self.db.transaction():
-                if final:
-                    self.db.conn.execute("update copy_live_positions set active=0,close_ts=?,token_raw_remaining='0',cost_remaining=0,sell_signature=?,realized_pnl=realized_pnl+? where id=?",
-                        (int(time.time()),result.get("signature") or "",pnl,int(pos["id"])))
-                else:
-                    self.db.conn.execute("update copy_live_positions set token_raw_remaining=?,cost_remaining=?,sell_signature=?,realized_pnl=realized_pnl+? where id=?",
-                        (str(new_raw),new_cost,result.get("signature") or "",pnl,int(pos["id"])))
-            result["pnl_usd"]=pnl
-        return result
+                if not exists:
+                    spent=_f(intent.get("amount_usd"))
+                    if actual_input_raw and solusd>0:
+                        spent=(_f(actual_input_raw)/1_000_000_000)*solusd
+                    self.db.conn.execute("""insert into copy_live_positions(wallet,token,symbol,open_ts,amount_usd,cost_remaining,token_raw_initial,token_raw_remaining,buy_signature,entry_price)
+                        values(?,?,?,?,?,?,?,?,?,?)""",(str(ctx.get("leader_wallet") or ""),str(intent.get("token") or ""),str(intent.get("symbol") or ctx.get("symbol") or "?"),
+                        int(intent.get("created_ts") or time.time()),spent,spent,str(int(actual_raw)),str(int(actual_raw)),sig,_f(ctx.get("current_price"))))
+                self._mark_accounted(idem)
+            return True
+        if side=="COPY_SELL":
+            pid=_i(intent.get("position_id") or ctx.get("copy_position_id"))
+            row=self.db.conn.execute("select * from copy_live_positions where id=?",(pid,)).fetchone() if pid else None
+            if not row or not int(row["active"] or 0) or str(row["sell_signature"] or "")==sig:
+                with self.db.transaction():
+                    self._mark_accounted(idem)
+                return True
+            pos=dict(row)
+            raw_remaining=_i(ctx.get("raw_remaining")) or _i(pos.get("token_raw_remaining"))
+            sell_raw=_i(ctx.get("sell_raw")) or _i(intent.get("amount_raw"))
+            self._apply_live_sell(pos,sell_raw=sell_raw,raw_remaining=raw_remaining,out_raw=int(actual_raw),solusd=solusd,signature=sig,
+                                  fraction=_f(ctx.get("fraction"),1.0),reason=str(ctx.get("reason") or "reconciled copy sell"),idem=idem)
+            return True
+        return False
 
     async def _handle_buy(self, http, wallet, signature, ev, event_id):
         ctx = await self._price_context(http, ev["token"])
@@ -785,7 +872,11 @@ class CopyTradeEngine:
         key = (wallet, signature)
         if key in self.seen:
             return
-        self.seen[key] = time.time()
+        now = time.time()
+        self.seen[key] = now
+        if len(self.seen) > 20000:
+            # DB unique constraints are the durable dedupe; this dict is only a hot cache.
+            self.seen = {k: t for k, t in self.seen.items() if now - t < 3600}
         tx = await self._get_tx(http, signature)
         if not tx:
             return
@@ -865,18 +956,54 @@ class CopyTradeEngine:
             finally:
                 self.connected = False; self.ws = None
 
+    async def _risk_pass(self, http):
+        """One pass of follower-side risk exits for paper and live copy positions."""
+        now=int(time.time())
+        paper_max_age=max(30, _i(os.getenv("COPY_PAPER_MAX_HOLD_MINUTES", "360"), 360))*60
+        # Paper checks are throttled to protect DexScreener rate limits; live checks are not.
+        paper_rows=[]
+        if now-getattr(self,"_last_paper_risk",0)>=30:
+            self._last_paper_risk=now
+            paper_rows=self.db.conn.execute("select * from copy_paper_positions where active=1 order by open_ts limit 30").fetchall()
+        for row in paper_rows:
+            pos=dict(row); ctx=await self._price_context(http,pos["token"]); price=_f(ctx.get("price"))
+            if price<=0:
+                continue
+            ret=(price/max(_f(pos.get("entry_price")),1e-18)-1)*100
+            if ret<=-self.paper_stop_pct:
+                self._close_paper(pos,price,1.0,f"follower stop loss {ret:+.1f}%")
+            elif now-_i(pos.get("open_ts"))>=paper_max_age:
+                self._close_paper(pos,price,1.0,"paper max-hold timeout")
+        if not self.live_executor or not self.live_executor.ready():
+            return
+        for row in self.db.conn.execute("select * from copy_live_positions where active=1 order by open_ts limit 20").fetchall():
+            pos=dict(row); ctx=await self._price_context(http,pos["token"]); price=_f(ctx.get("price"))
+            entry=_f(pos.get("entry_price"))
+            age_min=(now-_i(pos.get("open_ts")))/60
+            reason=None
+            if price>0 and entry>0 and (price/entry-1)*100<=-self.live_stop_pct:
+                reason=f"follower stop loss {(price/entry-1)*100:+.1f}%"
+            elif age_min>=self.live_max_hold_min:
+                reason=f"follower max hold {age_min:.0f}m"
+            if not reason:
+                continue
+            result=await self._live_exit(http,pos,1.0,reason,f"copyrisk:{pos['id']}:{now//30}",ctx)
+            if self.send_callback and result is not None:
+                if result.get("ok"):
+                    await self.send_callback(f"🐋🛑 COPY RISK EXIT — {pos.get('symbol') or '?'}\nReason: {reason}\n"
+                                             f"Realized ${_f(result.get('pnl_usd')):+.2f} | tx {str(result.get('signature') or '')[:12]}…")
+                elif not result.get("blocked"):
+                    self.last_error=f"copy risk exit failed: {str(result.get('error') or '')[:200]}"
+
     async def _paper_timeout_loop(self, http):
-        max_age = max(30, _i(os.getenv("COPY_PAPER_MAX_HOLD_MINUTES", "360"), 360)) * 60
         while not self.stop_event.is_set():
             try:
-                rows = self.db.conn.execute("select * from copy_paper_positions where active=1 and open_ts<? limit 20", (int(time.time()) - max_age,)).fetchall()
-                for row in rows:
-                    pos = dict(row); ctx = await self._price_context(http, pos["token"]); price = _f(ctx.get("price"))
-                    if price > 0:
-                        self._close_paper(pos, price, 1.0, "paper max-hold timeout")
+                await self._risk_pass(http)
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
-                self.last_error = f"paper monitor {type(exc).__name__}: {exc}"
-            await asyncio.sleep(30)
+                self.last_error = f"copy risk monitor {type(exc).__name__}: {exc}"
+            await asyncio.sleep(self.risk_monitor_seconds)
 
     async def run(self, http, send_callback=None):
         if not self.enabled:
@@ -911,5 +1038,13 @@ class CopyTradeEngine:
         if hours < self.min_paper_hours: reasons.append(f"paper age {hours:.1f}h < {self.min_paper_hours:.0f}h")
         if rep["closed"] < self.min_closed: reasons.append(f"closed copy trades {rep['closed']} < {self.min_closed}")
         if rep["pnl"] <= 0: reasons.append(f"copy paper net {rep['pnl']:+.2f} not positive")
+        rows = [dict(r) for r in self.db.conn.execute(
+            "select token,amount_usd,realized_pnl from copy_paper_positions where active=0 order by close_ts desc limit 200").fetchall()]
+        proof = proof_metrics(rows, min_paths=max(1, self.min_closed), min_unique_tokens=self.live_min_unique_tokens,
+                              min_net_roi_pct=self.live_min_net_roi_pct)
+        if rep["closed"] >= self.min_closed and proof.get("status") != "ACTIVE":
+            reasons.append(f"copy paper edge not proven: {proof.get('reason') or proof.get('status')}")
+        fn = getattr(self.db, "has_unresolved_execution", None)
+        if fn and fn(): reasons.append("unresolved prior on-chain execution")
         if not self.live_executor or not self.live_executor.ready(): reasons.append("live executor not ready")
-        return {"allowed": not reasons, "reasons": reasons, "hours": hours, "report": rep}
+        return {"allowed": not reasons, "reasons": reasons, "hours": hours, "report": rep, "proof": proof}

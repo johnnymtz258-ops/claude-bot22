@@ -181,18 +181,28 @@ def risk_position_size(bankroll: float, stop_pct: float = 8.0, risk_pct: float =
 
 
 def proof_metrics(rows: Sequence[Mapping], min_paths: int = 12, min_unique_tokens: int = 6,
-                  min_net_roi_pct: float = 1.0) -> dict:
+                  min_net_roi_pct: float = 1.0, min_t_stat: float = 1.3,
+                  require_ex_best_positive: bool = True) -> dict:
     """Grade only the explicitly proof-eligible shadow cohort.
 
     v15.2 adds two safeguards that the original proof gate lacked: token diversity and
     a minimum net ROI after simulated friction.  Repeated trades in one hot contract
     therefore cannot prove the entire strategy, and a statistically positive but
     economically tiny edge cannot unlock live guidance.
+
+    v16.2 reliability patch adds two noise guards. Memecoin returns are fat-tailed, so a
+    handful of trades with one lucky runner can satisfy PF/win-rate thresholds while the
+    strategy has no edge:
+    - the one-sided t-statistic of per-trade net ROI must reach ``min_t_stat``
+      (~90% confidence at 1.3), so small samples need consistent results;
+    - net P/L must stay positive after removing the single best trade.
+    A cohort that is profitable but not yet convincing stays in PROBATION (keep
+    collecting evidence) rather than QUARANTINED.
     """
     rows=[dict(r) for r in rows]
     min_unique_tokens=max(1,int(min_unique_tokens))
     if not rows:
-        return {"status":"PROBATION","paused":True,"n":0,"needed":min_paths,"pnl":0.0,"profit_factor":None,
+        return {"status":"PROBATION","paused":True,"reason":"no completed proof paths","t_stat":None,"pnl_ex_best":0.0,"n":0,"needed":min_paths,"pnl":0.0,"profit_factor":None,
                 "win_rate":None,"unique_tokens":0,"unique_needed":min_unique_tokens,"net_roi_pct":0.0}
     pnls=[_f(r.get("realized_pnl")) for r in rows]
     wins=[x for x in pnls if x>0]; losses=[x for x in pnls if x<0]
@@ -204,13 +214,32 @@ def proof_metrics(rows: Sequence[Mapping], min_paths: int = 12, min_unique_token
     unique=len({str(r.get("token") or "") for r in rows if r.get("token")})
     enough=(len(pnls)>=min_paths and unique>=min_unique_tokens)
     quality=(pnl>0 and win>=0.45 and (pf is not None and pf>=1.20) and net_roi>=float(min_net_roi_pct))
+    rois=[_f(r.get("realized_pnl"))/_f(r.get("amount_usd")) for r in rows if _f(r.get("amount_usd"))>0]
+    t_stat=None
+    if len(rois)>=2:
+        sd=statistics.stdev(rois); mean=statistics.mean(rois)
+        t_stat=(mean/(sd/math.sqrt(len(rois)))) if sd>0 else (float("inf") if mean>0 else 0.0)
+    ex_best=pnl-max(pnls)
+    confident=(t_stat is not None and t_stat>=float(min_t_stat))
+    robust=(ex_best>0) or not require_ex_best_positive
+    reason=""
     if not enough:
         status="PROBATION"; paused=True
-    elif quality:
-        status="ACTIVE"; paused=False
-    else:
+        reason=f"need {min_paths} paths / {min_unique_tokens} tokens (have {len(pnls)} / {unique})"
+    elif not quality:
         status="QUARANTINED"; paused=True
-    return {"status":status,"paused":paused,"n":len(pnls),"needed":min_paths,"pnl":pnl,
+        reason="net quality below thresholds (P/L, win rate, profit factor or ROI)"
+    elif not confident:
+        status="PROBATION"; paused=True
+        reason=f"edge not yet distinguishable from noise (t={0.0 if t_stat is None else t_stat:.2f} < {float(min_t_stat):.2f})"
+    elif not robust:
+        status="PROBATION"; paused=True
+        reason=f"profit depends on a single trade (net without best trade {ex_best:+.2f})"
+    else:
+        status="ACTIVE"; paused=False
+        reason="proof thresholds and noise guards passed"
+    return {"status":status,"paused":paused,"reason":reason,"t_stat":t_stat,"pnl_ex_best":ex_best,
+            "n":len(pnls),"needed":min_paths,"pnl":pnl,
             "profit_factor":pf,"win_rate":win,"avg_win":statistics.mean(wins) if wins else 0.0,
             "avg_loss":statistics.mean(losses) if losses else 0.0,"unique_tokens":unique,
             "unique_needed":min_unique_tokens,"net_roi_pct":net_roi,"min_net_roi_pct":float(min_net_roi_pct)}

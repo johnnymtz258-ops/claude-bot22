@@ -1,0 +1,69 @@
+FOMOBOT v16.2 RELIABILITY PATCH
+===============================
+
+Scope: fixes to live-money exits, execution reconciliation, accounting, and the proof gate
+that authorizes live capital. Discovery, scoring and entry thresholds are unchanged.
+VERSION string and proof cohort are unchanged, so existing paper/proof history carries over.
+
+Critical fixes
+--------------
+1. Stop-losses were frozen by any unresolved transaction.
+   live_autopilot_track_positions() returned early when ANY execution intent was
+   unresolved, so one stuck buy disabled every exit on every live position. Exits are now
+   blocked only for the token whose own transaction is unresolved.
+
+2. Dropped transactions locked live trading forever.
+   A signed tx that never landed stayed AMBIGUOUS permanently. The recent blockhash is now
+   journaled with each intent; reconciliation marks the intent FAILED/EXPIRED_NOT_LANDED only
+   when (a) the intent is older than LIVE_EXPIRY_GRACE_SECONDS, (b) isBlockhashValid says the
+   blockhash is dead, and (c) two status lookups find no trace of the signature. Any RPC
+   error keeps it locked (fail closed). Legacy intents without a blockhash need 30 minutes.
+
+3. Live exits only ran at the end of the slow discovery scan.
+   An exception anywhere earlier in cycle() skipped stop-loss checks for that round.
+   A dedicated live_exit_loop (every AUTO_LIVE_MONITOR_SECONDS) now runs reconciliation
+   and exits independently. It never opens positions.
+
+4. /autolive off abandoned open positions.
+   It stopped all automatic exits too. With AUTO_LIVE_EXITS_WHEN_OFF=true (default) it now
+   only stops new buys.
+
+5. Stop-loss sells were refused in thin liquidity.
+   Sells used the same 4% price-impact cap as buys. Sells now use
+   AUTO_LIVE_MAX_EXIT_PRICE_IMPACT_PCT (default 25%).
+
+6. Copy-trading live positions had no stop-loss or max-hold.
+   The only exit was spotting the leader's sell over a websocket. Follower positions now
+   have their own stop-loss (COPY_LIVE_STOP_LOSS_PCT) and max hold (COPY_LIVE_MAX_HOLD_MINUTES).
+   Paper copies mirror the stop so paper results predict live results. Leader-sell exits
+   and risk exits also work after /copylive off or the kill switch (those block new buys only).
+
+Accounting / reliability
+------------------------
+7. Fills are measured from the confirmed transaction's own balance changes
+   (getTransaction pre/post balances) instead of wallet-wide before/after balances.
+   Concurrent swaps, token-account rent and lagging failover RPCs no longer corrupt fills.
+   Buy cost now includes network fees and account rent (true cash cost), so P/L is honest.
+   Falls back to the old wallet-delta method if the transaction cannot be read.
+8. Crash orphans: an execution CONFIRMED on chain but never written to the journal is now
+   booked automatically after AUTO_LIVE_ORPHAN_AGE_SECONDS (idempotent by signature).
+   Only intents created after this patch is installed are considered.
+9. Copy execution intents are now marked ACCOUNTED, and copy orphans are recoverable.
+10. The copy engine's in-memory signature cache no longer grows without bound.
+
+Profitability gate
+------------------
+11. The proof gate could unlock live capital on noise: 8 trades with one lucky runner met
+    PF >= 1.2 and win rate >= 45%. It now also requires:
+      - one-sided t-stat of per-trade net ROI >= PROOF_FIRST_MIN_T_STAT (1.3, ~90%), and
+      - positive net P/L after removing the single best trade.
+    A cohort that is profitable but not yet convincing stays in PROBATION (keep collecting
+    evidence). It is not QUARANTINED. /edge shows the t-stat and the blocking reason.
+12. The copy live gate used "paper net P/L > 0". It now applies the same proof test
+    (token diversity, ROI, t-stat, no single-trade dependence) to closed copy paper trades,
+    and it refuses new copy buys while any execution is unresolved.
+
+Tests: test_v16_2_reliability.py (20 regression tests; 16 fail on the unpatched code).
+
+No trading bot can guarantee profit. These changes make losses smaller and more honestly
+measured, and make it harder to go live on luck. They do not create an edge.
