@@ -126,3 +126,48 @@ def test_real_paper_take_profit_still_closes(db):
     row = db.conn.execute('select * from paper_positions where id=?', (pid,)).fetchone()
     assert row['active'] == 0 and 'TP2' in row['close_reason'] and row['realized_pnl'] > 0
     assert any(e[0] == 'close' for e in events)
+
+
+class _FakeHTTP:
+    def __init__(self, rows_for):
+        self.rows_for = rows_for; self.urls = []
+
+    async def get(self, url, **_k):
+        self.urls.append(url)
+        tokens = url.rsplit('/', 1)[1].split(',')
+        return 200, [r for t in tokens for r in self.rows_for(t)]
+
+
+def test_batch_pairs_matches_base_token_picks_deepest_pool_and_chunks():
+    def rows(t):
+        return [{'baseToken': {'address': t}, 'priceUsd': 1.0, 'liquidity': {'usd': 10}},
+                {'baseToken': {'address': t}, 'priceUsd': 1.1, 'liquidity': {'usd': 999}},
+                {'baseToken': {'address': 'OTHER'}, 'quoteToken': {'address': t}, 'priceUsd': 7, 'liquidity': {'usd': 10**9}}]
+    http = _FakeHTTP(rows)
+    tokens = [f'T{i}' for i in range(31)]
+    out = asyncio.run(bot.batch_pairs(http, 'solana', tokens))
+    assert len(http.urls) == 2 and set(out) == set(tokens)
+    assert all(p['priceUsd'] == 1.1 for p in out.values())
+
+
+def test_paper_monitor_loop_closes_positions_with_one_batched_request(db, monkeypatch):
+    _paper(db, token='PAPR')
+    bot._PAPER_GLITCH_SINCE.clear()
+    http = _FakeHTTP(lambda t: [dict(_pair(0.80, 45_000), baseToken={'address': t})])
+    sent = []
+
+    async def fake_send(_http, msg):
+        sent.append(msg)
+
+    async def stop(*_a, **_k):
+        raise asyncio.CancelledError
+    monkeypatch.setattr(bot, 'send', fake_send)
+    monkeypatch.setattr(bot, 'SHADOW_TELEGRAM', True)
+    monkeypatch.setattr(bot.asyncio, 'sleep', stop)
+    state = {}
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(bot.paper_monitor_loop(http, db, state))
+    row = db.conn.execute("select * from paper_positions where token='PAPR'").fetchone()
+    assert row['active'] == 0 and 'risk stop' in row['close_reason']
+    assert len(http.urls) == 1 and sent and 'PAPER SELL' in sent[0]
+    assert state['paper_monitor_running'] is False

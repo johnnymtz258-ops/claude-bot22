@@ -626,6 +626,8 @@ PAPER_POSITION_USD = max(1.0, min(10.0, ef("PAPER_POSITION_USD", 5)))
 PAPER_MAX_OPEN = max(3, min(12, ei("PAPER_MAX_OPEN_POSITIONS", 8)))
 # A paper simulation whose price stays implausible this long is closed as unmeasurable.
 PAPER_GLITCH_MAX_MINUTES = max(5, ei("PAPER_GLITCH_MAX_MINUTES", 20))
+# Paper/shadow exits are checked on their own fast loop (one batched request per tick).
+PAPER_MONITOR_SECONDS = max(3, ei("PAPER_MONITOR_SECONDS", 6))
 # v15 proof-first shadow simulator. It remains independent of Telegram/live execution so
 # the strategy keeps producing unbiased forward evidence even when the user makes no trades.
 SHADOW_SIM_ALWAYS_ON = eb("SHADOW_SIM_ALWAYS_ON", True)
@@ -6501,6 +6503,78 @@ async def track_paper_positions(http,db,prices=None):
             pnl=db.paper_close(pos["id"],current,reason); events.append(("close",pos,ret,pnl,reason))
     return events
 
+async def batch_pairs(http, chain, tokens):
+    """Best exact-base pair per token via one DexScreener request per 30 tokens.
+
+    Mirrors pair_for_token's identity rule (base address must match; highest liquidity
+    wins). Missing tokens are simply absent from the result.
+    """
+    out={}
+    wanted=[str(t) for t in dict.fromkeys(tokens) if t]
+    for i in range(0,len(wanted),30):
+        chunk=wanted[i:i+30]
+        _,data=await http.get(f"{DEX}/tokens/v1/{chain}/{','.join(chunk)}")
+        if not isinstance(data,list):
+            continue
+        lookup={t.lower():t for t in chunk}
+        for p in data:
+            base=str(nest(p,"baseToken","address",default="")).strip()
+            tok=lookup.get(base.lower())
+            if not tok:
+                continue
+            if tok not in out or f(nest(p,"liquidity","usd",default=0))>f(nest(out[tok],"liquidity","usd",default=0)):
+                out[tok]=p
+    return out
+
+
+async def announce_paper_events(http,events):
+    for event in events or []:
+        if event[0]=="tp1":
+            _,pos,ret,_=event
+            msg=f"🧪 PAPER TP1 — {pos['symbol']} {ret:+.1f}% gross price move | simulated trade remains open with trailing protection."
+            if not pos.get("shadow") or SHADOW_TELEGRAM:
+                await send(http,msg)
+            else:
+                print("[shadow] "+msg)
+        elif event[0]=="close":
+            _,pos,ret,pnl,reason=event
+            msg=f"🧪 PAPER SELL — {pos['symbol']} {ret:+.1f}% gross price move | NET est. P/L ${pnl:+.2f}\nReason: {reason}\nNo real order was placed."
+            if not pos.get("shadow") or SHADOW_TELEGRAM:
+                await send(http,msg)
+            else:
+                print("[shadow] "+msg.replace("\n"," | "))
+
+
+async def paper_monitor_loop(http,db,state):
+    """Fast paper/shadow exits with one batched price request per tick.
+
+    Paper results decide the proof gate, so they must be measured the way a live exit
+    loop would trade. Checked once per slow discovery scan, the "8% risk stop" realized
+    an average of -15% in the Sep export because prices gapped between checks.
+    """
+    state["paper_monitor_running"]=True
+    try:
+        while True:
+            try:
+                positions=db.paper_open_positions()
+                if positions:
+                    by_chain=defaultdict(list)
+                    for p in positions:
+                        by_chain[str(p.get("chain") or "solana")].append(p["token"])
+                    prices={}
+                    for chain,tokens in by_chain.items():
+                        prices.update(await batch_pairs(http,chain,tokens))
+                    if prices:
+                        await announce_paper_events(http,await track_paper_positions(http,db,prices=prices))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"[paper-monitor error] {type(exc).__name__}: {exc}")
+            await asyncio.sleep(PAPER_MONITOR_SECONDS)
+    finally:
+        state["paper_monitor_running"]=False
+
+
 async def execution_preflight(http,state,pair,tier):
     """Read-only route/friction check. Never constructs, signs or submits a trade."""
     if str(pair.get("chainId") or "").lower()!="solana" or not EXECUTION_PREFLIGHT_ENABLED:
@@ -9271,21 +9345,8 @@ async def cycle(http, guard, limiter, db, state):
     await evaluate_signals(http,db)
     if not GUARDIAN_ENABLED:
         await track_positions(http,db,state)
-    for event in await track_paper_positions(http,db):
-        if event[0]=="tp1":
-            _,pos,ret,_=event
-            msg=f"🧪 PAPER TP1 — {pos['symbol']} {ret:+.1f}% gross price move | simulated trade remains open with trailing protection."
-            if not pos.get("shadow") or SHADOW_TELEGRAM:
-                await send(http,msg)
-            else:
-                print("[shadow] "+msg)
-        elif event[0]=="close":
-            _,pos,ret,pnl,reason=event
-            msg=f"🧪 PAPER SELL — {pos['symbol']} {ret:+.1f}% gross price move | NET est. P/L ${pnl:+.2f}\nReason: {reason}\nNo real order was placed."
-            if not pos.get("shadow") or SHADOW_TELEGRAM:
-                await send(http,msg)
-            else:
-                print("[shadow] "+msg.replace("\n"," | "))
+    if not state.get("paper_monitor_running"):
+        await announce_paper_events(http,await track_paper_positions(http,db))
 
     await live_autopilot_cycle(http,db,state)
 
@@ -9365,6 +9426,7 @@ async def main():
     guardian_task = asyncio.create_task(guardian_loop(http,db,state)) if GUARDIAN_ENABLED else None
     hot_scout_task = asyncio.create_task(hot_scout_loop(http,guard,limiter,db,state)) if HOT_SCOUT_ENABLED else None
     live_exit_task = asyncio.create_task(live_exit_loop(http,db,state)) if live_executor.keypair_path else None
+    paper_monitor_task = asyncio.create_task(paper_monitor_loop(http,db,state))
     try:
         while True:
             try:
@@ -9378,12 +9440,13 @@ async def main():
             await command_task
         except asyncio.CancelledError:
             pass
-        if live_exit_task:
-            live_exit_task.cancel()
-            try:
-                await live_exit_task
-            except asyncio.CancelledError:
-                pass
+        for task in (live_exit_task, paper_monitor_task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
         if guardian_task:
             guardian_task.cancel()
             try:
