@@ -27,12 +27,12 @@ def enabled() -> bool:
 async def ai_verdict(summary: str, timeout: float = 20.0) -> str | None:
     if not enabled():
         return None
-    try:
-        from anthropic import AsyncAnthropic
-    except ImportError:
-        return None
     global _client
     if _client is None:
+        try:  # optional: pip install anthropic (needs Python 3.10+)
+            from anthropic import AsyncAnthropic
+        except ImportError:
+            return None
         _client = AsyncAnthropic(timeout=timeout, max_retries=1)
     try:
         resp = await asyncio.wait_for(_client.beta.messages.create(

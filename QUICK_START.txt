@@ -44,7 +44,7 @@ Liquidity depth · holder spread · volume vs mcap · rug signature · fresh/bun
 entry window — each marked PASS / WARN / DROP.
 
 OPTIONAL AI SECOND OPINION
-Add ANTHROPIC_API_KEY=... to your .env (key from console.anthropic.com). A few seconds
+(Optional, needs Python 3.10+: run .venv/bin/pip install anthropic first.) Add ANTHROPIC_API_KEY=... to your .env (key from console.anthropic.com). A few seconds
 after each WIDE alert you get a follow-up: BUY SMALL / WAIT / SKIP plus one reason.
 Costs roughly half a cent per alert. Without a key it simply stays off.
 
