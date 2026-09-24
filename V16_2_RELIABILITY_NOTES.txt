@@ -67,3 +67,18 @@ Tests: test_v16_2_reliability.py (20 regression tests; 16 fail on the unpatched 
 
 No trading bot can guarantee profit. These changes make losses smaller and more honestly
 measured, and make it harder to go live on luck. They do not create an edge.
+
+Compact review export (added after the initial patch)
+------------------------------------------------------
+13. export_review.command / export_review.py produce an upload-friendly performance export.
+    export_data.command copies the whole database, a CSV of every table and the complete
+    bot.log, which becomes too large to upload. The review export reads the database
+    read-only in one snapshot, includes only the analysis tables (signals, outcomes, decision
+    ledger, paper/shadow and live trades, execution records, copy results), skips raw price
+    snapshots and social text, keeps only the last ~1 MB of bot.log, rounds floats to 7
+    significant digits, and splits output into parts <= FOMO_REVIEW_PART_MB (default 15 MB).
+    Every exported value is scrubbed of the API keys/tokens from .env and of key-bearing URLs
+    (Helius/PumpPortal api-key=, Telegram bot tokens, bearer/x-api-key headers). Your public
+    wallet address is removed as well. No keypair or seed phrase is ever read.
+14. start_mac.command rotates bot.log to bot.log.1 at each (re)start once it exceeds 50 MB;
+    previously it grew forever.

@@ -52,6 +52,10 @@ Recommended first run: keep real autopilot OFF and leave /shadow on. Optional: s
 echo
 
 while true; do
+  # Keep bot.log bounded: at each (re)start, rotate it once it exceeds 50 MB (one old copy kept).
+  if [ -f bot.log ] && [ "$(wc -c < bot.log | tr -d ' ')" -gt 52428800 ]; then
+    mv -f bot.log bot.log.1
+  fi
   if command -v caffeinate >/dev/null 2>&1; then
     PYTHONUNBUFFERED=1 caffeinate -dims "$PY" -u bot.py 2>&1 | tee -a bot.log
   else
