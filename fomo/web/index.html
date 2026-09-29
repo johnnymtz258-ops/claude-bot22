@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FomoBot Whales</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐋</text></svg>">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">🐋 <b>FomoBot</b> <span class="muted">Whale Copy __VERSION__</span></div>
+  <div class="status" id="status"><span class="pill">connecting…</span></div>
+  <button class="ghost" id="theme" type="button" title="Switch light/dark">◐</button>
+</header>
+<nav class="tabs" id="tabs">
+  <button data-tab="live" class="on">Live</button>
+  <button data-tab="hot">Hot coins</button>
+  <button data-tab="whales">Whales</button>
+  <button data-tab="trades">My trades</button>
+  <button data-tab="stats">Copy results</button>
+  <button data-tab="find">Find whales</button>
+  <button data-tab="settings">Settings</button>
+</nav>
+<main>
+  <section id="tab-live" class="tab on">
+    <div class="tiles" id="live-tiles"></div>
+    <div class="grid2">
+      <div class="card">
+        <div class="card-head"><h2>Latest whale buys</h2><span class="muted" id="feed-note"></span></div>
+        <div class="table-wrap"><table id="feed"></table></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Messages sent</h2></div>
+        <ul class="messages" id="messages"></ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-hot" class="tab">
+    <div class="card">
+      <div class="card-head"><h2>Coins with 2+ of your whales</h2>
+        <select id="hot-hours"><option value="6">6h</option><option value="24" selected>24h</option><option value="72">3 days</option></select>
+      </div>
+      <p class="hint">Several independent whales buying the same coin is the strongest signal the bot has. Click a coin for entries and who is still holding.</p>
+      <div class="table-wrap"><table id="hot"></table></div>
+    </div>
+  </section>
+
+  <section id="tab-whales" class="tab">
+    <div class="card">
+      <div class="card-head"><h2>Follow a whale</h2></div>
+      <form class="row" id="add-whale">
+        <input name="address" placeholder="Wallet address" required spellcheck="false" autocomplete="off">
+        <input name="name" placeholder="Name (optional)" maxlength="32">
+        <button type="submit">Follow</button>
+        <span class="form-msg" id="add-msg"></span>
+      </form>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Your whales</h2><span class="muted">copy results, last 30 days</span></div>
+      <p class="hint"><b>Copy</b> = what you'd have made buying when the alert arrived and selling when the whale sold (fees included, no stop-loss).
+        HOT = made money · NEW = under 5 copies · COLD = losing, auto-muted.</p>
+      <div class="table-wrap"><table id="whales"></table></div>
+    </div>
+  </section>
+
+  <section id="tab-trades" class="tab">
+    <div class="tiles" id="trade-tiles"></div>
+    <div class="card">
+      <div class="card-head"><h2>Realized profit over time</h2><span class="muted" id="curve-note"></span></div>
+      <div class="chart" id="curve"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Open positions</h2><span class="muted" id="sync-note"></span></div>
+      <div class="table-wrap"><table id="open"></table></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Log a trade by hand</h2><span class="muted">only needed without wallet sync</span></div>
+      <form class="row" id="trade-form">
+        <input name="mint" placeholder="Coin address" required spellcheck="false" autocomplete="off">
+        <select name="side"><option value="BUY">Bought</option><option value="SELL">Sold</option></select>
+        <input name="usd" placeholder="$ amount (or 30%)" required>
+        <input name="mc" placeholder="at MC, e.g. 850k (optional)">
+        <button type="submit">Save</button>
+        <button type="button" class="ghost" id="undo">Undo last</button>
+        <span class="form-msg" id="trade-msg"></span>
+      </form>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Closed coins</h2></div>
+      <div class="table-wrap"><table id="closed"></table></div>
+    </div>
+  </section>
+
+  <section id="tab-stats" class="tab">
+    <div class="row filters">
+      <label>Period <select id="stats-days"><option value="1">Today</option><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></label>
+    </div>
+    <div class="tiles" id="stats-tiles"></div>
+    <div class="grid2">
+      <div class="card">
+        <div class="card-head"><h2>Average copy return by alert grade</h2></div>
+        <div class="chart" id="grade-chart"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>What the data says</h2></div>
+        <ul class="facts" id="facts"></ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-find" class="tab">
+    <div class="card">
+      <div class="card-head"><h2>Find whales from coins that already ran</h2></div>
+      <p class="hint">Paste 1–4 coin addresses (DexScreener, GMGN or pump.fun links work too). The bot finds the wallets that bought early — at a third of the peak or lower — ranks them, and flags launch snipers and bots. Wallets early in more than one coin are listed first.</p>
+      <form id="find-form">
+        <textarea name="mints" rows="3" placeholder="One coin per line" spellcheck="false"></textarea>
+        <div class="row"><button type="submit">Find early buyers</button><span class="form-msg" id="find-msg"></span></div>
+      </form>
+      <div id="find-result"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Check a wallet before following</h2></div>
+      <form class="row" id="analyze-form">
+        <input name="wallet" placeholder="Wallet address" required spellcheck="false" autocomplete="off">
+        <button type="submit">Analyze</button><span class="form-msg" id="analyze-msg"></span>
+      </form>
+      <div id="analyze-result"></div>
+    </div>
+  </section>
+
+  <section id="tab-settings" class="tab">
+    <div class="card">
+      <div class="card-head"><h2>Settings</h2><span class="muted">saved instantly, same as /set in Telegram</span></div>
+      <div id="settings"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Health</h2></div>
+      <dl class="health" id="health"></dl>
+    </div>
+  </section>
+</main>
+
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+    <button class="ghost close" id="drawer-close" type="button" aria-label="Close">✕</button>
+    <div id="drawer-body"></div>
+  </div>
+</aside>
+<div class="tooltip" id="tooltip" role="status"></div>
+<script>window.FOMO_TOKEN = "__TOKEN__";</script>
+<script src="/static/app.js"></script>
+</body>
+</html>

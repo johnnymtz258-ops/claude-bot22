@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "FomoBot Whales",
+  "version": "17.0",
+  "description": "Shows which of your tracked whales are in the coin you're looking at. Talks only to the FomoBot running on your computer.",
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "FomoBot Whales", "default_popup": "popup.html" },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://dexscreener.com/solana/*",
+        "https://gmgn.ai/*",
+        "https://axiom.trade/*",
+        "https://photon-sol.tinyastro.io/*",
+        "https://pump.fun/*",
+        "https://neo.bullx.io/*",
+        "https://birdeye.so/*",
+        "https://solscan.io/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

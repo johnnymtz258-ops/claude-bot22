@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; background: #1a1a19; color: #fff; margin: 0; width: 320px; }
+  header { padding: 10px 12px; background: #232322; display: flex; justify-content: space-between; align-items: center; }
+  main { padding: 8px 12px 12px; }
+  .row { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; border-bottom: 1px solid #2c2c2a; }
+  .muted { color: #898781; } .up { color: #0ca30c; } .down { color: #e66767; }
+  button, input { font: inherit; border-radius: 6px; border: 1px solid #383835; background: #232322; color: #fff; padding: 4px 8px; }
+  button.primary { background: #3987e5; border-color: #3987e5; font-weight: 600; cursor: pointer; }
+  .foot { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+  input { width: 70px; }
+</style>
+</head>
+<body>
+<header><b>🐋 FomoBot Whales</b><span id="state" class="muted">…</span></header>
+<main>
+  <div id="list" class="muted">Loading…</div>
+  <div class="foot">
+    <button class="primary" id="open">Open dashboard</button>
+    <label class="muted">port <input id="port" type="number" min="1" max="65535"></label>
+  </div>
+</main>
+<script src="popup.js"></script>
+</body>
+</html>

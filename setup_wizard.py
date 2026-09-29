@@ -1,20 +1,26 @@
-from pathlib import Path
+"""Asks for the few settings the bot needs and writes .env. Press Enter to skip any question."""
 import getpass
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-env = ROOT / ".env"
-print("\nFomo Early-Signal Bot v11 — first-run setup")
-print("Private keys stay in this folder on your Mac.\n")
-vals = {
-    "BIRDEYE_API_KEY": getpass.getpass("Birdeye API key (hidden; Enter to skip): ").strip(),
-    "TELEGRAM_BOT_TOKEN": getpass.getpass("Telegram bot token (hidden; Enter to skip): ").strip(),
-    "TELEGRAM_CHAT_ID": input("Telegram chat ID (Enter to skip): ").strip(),
-    "X_BEARER_TOKEN": getpass.getpass("X API bearer token (hidden; Enter to skip): ").strip(),
-    "HELIUS_API_KEY": getpass.getpass("Helius API key (optional; Enter to use public Solana RPC): ").strip(),
-    "PUBLIC_SOLANA_WALLET_ADDRESS": input("Public Solana wallet address for read-only position sync (optional): ").strip(),
-}
-text = (ROOT / ".env.example").read_text()
-for key, value in vals.items():
-    text = text.replace(f"{key}=", f"{key}={value}", 1)
-env.write_text(text)
-print("\nSetup saved.\n")
+
+
+def main() -> None:
+    print("\n🐋 FomoBot Whale Copy — first-time setup")
+    print("Everything stays in the .env file on this Mac. Never enter a private key or seed phrase.\n")
+    values = {
+        "TELEGRAM_BOT_TOKEN": getpass.getpass("Telegram bot token (from @BotFather, hidden): ").strip(),
+        "TELEGRAM_CHAT_ID": input("Your Telegram chat id (Enter if unknown — the bot will tell you): ").strip(),
+        "HELIUS_API_KEY": getpass.getpass("Helius API key (free at helius.dev, recommended, hidden): ").strip(),
+        "MY_WALLETS": input("Your PUBLIC wallet address for exact P/L (optional): ").strip(),
+    }
+    lines = []
+    for line in (ROOT / ".env.example").read_text().splitlines():
+        key = line.split("=", 1)[0].strip() if "=" in line and not line.lstrip().startswith("#") else ""
+        lines.append(f"{key}={values[key]}" if values.get(key) else line)
+    (ROOT / ".env").write_text("\n".join(lines) + "\n")
+    print("\nSaved. You can edit .env any time.\n")
+
+
+if __name__ == "__main__":
+    main()

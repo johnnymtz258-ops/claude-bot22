@@ -1,87 +1,78 @@
-import os, asyncio, aiohttp, ssl, certifi
+"""Startup self-check: prints what's configured and what to fix. Never stops the bot."""
+import asyncio
+import sys
 from pathlib import Path
-from dotenv import load_dotenv
-from live_execution import LiveExecutor
 
-ROOT=Path(__file__).resolve().parent
-load_dotenv(ROOT/".env")
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
 
-async def get(s,u,h=None,p=None):
-    try:
-        async with s.get(u,headers=h,params=p,timeout=12) as r:
-            return r.status
-    except:
-        return 0
 
-async def rpc_health(s,url):
-    try:
-        async with s.post(url,json={"jsonrpc":"2.0","id":1,"method":"getHealth"},timeout=12) as r:
-            return r.status
-    except:
-        return 0
+def line(ok, text):
+    print(("  ✅ " if ok is True else "  ⚠️  " if ok is False else "  •  ") + text)
 
-async def main():
-    print("\n=== v16.2 QUALITY MEASUREMENT self-check ===")
-    ssl_ctx=ssl.create_default_context(cafile=certifi.where())
-    connector=aiohttp.TCPConnector(ssl=ssl_ctx)
-    async with aiohttp.ClientSession(connector=connector) as s:
-        print("DexScreener:", await get(s,"https://api.dexscreener.com/token-profiles/latest/v1"))
-        print("GeckoTerminal:", await get(s,"https://api.geckoterminal.com/api/v2/networks/new_pools",
-                                          {"Accept":"application/json;version=20230203"}))
-        print("RugCheck:", await get(s,"https://api.rugcheck.xyz/v1/tokens/So11111111111111111111111111111111111111112/report/summary"))
 
-        be=os.getenv("BIRDEYE_API_KEY","").strip()
-        if be:
-            st=await get(s,"https://public-api.birdeye.so/defi/networks",
-                         {"X-API-KEY":be,"accept":"application/json"})
-            print("Birdeye core:",st, "(200 = key valid; advanced features are fault-isolated at runtime)")
-        else:
-            print("Birdeye: not configured (RugCheck fallback active)")
+async def online_checks(cfg):
+    import aiohttp
 
-        helius=os.getenv("HELIUS_API_KEY","").strip()
-        if helius:
-            rpc=f"https://mainnet.helius-rpc.com/?api-key={helius}"
-            print("Realtime Solana RPC:", await rpc_health(s,rpc), "(Helius)")
-        else:
-            rpc=os.getenv("SOLANA_RPC_HTTP","https://api.mainnet-beta.solana.com")
-            print("Realtime Solana RPC:", await rpc_health(s,rpc), "(public fallback)")
-
-        jup=os.getenv("JUPITER_API_KEY","").strip()
-        if jup:
-            jst=await get(s,"https://api.jup.ag/tokens/v2/recent",{"x-api-key":jup,"accept":"application/json"})
-            print("Jupiter Tokens V2:",jst,"(discovery + independent safety intel)")
-        else:
-            print("Jupiter Tokens V2: API key not configured (optional; execution quote fallback still available)")
-        print("X:","configured" if os.getenv("X_BEARER_TOKEN","").strip() else "not configured")
-        print("PumpPortal discovery:","configured (runtime WebSocket will verify connection)" if os.getenv("PUMPPORTAL_API_KEY","").strip() else "not configured (optional)")
-        public_wallet=os.getenv("PUBLIC_SOLANA_WALLET_ADDRESS","").strip()
-        if public_wallet:
+    from fomo.app import _ssl_context
+    timeout = aiohttp.ClientTimeout(total=8)
+    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=_ssl_context()), timeout=timeout) as s:
+        if cfg.telegram_token:
             try:
-                async with s.post(rpc,json={"jsonrpc":"2.0","id":1,"method":"getBalance","params":[public_wallet,{"commitment":"confirmed"}]},timeout=12) as r:
-                    data=await r.json(content_type=None)
-                    ok=r.status==200 and isinstance(data,dict) and not data.get("error")
-                    print("Read-only wallet sync:","READY" if ok else f"RPC check failed ({r.status})")
-            except Exception:
-                print("Read-only wallet sync: network/RPC error")
-        else:
-            print("Read-only wallet sync: not configured (optional)")
-        ex=LiveExecutor()
-        issues=ex.readiness()
-        print("Real autopilot capability:", "READY (still requires Telegram arm/confirm)" if not issues else "OFF/not ready")
-        tg=os.getenv("TELEGRAM_BOT_TOKEN","").strip()
-        chat=os.getenv("TELEGRAM_CHAT_ID","").strip()
-        if tg and chat:
-            try:
-                async with s.post(
-                    f"https://api.telegram.org/bot{tg}/sendMessage",
-                    json={"chat_id":chat,"text":"✅ v16.2 QUALITY MEASUREMENT self-check: Telegram connected."},
-                    timeout=12
-                ) as r:
-                    print("Telegram:",r.status)
-            except:
-                print("Telegram: network error")
-        else:
-            print("Telegram: not configured")
-    print("=====================\n")
+                async with s.get(f"https://api.telegram.org/bot{cfg.telegram_token}/getMe") as r:
+                    data = await r.json(content_type=None)
+                ok = bool(data.get("ok"))
+                line(ok, f"Telegram bot @{data['result']['username']}" if ok else
+                     f"Telegram token rejected: {data.get('description')}")
+            except Exception as exc:
+                line(False, f"Telegram unreachable ({type(exc).__name__})")
+        try:
+            async with s.post(cfg.rpc_http[0], json={"jsonrpc": "2.0", "id": 1, "method": "getSlot"}) as r:
+                data = await r.json(content_type=None)
+            line("result" in data, "Solana RPC answering" if "result" in data else f"Solana RPC error: {data}")
+        except Exception as exc:
+            line(False, f"Solana RPC unreachable ({type(exc).__name__})")
+        try:
+            async with s.get("https://api.dexscreener.com/tokens/v1/solana/So11111111111111111111111111111111111111112") as r:
+                line(r.status == 200, "DexScreener prices" if r.status == 200 else f"DexScreener HTTP {r.status}")
+        except Exception as exc:
+            line(False, f"DexScreener unreachable ({type(exc).__name__})")
 
-asyncio.run(main())
+
+def main():
+    print("Self-check:")
+    if sys.version_info < (3, 9):
+        line(False, f"Python {sys.version.split()[0]} is too old — install Python 3.9 or newer")
+        return
+    try:
+        from fomo import config
+        from fomo.db import Database
+    except ImportError as exc:
+        line(False, f"missing package: {exc.name} — delete the .venv folder and start again")
+        return
+    if not (ROOT / ".env").exists():
+        line(False, "no .env file — copy .env.example to .env and fill in the Telegram lines")
+    cfg = config.load()
+    line(bool(cfg.telegram_token), "Telegram token set" if cfg.telegram_token else
+         "TELEGRAM_BOT_TOKEN missing — alerts will only print in this window")
+    line(bool(cfg.telegram_chat_id), "Telegram chat id set" if cfg.telegram_chat_id else
+         "TELEGRAM_CHAT_ID missing — message your bot once and it will tell you the id")
+    line(True if cfg.uses_helius else False, "Helius RPC (fast)" if cfg.uses_helius else
+         "No HELIUS_API_KEY — using public RPC (slower alerts; /find is slow). Free key: helius.dev")
+    line(True if cfg.my_wallets else None, f"Wallet sync on for {len(cfg.my_wallets)} wallet(s) — exact P/L"
+         if cfg.my_wallets else "Wallet sync off — set MY_WALLETS=your public address for exact P/L")
+    try:
+        db = Database(cfg.db_path)
+        whales = db.scalar("select count(*) from whales where active=1", default=0)
+        line(True, f"Database {cfg.db_path} ({whales} whales followed)")
+        db.close()
+    except Exception as exc:
+        line(False, f"Database problem at {cfg.db_path}: {exc}")
+    try:
+        asyncio.run(asyncio.wait_for(online_checks(cfg), timeout=25))
+    except Exception as exc:
+        line(False, f"online checks skipped ({type(exc).__name__})")
+
+
+if __name__ == "__main__":
+    main()

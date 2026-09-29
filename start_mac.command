@@ -2,7 +2,7 @@
 set -u
 cd "$(dirname "$0")"
 
-echo "Fomo Early-Signal Bot v16.2 QUALITY MEASUREMENT launcher"
+echo "🐋 FomoBot Whale Copy"
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "Python 3 is missing. Run: xcode-select --install"
@@ -11,48 +11,35 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 if [ ! -d ".venv" ]; then
-  echo "Creating local Python environment..."
+  echo "Creating local Python environment (first run only)..."
   python3 -m venv .venv || exit 1
 fi
 
 PY="./.venv/bin/python3"
 "$PY" -m pip install -q -r requirements.txt || {
-  echo "Dependency install failed. Check internet and retry."
+  echo "Installing dependencies failed. Check your internet connection and try again."
   read -p "Press Enter to close."
   exit 1
 }
 
-# Import ONLY API/Telegram secrets from the exact prior bot or older versions.
+# First run: bring over Telegram/Helius/wallet settings from the previous bot folder, or ask.
 if [ ! -f ".env" ]; then
   "$PY" import_secrets.py
-  import_code=$?
-  if [ "$import_code" -eq 2 ]; then
+  if [ $? -eq 2 ]; then
     "$PY" setup_wizard.py
-  elif [ "$import_code" -ne 0 ]; then
-    echo "Secret import failed."
-    read -p "Press Enter to close."
-    exit 1
   fi
 fi
 
-# Persistent state lives outside version folders; migrate/recover it below.
-
-# Add settings introduced in this build without replacing keys or existing custom values.
+# Add any new settings to .env without touching your existing values.
 "$PY" migrate_env.py
 
-# Recover existing positions/history into the shared state database.
-"$PY" migrate_state.py
-
-echo "Running v16.2 QUALITY MEASUREMENT self-check..."
 "$PY" doctor.py
 echo
-echo "Starting v16.2 QUALITY MEASUREMENT. Mac sleep prevention ON. Crash auto-restart ON. Continuous position guardian ON."
-echo "Telegram: /help /status /sources /edge /leaders /shadow /paperreport /bankroll /why /positions /hold /guardian /wallet /sync /learn /daily
-Recommended first run: keep real autopilot OFF and leave /shadow on. Optional: set PUBLIC wallet sync, Jupiter API key, Helius API key, PumpPortal/X; see README and /sources."
+echo "Dashboard: http://localhost:8787   ·   Telegram: /help"
+echo "Keep this window open. Mac sleep is blocked while the bot runs. Control+C stops it."
 echo
 
 while true; do
-  # Keep bot.log bounded: at each (re)start, rotate it once it exceeds 50 MB (one old copy kept).
   if [ -f bot.log ] && [ "$(wc -c < bot.log | tr -d ' ')" -gt 52428800 ]; then
     mv -f bot.log bot.log.1
   fi
@@ -65,6 +52,6 @@ while true; do
   if [ "$code" -eq 0 ] || [ "$code" -eq 130 ]; then
     break
   fi
-  echo "Bot exited with code $code. Restarting in 8 seconds..."
+  echo "Bot stopped unexpectedly (code $code). Restarting in 8 seconds..."
   sleep 8
 done

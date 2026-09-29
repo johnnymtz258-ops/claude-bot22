@@ -1,0 +1,137 @@
+"""Telegram message text. Few message types, same layout every time.
+
+  🟢 WHALE BUY / 🐋🐋 2ND WHALE IN   a tracked whale bought a coin (graded A/B/C)
+  🔴 WHALE SOLD x% / WHALE EXITED    only for coins you hold (or were alerted on)
+  🚨 LIQUIDITY PULLED                confirmed twice; the only price-based alarm
+  📊 DAILY SUMMARY
+
+There are deliberately no "price dropped, sell" messages: the exit signal is the whale.
+"""
+from __future__ import annotations
+
+from .util import ago, dur, esc, mc, mult, num, pct, usd
+
+GRADE_ICON = {"A": "🟢", "B": "🟡", "C": "⚪️"}
+STATUS_TEXT = {"HOT": "🔥 HOT", "OK": "✅ OK", "NEW": "🆕 NEW", "WEAK": "〰️ WEAK", "COLD": "🧊 COLD"}
+
+
+def token_links(mint: str, pair: str = "") -> list[tuple[str, str]]:
+    links = [("DexScreener", f"https://dexscreener.com/solana/{pair or mint}"),
+             ("GMGN", f"https://gmgn.ai/sol/token/{mint}")]
+    if pair:
+        links.append(("Photon", f"https://photon-sol.tinyastro.io/en/lp/{pair}"))
+    return links
+
+
+def whale_link(address: str) -> str:
+    return f"https://gmgn.ai/sol/address/{address}"
+
+
+def whale_record(stats: dict) -> str:
+    status = STATUS_TEXT.get(stats.get("status", "NEW"), stats.get("status", ""))
+    if stats.get("n", 0) == 0:
+        return f"{status} · no copies measured yet"
+    text = (f"{status} · {stats['n']} copies · {stats['win_rate'] * 100:.0f}% won · "
+            f"avg {pct(stats['avg'])}")
+    if stats.get("typical_dip", 0) <= -10:
+        text += f" · winners dipped {stats['typical_dip']:.0f}% first"
+    return text
+
+
+def buy_alert(*, symbol: str, mint: str, whale_name: str, whale_addr: str, stats: dict, grade: str,
+              reasons: list, usd_value: float, base_amount: float, base: str, entry_mc: float,
+              now_mc: float, chase: float | None, confluence: list[dict], latency_s: int,
+              info: dict, late_detect: bool) -> str:
+    n = len(confluence)
+    if n >= 2:
+        head = f"🐋🐋 {'2ND' if n == 2 else f'{n}TH' if n > 3 else '3RD'} WHALE IN · ${esc(symbol)}"
+    else:
+        head = f"{GRADE_ICON.get(grade, '🟢')} WHALE BUY · ${esc(symbol)}"
+    lines = [f"<b>{head}</b>  <i>grade {grade}</i>",
+             f"🐋 <a href=\"{whale_link(whale_addr)}\">{esc(whale_name)}</a> — {whale_record(stats)}"]
+    paid = f"{base_amount:,.2f} {base}" if base == "SOL" else usd(base_amount)
+    timing = dur(latency_s) + " ago"
+    lines.append(f"Bought {usd(usd_value)} ({paid}) at <b>{mc(entry_mc)}</b> MC · {timing}"
+                 + (" · <i>seen late</i>" if late_detect else ""))
+    if now_mc > 0 and chase is not None:
+        lines.append(f"Now {mc(now_mc)} MC ({pct(chase)} since whale)")
+    if n >= 2:
+        lines.append("Whales in: " + ", ".join(f"{esc(c['name'])} @ {mc(c['entry_mc'])}" for c in confluence[:5]))
+    facts = []
+    liq = num(info.get("liquidity_usd"), -1)
+    if liq >= 0:
+        facts.append(f"liq {usd(liq)}")
+    if info.get("pair_created_ts"):
+        facts.append(f"age {ago(info['pair_created_ts'])}")
+    if info.get("buys_h1") or info.get("sells_h1"):
+        facts.append(f"1h {info.get('buys_h1', 0)} buys / {info.get('sells_h1', 0)} sells")
+    if facts:
+        lines.append(" · ".join(facts))
+    for ok, text in reasons:
+        lines.append(("✅ " if ok else "⚠️ " if ok is False else "• ") + esc(text))
+    lines.append(f"<code>{mint}</code>")
+    return "\n".join(lines)
+
+
+def sell_alert(*, symbol: str, mint: str, whale_name: str, whale_addr: str, fraction: float, usd_value: float,
+               exit_mc: float, whale_multiple: float, whale_entry_mc: float, left_pct: float,
+               others_in: list[dict], position: dict | None, all_out: bool) -> str:
+    full = fraction >= 0.9 or left_pct < 5
+    head = f"🔴 WHALE EXITED · ${esc(symbol)}" if full else f"🟠 WHALE SOLD {fraction * 100:.0f}% · ${esc(symbol)}"
+    lines = [f"<b>{head}</b>",
+             f"🐋 <a href=\"{whale_link(whale_addr)}\">{esc(whale_name)}</a> sold {usd(usd_value)} at {mc(exit_mc)} MC"]
+    if whale_entry_mc > 0:
+        lines.append(f"Their entry {mc(whale_entry_mc)} → {mult(whale_multiple)}"
+                     + ("" if full else f" · still holds {left_pct:.0f}% of their bag"))
+    elif not full:
+        lines.append(f"Still holds {left_pct:.0f}% of their bag")
+    if others_in:
+        lines.append("Still in: " + ", ".join(f"{esc(o['name'])} (entry {mc(o['entry_mc'])})" for o in others_in[:4]))
+    elif all_out:
+        lines.append("<b>Every tracked whale in this coin is now out.</b>")
+    if position and position.get("open"):
+        lines.append(f"You: {usd(position['value'])} now · {usd(position['pnl'], signed=True)} "
+                     f"({pct(position['pnl_pct'])}) on this coin")
+    lines.append("Partial sell — whales often trim and keep riding." if not full
+                 else "Copy-exit signal: this whale is out.")
+    lines.append(f"<code>{mint}</code>")
+    return "\n".join(lines)
+
+
+def rug_alert(*, symbol: str, mint: str, liq_before: float, liq_now: float, position: dict | None) -> str:
+    drop = (1 - liq_now / liq_before) * 100 if liq_before > 0 else 100
+    lines = [f"<b>🚨 LIQUIDITY PULLED · ${esc(symbol)}</b>",
+             f"Liquidity {usd(liq_before)} → {usd(liq_now)} ({drop:.0f}% gone, confirmed twice)"]
+    if position and position.get("open"):
+        lines.append(f"You hold {usd(position['value'])} ({pct(position['pnl_pct'])}). Selling may already be hard.")
+    lines.append(f"<code>{mint}</code>")
+    return "\n".join(lines)
+
+
+def take_initial_note(*, symbol: str, mint: str, position: dict, multiple: float) -> str:
+    return (f"<b>💰 ${esc(symbol)} is {mult(multiple)} on your cost</b>\n"
+            f"Optional: selling {usd(position['cost'])} takes your initial out and lets the rest ride "
+            f"for free while the whales hold.\n<code>{mint}</code>")
+
+
+def position_line(p: dict, holders: list[dict]) -> str:
+    whales_in = [h for h in holders if h["still_in"]]
+    line = (f"<b>${esc(p['symbol'])}</b> {usd(p['value'])} · {usd(p['unrealized'], signed=True)} "
+            f"({pct((p['multiple'] - 1) * 100 if p['multiple'] else 0)})")
+    if p.get("entry_mc"):
+        line += f" · in @ {mc(p['entry_mc'])} → {mc(p['mc_now'])}"
+    if holders:
+        line += f"\n   🐋 {len(whales_in)}/{len(holders)} whales still in"
+        if whales_in:
+            line += ": " + ", ".join(esc(h["name"]) for h in whales_in[:3])
+    return line
+
+
+def whale_line(w: dict, i: int) -> str:
+    s = w["stats"]
+    muted = " 🔕 muted" if w.get("muted") else " · auto-muted" if w.get("auto_muted") == 1 else ""
+    last = f" · last trade {ago(w['last_trade_ts'])} ago" if w.get("last_trade_ts") else ""
+    body = (f"{i}. <b>{esc(w['name'])}</b> {STATUS_TEXT[s['status']]}{muted}\n"
+            f"   {s['n']} copies · {s['win_rate'] * 100:.0f}% won · avg {pct(s['avg'])} · "
+            f"2x rate {s['hit_2x'] * 100:.0f}%{last}")
+    return body + f"\n   <code>{w['address']}</code>"
