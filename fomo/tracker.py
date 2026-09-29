@@ -173,7 +173,10 @@ class Tracker:
         Already-processed transactions are skipped, so only the first start reads the full window.
         """
         limit = limit or (600 if self.cfg.uses_helius else 200)
-        for wallet in sorted(self.engine.my_wallets):
-            for s in await self.rpc.signatures(wallet, limit=limit):
-                if s.get("err") is None:
-                    await self.engine.enqueue(wallet, str(s.get("signature")), "backfill")
+        for attempt in range(3):  # anything that failed (e.g. rate limited) is retried on the next pass
+            for wallet in sorted(self.engine.my_wallets):
+                for s in await self.rpc.signatures(wallet, limit=limit):
+                    if s.get("err") is None:
+                        await self.engine.enqueue(wallet, str(s.get("signature")), "backfill")
+            await self.engine.queue.join()
+            await asyncio.sleep(30)
