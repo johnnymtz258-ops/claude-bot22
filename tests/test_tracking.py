@@ -120,6 +120,7 @@ def test_pulled_liquidity_alarms_once_after_confirmation(bot):
 
 
 def test_take_initial_note_is_optional_and_once(bot):
+    bot.cfg.set("PROFIT_LADDER", "off")
     hold_coin(bot)
     now = int(time.time())
     bot.market.set_pair(mint=MINT, price=0.0025, mc=2.5e6, liq=150_000)

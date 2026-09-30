@@ -17,6 +17,7 @@ HELP = f"""<b>🐋 FomoBot Whale Copy {VERSION}</b>
 /find COIN [COIN2 …] — early buyers of coins that ran (new whales)
 /suggest — find new whales from today's biggest runners (more alerts)
 /mute name · /unmute name · /remove name
+/scout — the whale autopilot (finds, follows & drops whales by recent profit) · /scout now
 
 <b>Coins</b>
 /recent — latest whale buys · /hot — coins with 2+ whales
@@ -27,12 +28,14 @@ HELP = f"""<b>🐋 FomoBot Whale Copy {VERSION}</b>
 /bought 20 · /bought 20 at 850k — you bought $20 (at that market cap)
 /sold 5 · /sold 30% · /sold all — you sold (add "at 1.2m" if you like)
 /positions — your coins + whales still in · /undo — undo last entry
+/exits — which exit style works best + your sell-too-early / too-late habits
 
 <b>Bot</b>
 /stats — what copying has actually returned · /status — health
 /settings · /set NAME VALUE · /pause · /resume
 
-The bot never tells you to sell on a dip. Exit signal = the whale selling."""
+The bot never tells you to sell on an early dip. Exit signals: the whale selling,
+the 2x/3x/5x ladder, and the 🛡 protector once a coin has doubled."""
 
 
 class Commands:
@@ -93,6 +96,10 @@ class Commands:
         if action in {"mute", "unmute"}:
             whales.set_muted(arg, action == "mute")
             await tg.answer(cq["id"], f"{'Muted' if action == 'mute' else 'Unmuted'} {whales.name(arg)}")
+        elif action == "untrack":
+            whales.remove(arg)
+            self.app.refresh_wallets()
+            await tg.answer(cq["id"], f"Stopped following {whales.name(arg)}")
         elif action == "track":
             ok, text = whales.add(arg, source="find")
             self.app.refresh_wallets()
@@ -262,6 +269,41 @@ class Commands:
         await self.say("🔎 Researching today's biggest runners for early whales: "
                        + ", ".join(f"${esc(c['symbol'])} ({pct(c['change_h24'])} 24h)" for c in coins))
         await self.cmd_find([c["mint"] for c in coins], "")
+
+    async def cmd_scout(self, args, reply_mint):
+        scout = self.app.scout
+        if args and args[0].lower() == "now":
+            if scout.running:
+                raise ValueError("the autopilot is already running")
+            await self.say("🤖 Scouting now — this takes a few minutes. You'll get a message for every whale it follows.")
+            self.app.find_task = asyncio.create_task(self._run_scout())
+            return
+        st = scout.status()
+        s = st["last_summary"]
+        lines = [f"<b>🤖 Whale autopilot</b> — {'ON' if st['enabled'] else 'OFF (/set AUTO_WHALES on)'}",
+                 f"Following {st['auto_whales']}/{st['limit']} auto-picked whales "
+                 f"(plus {self.app.whales.count() - st['auto_whales']} of yours)",
+                 f"Last scout: {ago(st['last_run']) + ' ago' if st['last_run'] else 'not yet'}"
+                 + (f" · researched {len(s.get('coins', []))} coins, checked {s.get('checked', 0)} wallets, "
+                    f"followed {s.get('followed', 0)}" if s else ""),
+                 "Follows only wallets profitable right now (6+ trades, +1 SOL, 45%+ won, active in 2 days). "
+                 "Drops its own picks when they go cold, idle 4 days, or stop being profitable. Yours are never touched."]
+        recent = [c for c in st["candidates"] if c["status"] in ("followed", "dropped")][:8]
+        for c in recent:
+            lines.append(f"{'➕' if c['status'] == 'followed' else '➖'} <code>{short(c['address'])}</code> "
+                         f"{c['status']} · {esc(c['reason'])}")
+        await self.say("\n".join(lines))
+
+    async def _run_scout(self):
+        try:
+            s = await self.app.scout.scout()
+            await self.say(f"🤖 Scout done: researched {len(s['coins'])} coins, checked {s['checked']} wallets, "
+                           f"followed {s['followed']}." + ("" if s["coins"] else " No fresh runners to research right now."))
+        except Exception as exc:
+            await self.say(f"⚠️ Scout failed: {esc(type(exc).__name__)} {esc(exc)}")
+
+    async def cmd_exits(self, args, reply_mint):
+        await self.say(format_exits(self.app))
 
     async def cmd_runners(self, args, reply_mint):
         rows = self.app.db.rows("select * from alerts where kind='RUNNER' order by ts desc limit 10")
@@ -529,6 +571,32 @@ def format_stats(app, days: int = 30) -> str:
     if top:
         lines.append("<b>Whales</b>: " + " · ".join(
             f"{esc(w['name'])} {messages.STATUS_TEXT[w['status']].split()[0]} {pct(w['avg'])} ({w['n']})" for w in top))
+    return "\n".join(lines)
+
+
+def format_exits(app) -> str:
+    from . import exits
+    lab = exits.exit_lab(app.db, app.cfg)
+    habits = exits.my_exit_habits(app.db)
+    lines = ["<b>🚪 Exit lab</b> — your whales' last 30 days of alerts, replayed with different exit styles"]
+    if lab["copies"]:
+        for r in sorted(lab["rules"], key=lambda r: -r["avg"]):
+            star = " ⭐" if lab["best"] and r["key"] == lab["best"]["key"] else ""
+            lines.append(f"{pct(r['avg'])} avg · {r['win_rate'] * 100:.0f}% won — {esc(r['label'])}{star}")
+        lines.append(f"({lab['copies']} alerts with a recorded price path)")
+    else:
+        lines.append("Not enough recorded price paths yet — fills in after a day or two of alerts.")
+    lines.append("\n<b>Your selling habits</b>")
+    if habits["measured_after"]:
+        lines.append(f"After you sell, coins go another {pct(habits['median_after_gain'])} within 24h (median of "
+                     f"{habits['measured_after']}); {habits['too_early']} went 50%+ higher.")
+    if habits["measured_before"]:
+        lines.append(f"You sell {habits['median_below_peak']:.0f}% below the best price you had (median of "
+                     f"{habits['measured_before']}); {habits['too_late']} gave back 35%+.")
+    lines += [f"• {esc(t)}" for t in habits["advice"]]
+    lines.append(f"\nLadder nudges: {'on' if app.cfg.flag('PROFIT_LADDER') else 'off'} · profit protector: "
+                 + (f"after {app.cfg.get('PROTECT_AFTER_X'):g}x, warns at -{app.cfg.get('PROTECT_TRAIL_PCT'):g}% from peak"
+                    if app.cfg.get("PROTECT_AFTER_X") > 0 else "off"))
     return "\n".join(lines)
 
 

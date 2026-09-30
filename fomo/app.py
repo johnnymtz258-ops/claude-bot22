@@ -18,6 +18,7 @@ from .market import Market
 from .portfolio import Portfolio
 from .rpc import SolanaRPC, WalletStream
 from .runners import RunnerScanner
+from .scout import WhaleScout
 from .telegram import Notifier, Telegram
 from .tracker import Tracker
 from .whales import Whales
@@ -128,6 +129,8 @@ class App:
                                    self.notify)
             self.discovery = Discovery(self.rpc, self.market, self.db, cfg)
             self.runners = RunnerScanner(cfg, self.db, self.market, self.engine, self.whales, self.notify)
+            self.scout = WhaleScout(cfg, self.db, self.rpc, self.market, self.whales, self.runners, self.notify,
+                                    self.refresh_wallets)
             self.commands = Commands(self)
             self.stream = WalletStream(cfg.rpc_wss, self.engine.enqueue)
 
@@ -136,7 +139,8 @@ class App:
                                              config.ROOT / "legacy" / "tracked_wallets.json"])
             self.refresh_wallets()
             tasks = [self.stream.run(), self.tracker.run_prices(), self.tracker.run_poller(),
-                     self.telegram_loop(), self.daily_loop(), self.runners.run()]
+                     self.telegram_loop(), self.daily_loop(), self.runners.run(),
+                     self.scout.run()]
             tasks += [self.engine.worker() for _ in range(3)]
             if cfg.dashboard_enabled:
                 from .dashboard import start_dashboard

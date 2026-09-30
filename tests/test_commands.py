@@ -58,7 +58,7 @@ def chat():
 
 def test_every_read_command_answers(chat):
     for cmd in ("/help", "/whales", "/recent", "/hot", "/positions", "/stats", "/stats 7", "/status", "/settings",
-                "/whale Rocket", "/coin CASHED", "/runners", "/suggest"):
+                "/whale Rocket", "/coin CASHED", "/runners", "/suggest", "/scout", "/exits"):
         reply = chat.say(cmd)
         assert reply and "⚠️" not in reply.split("\n")[0], (cmd, reply)
     assert "Rocket" in chat.say("/whales") and "HOT" in chat.say("/whales")
@@ -94,7 +94,7 @@ def test_sold_by_ticker_you_hold(chat):
 
 
 def test_add_in_any_order_and_mute_buttons(chat):
-    addr = "GjJyeC1rB1p4d6k1Mzw5Y6vYGZyLr8N8zQJ7XU4yzF1G"
+    addr = "EdmxWPmx2WH6WgFfTdu9xfkYf3k1g5wD1zccTVySEEh1"
     assert "Now following Newbie" in chat.say(f"/add Newbie {addr}")
     assert chat.whales.get(addr)["name"] == "Newbie"
     assert "Muted" in chat.press(f"mute:{addr}")

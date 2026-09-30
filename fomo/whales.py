@@ -33,7 +33,9 @@ class Whales:
         existing = self.db.row("select * from whales where address=?", (address,))
         if existing:
             name = given or existing["name"]
-            self.db.run("update whales set name=?,active=1 where address=?", (name, address))
+            # adding a whale yourself makes it yours: the autopilot never drops whales you chose
+            owner = existing["source"] if source == "auto" else source
+            self.db.run("update whales set name=?,active=1,source=? where address=?", (name, owner, address))
             return True, f"Following {name}."
         if self.count() >= self.cfg.max_whales:
             return False, f"You're following {self.cfg.max_whales} whales (the max). Remove one first."

@@ -219,6 +219,64 @@
     node.append(svg);
   }
 
+  // Price path (as market cap) with whale and your buys/sells marked on it.
+  function priceChart(node, path, events, supply) {
+    node.replaceChildren();
+    if (path.length < 2) { node.append(el("div", { class: "empty" }, "The price chart appears once the bot has watched this coin for a few minutes.")); return; }
+    const W = Math.max(node.clientWidth, 320), H = 240, L = 58, R = 16, T = 18, B = 26;
+    const pts = path.map((p) => [p[0], p[1] * supply]);
+    const evs = events.filter((e) => e.ts >= pts[0][0] - 60 && e.ts <= pts[pts.length - 1][0] + 60 && e.mc > 0);
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]).concat(evs.map((e) => e.mc));
+    const x0 = Math.min(...xs), x1 = Math.max(...xs);
+    const ticks = niceTicks(Math.min(...ys) * 0.95, Math.max(...ys) * 1.05);
+    const y0 = Math.max(0, ticks[0]), y1 = ticks[ticks.length - 1];
+    const sx = (x) => L + ((Math.min(Math.max(x, x0), x1) - x0) / Math.max(1, x1 - x0)) * (W - L - R);
+    const sy = (y) => T + (1 - (y - y0) / Math.max(1e-9, y1 - y0)) * (H - T - B);
+    const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Market cap with whale and your trades" });
+    ticks.filter((t) => t >= y0).forEach((t) => {
+      svg.append(svgEl("line", { x1: L, x2: W - R, y1: sy(t), y2: sy(t), class: "grid-line" }));
+      const lab = svgEl("text", { x: L - 8, y: sy(t) + 4, "text-anchor": "end", class: "axis-text" });
+      lab.textContent = t > 0 ? mc(t) : "$0";
+      svg.append(lab);
+    });
+    [x0, x1].forEach((x, i) => {
+      const lab = svgEl("text", { x: sx(x), y: H - 6, "text-anchor": i ? "end" : "start", class: "axis-text" });
+      lab.textContent = new Date(x * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+      svg.append(lab);
+    });
+    const line = cssVar("--series-pos");
+    const d = pts.map((p, i) => `${i ? "L" : "M"}${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join("");
+    svg.append(svgEl("path", { d, fill: "none", stroke: line, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+    const cross = svgEl("line", { y1: T, y2: H - B, class: "cross", visibility: "hidden" });
+    svg.append(cross);
+    const hit = svgEl("rect", { x: L, y: T, width: W - L - R, height: H - T - B, fill: "transparent" });
+    hit.addEventListener("pointermove", (e) => {
+      const box = svg.getBoundingClientRect();
+      const px = ((e.clientX - box.left) / box.width) * W;
+      let best = pts[0];
+      for (const p of pts) if (Math.abs(sx(p[0]) - px) < Math.abs(sx(best[0]) - px)) best = p;
+      cross.setAttribute("x1", sx(best[0])); cross.setAttribute("x2", sx(best[0])); cross.setAttribute("visibility", "visible");
+      showTip(e, mc(best[1]), new Date(best[0] * 1000).toLocaleString(), line);
+    });
+    hit.addEventListener("pointerleave", () => { cross.setAttribute("visibility", "hidden"); hideTip(); });
+    svg.append(hit);
+    for (const ev of evs) {
+      const color = cssVar(ev.who === "me" ? "--series-me" : "--series-whale");
+      const x = sx(ev.ts), y = sy(ev.mc), up = ev.side === "BUY";
+      const tri = up ? `M${x},${y - 7}L${x - 6},${y + 4}L${x + 6},${y + 4}Z` : `M${x},${y + 7}L${x - 6},${y - 4}L${x + 6},${y - 4}Z`;
+      const mark = svgEl("path", { d: tri, fill: color, stroke: cssVar("--surface-1"), "stroke-width": 2, tabindex: 0 });
+      const target = svgEl("circle", { cx: x, cy: y, r: 12, fill: "transparent" });
+      const show = (e) => showTip(e, `${ev.side === "BUY" ? "Buy" : "Sell"} ${usd(ev.usd)} @ ${mc(ev.mc)}`, `${ev.label} · ${new Date(ev.ts * 1000).toLocaleString()}`, color);
+      target.addEventListener("pointermove", show);
+      target.addEventListener("pointerleave", hideTip);
+      svg.append(mark, target);
+    }
+    node.append(el("div", { class: "legend" },
+      el("span", {}, el("span", { class: "ln", style: `background:${line}` }), "Market cap"),
+      el("span", {}, el("span", { class: "sw", style: `background:${cssVar("--series-whale")}` }), "Whale trades ▲ buy ▼ sell"),
+      el("span", {}, el("span", { class: "sw", style: `background:${cssVar("--series-me")}` }), "Your trades")), svg);
+  }
+
   // ---------- status bar ----------------------------------------------------------------
   async function renderStatus() {
     const o = await api("/api/overview");
@@ -272,6 +330,7 @@
     renderWhales();
   }
   async function renderWhales() {
+    renderScout().catch(() => {});
     const rows = await api("/api/whales");
     table($("whales"), ["Whale", "Status", { label: "Copies", num: 1 }, { label: "Won", num: 1 }, { label: "Avg", num: 1 },
       { label: "Median", num: 1 }, { label: "Hit 2x", num: 1 }, { label: "Dip before run", num: 1 }, "Last trade", ""],
@@ -300,15 +359,16 @@
     const curve = d.curve.length ? [[d.curve[0][0] - 60, 0], ...d.curve] : [];
     lineChart($("curve"), curve, (v) => usd(v, true));
     $("curve-note").textContent = d.curve.length ? "one point per sell" : "";
-    table($("open"), ["Coin", { label: "Value", num: 1 }, { label: "P/L", num: 1 }, { label: "Cost", num: 1 }, { label: "Your entry", num: 1 }, { label: "Now", num: 1 }, "Whales in", ""],
+    table($("open"), ["Coin", { label: "Value", num: 1 }, { label: "P/L", num: 1 }, { label: "Peak", num: 1 }, { label: "Your entry", num: 1 }, { label: "Now", num: 1 }, "Whales in", "Exit coach"],
       d.open.map((p) => {
         const inNow = p.holders.filter((h) => h.still_in);
         return el("tr", { class: "click", onclick: () => openCoin(p.mint) },
           td(coinCell(p.symbol, "", p.mint)), td(usd(p.value), "num"),
           td(`${usd(p.unrealized, true)} (${pct((p.multiple - 1) * 100)})`, `num ${signClass(p.unrealized)}`),
-          td(usd(p.cost), "num"), td(mc(p.entry_mc), "num"), td(mc(p.mc_now), "num"),
+          td(p.coach && p.coach.peak_multiple ? `${mult(p.coach.peak_multiple)}` : "—", "num"),
+          td(mc(p.entry_mc), "num"), td(mc(p.mc_now), "num"),
           td(p.holders.length ? `${inNow.length}/${p.holders.length} ${inNow.map((h) => h.name).slice(0, 3).join(", ")}` : "—", "wrap"),
-          td(links(p.mint, "")));
+          td(el("span", { class: "coach" }, (p.coach && p.coach.hint) || ""), "wrap"));
       }), "No open positions.");
     table($("closed"), ["Coin", { label: "Bought", num: 1 }, { label: "Sold", num: 1 }, { label: "Realized", num: 1 }, { label: "Return", num: 1 }, "Last trade"],
       d.closed.map((p) => el("tr", { class: "click", onclick: () => openCoin(p.mint) },
@@ -335,6 +395,47 @@
       ` over ${plural(r.runners.n, "alert")}, ${Math.round(r.runners.win_rate * 100)}% won. Measured separately from whale copies.`]);
     if (!facts.length) facts.push(["", "No copies yet.", " Every alert opens a simulated copy; results appear as whales sell."]);
     $("facts").replaceChildren(...facts.map(([pre, strong, post]) => el("li", {}, pre, el("b", {}, strong), post)));
+  }
+
+  async function renderExits() {
+    const d = await api("/api/exits");
+    const h = d.habits, lab = d.lab;
+    $("exit-tiles").replaceChildren(
+      tile("After you sell", h.measured_after ? pct(h.median_after_gain) : "—", h.measured_after ? `median move in the next 24h · ${plural(h.measured_after, "sell")}` : "needs a day of tracked sells", h.median_after_gain >= 40 ? "down" : ""),
+      tile("Below your peak", h.measured_before ? `${Math.round(h.median_below_peak)}%` : "—", h.measured_before ? "how far under the best price you'd seen" : "needs tracked sells", h.median_below_peak >= 30 ? "down" : ""),
+      tile("Best exit style", lab.best && lab.best.n ? lab.best.label : "—", lab.best && lab.best.n ? `${pct(lab.best.avg)} avg over ${plural(lab.copies, "alert")}` : "needs recorded alerts", ""));
+    const styleName = { whale: "Whale exit", all2x: "All at 2x", half2x: "Half at 2x", trail: "Trail 35%", ladder: "Ladder" };
+    barChart($("lab-chart"), lab.rules.map((r) => ({ label: styleName[r.key], value: r.avg, n: r.n, win: r.win_rate })), (v) => pct(v));
+    $("lab-note").textContent = lab.copies ? plural(lab.copies, "alert") : "";
+    const advice = h.advice.slice();
+    if (lab.best && lab.best.n >= 5) advice.push(`On your whales lately, "${lab.best.label}" returned ${pct(lab.best.avg)} per alert on average.`);
+    advice.push(`Nudges: ladder ${d.ladder ? "on" : "off"} (2x/3x/5x/10x) · profit protector ${d.protect_after > 0 ? `after ${d.protect_after}x at −${d.protect_trail}% from peak` : "off"}. Change in Settings.`);
+    $("exit-advice").replaceChildren(...advice.map((t) => el("li", {}, t)));
+    table($("my-sells"), ["When", "Coin", { label: "Sold", num: 1 }, { label: "At MC", num: 1 }, { label: "Below your peak", num: 1 }, { label: "Next 24h high", num: 1 }, "Verdict"],
+      h.sells.map((sl) => {
+        const early = sl.after_gain_pct !== undefined && sl.after_gain_pct >= 50;
+        const late = sl.below_peak_pct !== undefined && sl.below_peak_pct >= 35;
+        return el("tr", { class: "click", onclick: () => openCoin(sl.mint) }, td(ago(sl.ts)), td(`$${sl.symbol}`),
+          td(usd(sl.usd), "num"), td(mc(sl.mc), "num"),
+          td(sl.below_peak_pct === undefined ? "—" : `${Math.round(sl.below_peak_pct)}%`, "num"),
+          td(sl.after_gain_pct === undefined ? "—" : pct(sl.after_gain_pct), "num"),
+          td(early && late ? "late, then it ran again" : early ? "too early" : late ? "too late" : sl.after_gain_pct === undefined ? "watching…" : "good"));
+      }), "No sells in the last 30 days.");
+  }
+
+  async function renderScout() {
+    const s = await api("/api/scout");
+    const sum = s.last_summary || {};
+    $("scout-summary").textContent = `${s.enabled ? "On" : "Off (turn on in Settings: AUTO_WHALES)"} · following ${s.auto_whales}/${s.limit} auto-picked whales · last scout ${s.last_run ? ago(s.last_run) : "not yet"}`
+      + (sum.coins ? ` — researched ${plural(sum.coins.length, "coin")}, checked ${plural(sum.checked || 0, "wallet")}, followed ${sum.followed || 0}` : "")
+      + ". Follows wallets profitable right now; drops its own picks when they go cold, idle or unprofitable. Your whales are never touched.";
+    $("scout-run").disabled = s.running;
+    table($("scout"), ["Wallet", "Found in", "Status", { label: "Profit", num: 1 }, { label: "Won", num: 1 }, { label: "Trades", num: 1 }, "Why"],
+      s.candidates.map((c) => el("tr", {}, td(el("span", { class: "mono" }, short(c.address))), td(c.coins.split(",").filter(Boolean).map((x) => `$${x}`).join(", ")),
+        td(c.status === "followed" ? "➕ followed" : c.status === "dropped" ? "➖ dropped" : "passed"),
+        td(`${num(c.pnl_sol) > 0 ? "+" : ""}${num(c.pnl_sol).toFixed(1)} SOL`, `num ${signClass(c.pnl_sol)}`),
+        td(`${Math.round(num(c.win_rate) * 100)}%`, "num"), td(String(c.trips), "num"), td(c.reason, "wrap"))),
+      "The autopilot hasn't scouted yet — it runs a few minutes after start, then every few hours.");
   }
 
   async function renderSettings() {
@@ -432,6 +533,11 @@
       r.trades.map((t) => el("tr", {}, td(ago(t.ts)), td(t.who), td(t.side === "BUY" ? "🟢 buy" : `🔴 sell ${t.sell_fraction ? Math.round(t.sell_fraction * 100) + "%" : ""}`),
         td(usd(t.usd_value), "num"), td(mc(t.mc_usd), "num"))), "No trades recorded.");
     const p = r.position;
+    const supply = num(i.price_usd) > 0 ? num(i.mc_usd) / num(i.price_usd) : 0;
+    const chart = el("div", { class: "chart" });
+    const events = r.trades.map((t) => ({ ts: t.ts, mc: t.mc_usd, side: t.side, usd: t.usd_value, who: t.is_me ? "me" : "whale", label: t.who }))
+      .concat(r.my_trades.filter((t) => !r.trades.some((w) => w.is_me && Math.abs(w.ts - t.ts) < 5))
+        .map((t) => ({ ts: t.ts, mc: t.price_usd * supply, side: t.side, usd: t.usd, who: "me", label: "You" })));
     openDrawer(
       el("h3", {}, coinCell(i.symbol, i.image, mint)),
       el("div", { class: "kv" }, el("span", {}, "MC ", el("b", {}, mc(i.mc_usd))),
@@ -441,8 +547,10 @@
       p && p.open ? el("div", { class: "kv" }, el("span", {}, "You hold ", el("b", {}, usd(p.value))),
         el("span", { class: signClass(p.unrealized) }, `${usd(p.unrealized, true)} (${pct((p.multiple - 1) * 100)})`),
         el("span", {}, "your entry ", el("b", {}, mc(p.entry_mc)))) : null,
+      chart,
       el("h2", { style: "margin-top:16px" }, "Your whales in this coin"), el("div", { class: "table-wrap" }, holders),
       el("h2", { style: "margin-top:16px" }, "Trades"), el("div", { class: "table-wrap" }, trades));
+    if (supply > 0) priceChart(chart, r.path, events, supply);
   }
 
   async function openWhale(address) {
@@ -474,7 +582,7 @@
   }
 
   // ---------- wiring --------------------------------------------------------------------
-  const renderers = { live: renderLive, hot: renderHot, whales: renderWhales, trades: renderTrades, stats: renderStats, find: renderStatus, settings: renderSettings };
+  const renderers = { live: renderLive, hot: renderHot, whales: renderWhales, trades: renderTrades, exits: renderExits, stats: renderStats, find: renderStatus, settings: renderSettings };
   async function refresh() {
     try { await renderers[activeTab](); }
     catch (err) { $("status").replaceChildren(el("span", { class: "pill bad" }, el("span", { class: "dot" }), `Bot not reachable: ${err.message}`)); }
@@ -516,6 +624,10 @@
     $("find-result").replaceChildren();
     try { const r = await post("/api/find", { mints }); $("find-msg").textContent = "started…"; pollFind(r.id); }
     catch (err) { $("find-msg").textContent = err.message; }
+  });
+  $("scout-run").addEventListener("click", async () => {
+    try { await post("/api/scout/run"); $("scout-msg").textContent = "scouting… (a few minutes)"; $("scout-run").disabled = true; }
+    catch (err) { $("scout-msg").textContent = err.message; }
   });
   $("analyze-form").addEventListener("submit", (e) => { e.preventDefault(); analyze(e.target.wallet.value.trim()); });
 

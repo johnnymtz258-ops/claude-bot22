@@ -6,9 +6,10 @@ readings at least 20s apart). Dips never trigger a sell message.
 from __future__ import annotations
 
 import asyncio
+import statistics
 import time
 
-from . import copies, messages
+from . import copies, exits, messages
 from .util import esc, num
 
 PRICE_EVERY = 15
@@ -31,6 +32,9 @@ class Tracker:
         self.notify = notify
         self._last_balance_check = 0.0
         self._last_mute_check = 0.0
+        self.marks = exits.MarkRecorder(db)
+        self._protect_pending: dict[str, int] = {}
+        self._lab_cache: tuple[float, dict] = (0.0, {})
         self.loops = 0
         self.last_error = ""
 
@@ -49,8 +53,11 @@ class Tracker:
         positions = self.portfolio.open_positions()
         recent = [r["mint"] for r in self.db.rows(
             "select distinct mint from alerts where kind='BUY' and ts>=?", (now - 3 * 3600,))]
-        mints = {c["mint"] for c in open_copies} | {p["mint"] for p in positions} | set(recent)
+        closed = self.portfolio.recently_closed()
+        mints = {c["mint"] for c in open_copies} | {p["mint"] for p in positions} | set(recent) | set(closed)
         infos = await self.market.tokens(sorted(mints), max_age=PRICE_EVERY - 2) if mints else {}
+        for mint, info in infos.items():
+            self.marks.record(mint, num(info.get("price_usd")), now)
         for c in open_copies:
             self._update_copy(c, infos.get(c["mint"]), now)
         for p in positions:
@@ -141,6 +148,8 @@ class Tracker:
             await self.notify(messages.take_initial_note(symbol=pos["symbol"], mint=mint, position=pos,
                                                          multiple=pos["multiple"]), mint=mint, kind="INFO")
             w["initial_note_ts"] = now
+        if pos and pos["open"] and pos["priced"]:
+            await self._exit_nudges(pos, now)
         self.db.run("""insert into token_watch(mint,liq_peak,liq_peak_ts,liq_peak_price,rug_pending_ts,rug_alert_ts,
             initial_note_ts) values(?,?,?,?,?,?,?) on conflict(mint) do update set liq_peak=excluded.liq_peak,
             liq_peak_ts=excluded.liq_peak_ts,liq_peak_price=excluded.liq_peak_price,
@@ -148,6 +157,56 @@ class Tracker:
             initial_note_ts=excluded.initial_note_ts""",
                     (mint, w["liq_peak"], w["liq_peak_ts"], w["liq_peak_price"], w["rug_pending_ts"],
                      w["rug_alert_ts"], w["initial_note_ts"]))
+
+    # -- exit nudges ---------------------------------------------------------------------------------
+    def _noted(self, mint: str, kind: str, level: float, since: int) -> bool:
+        return bool(self.db.scalar("select 1 from position_notes where mint=? and kind=? and level=? and ts>=?",
+                                   (mint, kind, level, since)))
+
+    def _note(self, mint: str, kind: str, level: float, now: int) -> None:
+        self.db.run("insert or replace into position_notes(mint,kind,level,ts) values(?,?,?,?)", (mint, kind, level, now))
+
+    def _lab(self) -> dict:
+        ts, lab = self._lab_cache
+        if time.time() - ts > 1800:
+            lab = exits.exit_lab(self.db, self.cfg)
+            self._lab_cache = (time.time(), lab)
+        return lab
+
+    def _typical_peak(self, holders: list[dict]) -> float:
+        wallets = [h["wallet"] for h in holders]
+        if not wallets:
+            return 0.0
+        rows = self.db.rows(f"""select peak_price/entry_price x from copies where entry_price>0 and whale in
+            ({','.join('?' * len(wallets))}) order by open_ts desc limit 60""", wallets)
+        values = [num(r["x"]) for r in rows if num(r["x"]) > 0]
+        return statistics.median(values) if len(values) >= 3 else 0.0
+
+    async def _exit_nudges(self, pos: dict, now: int) -> None:
+        """Ladder (2x/3x/5x/10x) and profit protector — each at most once per holding period."""
+        mint, since = pos["mint"], int(pos.get("episode_ts") or pos.get("first_ts") or 0)
+        holders = self.whales.holders_of(mint)
+        c = exits.coach(self.db, self.cfg, pos, holders, now)
+        if self.cfg.flag("PROFIT_LADDER"):
+            reached = [lv for lv in exits.LADDER_LEVELS if c["multiple"] >= lv and not self._noted(mint, "ladder", lv, since)]
+            if reached:
+                for lv in reached:
+                    self._note(mint, "ladder", lv, now)
+                best = self._lab().get("best")
+                await self.notify(messages.ladder_note(
+                    symbol=pos["symbol"], mint=mint, level=reached[-1], position=pos, whales_in=c["whales_in"],
+                    typical_peak=self._typical_peak(holders),
+                    best_rule=best["label"] if best and best["n"] >= 5 else ""), mint=mint, kind="LADDER")
+        armed = self.cfg.get("PROTECT_AFTER_X") > 0 and c["peak_multiple"] >= self.cfg.get("PROTECT_AFTER_X")
+        if armed and c["from_peak_pct"] >= self.cfg.get("PROTECT_TRAIL_PCT") and not self._noted(mint, "protect", 0, since):
+            first = self._protect_pending.setdefault(mint, now)
+            if now - first >= RUG_CONFIRM_SECONDS:  # seen on two readings, not a single wick
+                self._note(mint, "protect", 0, now)
+                self._protect_pending.pop(mint, None)
+                await self.notify(messages.protect_note(symbol=pos["symbol"], mint=mint, coach=c, position=pos),
+                                  mint=mint, kind="PROTECT")
+        else:
+            self._protect_pending.pop(mint, None)
 
     # -- backup polling ------------------------------------------------------------------------
     async def run_poller(self) -> None:

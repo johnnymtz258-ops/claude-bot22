@@ -90,7 +90,7 @@ class Portfolio:
     def _ledger(self, mint: str) -> dict:
         tokens = cost = realized = bought = sold = 0.0
         entry_mc_weight = 0.0
-        first_ts = last_ts = 0
+        first_ts = last_ts = episode_ts = 0
         unmatched = 0
         sources = set()
         for t in self.db.rows("select * from my_trades where mint=? order by ts, id", (mint,)):
@@ -98,6 +98,8 @@ class Portfolio:
             first_ts = first_ts or t["ts"]
             last_ts = t["ts"]
             if t["side"] == "BUY":
+                if tokens <= 1e-9:
+                    episode_ts = t["ts"]  # a new holding period starts (first buy, or re-buy after selling out)
                 tokens += num(t["tokens"])
                 cost += num(t["usd"])
                 bought += num(t["usd"])
@@ -116,7 +118,7 @@ class Portfolio:
                 sold += proceeds
         return {"mint": mint, "tokens": tokens, "cost": cost, "realized": realized, "bought": bought, "sold": sold,
                 "entry_mc": entry_mc_weight / bought if bought > 0 else 0.0, "first_ts": first_ts,
-                "last_ts": last_ts, "unmatched_sells": unmatched, "source": "wallet" if "wallet" in sources else "manual"}
+                "last_ts": last_ts, "episode_ts": episode_ts, "unmatched_sells": unmatched, "source": "wallet" if "wallet" in sources else "manual"}
 
     def position(self, mint: str, price: float | None = None) -> dict | None:
         if not self.db.scalar("select 1 from my_trades where mint=? limit 1", (mint,)):
@@ -141,6 +143,13 @@ class Portfolio:
         out = [p for p in (self.position(m) for m in self.mints()) if p and p["open"]]
         out.sort(key=lambda p: -p["value"])
         return out
+
+    def recently_closed(self, hours: float = 24) -> list[str]:
+        """Coins you sold out of recently (still price-tracked to see what happened after)."""
+        since = int(time.time() - hours * 3600)
+        mints = [r["mint"] for r in self.db.rows(
+            "select distinct mint from my_trades where side='SELL' and ts>=?", (since,))]
+        return [m for m in mints if not self.holds(m)]
 
     def holds(self, mint: str) -> bool:
         p = self.position(mint)

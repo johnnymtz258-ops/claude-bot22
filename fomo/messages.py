@@ -114,6 +114,29 @@ def take_initial_note(*, symbol: str, mint: str, position: dict, multiple: float
             f"for free while the whales hold.\n<code>{mint}</code>")
 
 
+def ladder_note(*, symbol: str, mint: str, level: float, position: dict, whales_in: int, typical_peak: float,
+                best_rule: str) -> str:
+    lines = [f"<b>📈 ${esc(symbol)} hit {level:g}x on your cost</b>",
+             f"{usd(position['cost'])} in → {usd(position['value'])} now. Ladder: sell about a third, let the rest ride"
+             + (f" while {whales_in} whale{'s' if whales_in != 1 else ''} hold." if whales_in else ".")]
+    if typical_peak > 0:
+        lines.append(f"Your whales' picks peak around {mult(typical_peak)} (median).")
+    if best_rule:
+        lines.append(f"Best exit style on your whales lately: {esc(best_rule)}.")
+    lines.append(f"<code>{mint}</code>")
+    return "\n".join(lines)
+
+
+def protect_note(*, symbol: str, mint: str, coach: dict, position: dict) -> str:
+    return (f"<b>🛡 ${esc(symbol)} gave back {coach['from_peak_pct']:.0f}% from its peak</b>\n"
+            f"It reached {mult(coach['peak_multiple'])} on your cost and is {mult(coach['multiple'])} now "
+            f"({usd(position['value'])}). "
+            + (f"{coach['whales_in']} whale{'s' if coach['whales_in'] != 1 else ''} still in. " if coach.get("whales_in")
+               else "No tracked whale is in anymore. ")
+            + "If you usually sell too late, this is the moment to lock some in.\n"
+            f"<code>{mint}</code>")
+
+
 def position_line(p: dict, holders: list[dict]) -> str:
     whales_in = [h for h in holders if h["still_in"]]
     line = (f"<b>${esc(p['symbol'])}</b> {usd(p['value'])} · {usd(p['unrealized'], signed=True)} "

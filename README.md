@@ -69,6 +69,32 @@ Whales you tracked in the old bot are imported automatically on first start.
   quickest way to grow your whale list — more good whales means more alerts.
 - Tap **➕ Follow** under either result, or use the dashboard's *Find whales* tab.
 
+## Whale autopilot
+
+Every few hours (`AUTO_SCOUT_HOURS`, default 6) the bot researches today's biggest runners and
+coins your alerts caught that went 3x+, reads their early buyers' recent trading, and **follows
+only wallets that are profitable right now**: 6+ closed trades, +1 SOL or more, 45%+ won, active
+in the last 2 days, not a sniper or bot. Once a day it **drops its own picks** that turned COLD,
+went quiet for 4 days, or stopped being profitable. Whales you add yourself are never dropped
+(adding an auto-picked whale yourself makes it yours). Up to `AUTO_WHALE_LIMIT` (15) at a time.
+Every follow/drop is reported with the reason. `/scout` shows it; `/scout now` runs it.
+Uses a few thousand Helius requests per run — fine on the free plan.
+
+## Selling: too early vs too late
+
+- **Exit lab** (`/exits`, dashboard *Exit lab*): replays your whales' last 30 days of alerts with
+  their recorded price paths under five exit styles (sell with the whale, all at 2x, half at 2x,
+  trail 35% after 2x, ladder ⅓-⅓-trail) and shows which actually made the most.
+- **Your habits**: for each of your sells, how much higher the coin went in the next 24h (too
+  early) and how far below your best price you sold (too late), with a plain recommendation.
+- **Ladder nudges** (`PROFIT_LADDER`): one message at 2x, 3x, 5x, 10x on your cost — "take about a
+  third, let the rest ride while the whales hold."
+- **Profit protector** (`PROTECT_AFTER_X` 2, `PROTECT_TRAIL_PCT` 35): once a coin has been 2x+,
+  one warning if it gives back 35% from its peak (confirmed twice). It never fires before 2x, so
+  early dips still don't trigger anything.
+- The dashboard's **exit coach** column shows each position's peak and what the ladder/protector says,
+  and each coin's chart marks every whale and your own buy/sell on the price line.
+
 ## Your profit/loss
 
 - **With `MY_WALLETS` set** every buy and sell in your wallet is read from the chain. Costs and

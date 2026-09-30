@@ -74,6 +74,18 @@ create table if not exists token_watch(
 create table if not exists tg_messages(
     message_id integer primary key, mint text, wallet text, kind text, ts integer);
 
+create table if not exists price_marks(
+    mint text, ts integer, price real, primary key(mint, ts));
+
+create table if not exists whale_candidates(
+    address text primary key, found_ts integer, analyzed_ts integer default 0, coins text default '',
+    verdict text default '', pnl_sol real default 0, win_rate real default 0, trips integer default 0,
+    median_hold_s real default 0, last_trade_ts integer default 0, status text default 'new',
+    reason text default '');
+
+create table if not exists position_notes(
+    mint text, kind text, level real, ts integer, primary key(mint, kind, level));
+
 create table if not exists finds(
     id integer primary key autoincrement, ts integer, mints text, status text,
     progress text default '', result_json text default '', finished_ts integer default 0);
@@ -131,6 +143,7 @@ class Database:
     def prune(self, keep_days: int = 14) -> None:
         cutoff = int(time.time()) - keep_days * 86400
         self.run("delete from processed where ts<?", (cutoff,))
+        self.run("delete from price_marks where ts<?", (int(time.time()) - 45 * 86400,))
         self.run("delete from tg_messages where ts<?", (int(time.time()) - 60 * 86400,))
 
 

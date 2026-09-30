@@ -13,7 +13,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from . import VERSION, reports
+from . import VERSION, exits, reports
 from .commands import format_analysis
 from .copies import return_pct
 from .config import TUNABLES
@@ -110,7 +110,13 @@ class Dashboard:
         if not is_address(mint):
             return _json({"error": "not a Solana address"}, 400)
         await a.market.token(mint, max_age=20)
-        return _json(reports.coin_report(a.db, a.market, a.whales, a.portfolio, mint))
+        report = reports.coin_report(a.db, a.market, a.whales, a.portfolio, mint)
+        now = int(time.time())
+        start = min([int(t["ts"]) for t in report["trades"]] + [now - 86400])
+        mine = a.db.rows("select ts, side, usd, price_usd from my_trades where mint=? and ts>=? order by ts", (mint, start))
+        report["path"] = exits.marks(a.db, mint, start - 600, now)
+        report["my_trades"] = mine
+        return _json(report)
 
     async def lookup(self, request):
         """For the browser extension: is this address a coin your whales traded, or a wallet?"""
@@ -135,6 +141,7 @@ class Dashboard:
         open_ = a.portfolio.open_positions()
         for p in open_:
             p["holders"] = a.whales.holders_of(p["mint"])
+            p["coach"] = exits.coach(a.db, a.cfg, p, p["holders"])
         closed = []
         for mint in a.portfolio.mints():
             p = a.portfolio.position(mint)
@@ -142,6 +149,26 @@ class Dashboard:
                 closed.append(p)
         return _json({"open": open_, "closed": closed[:100], "summary": a.portfolio.summary(),
                       "curve": a.portfolio.pnl_curve(), "wallet_synced": bool(a.cfg.my_wallets)})
+
+    async def exits_view(self, request):
+        days = int(num(request.query.get("days"), 30) or 30)
+        habits = exits.my_exit_habits(self.app.db, days)
+        for sell in habits["sells"]:
+            sell["symbol"] = self.app.market.symbol(sell["mint"])
+        return _json({"lab": exits.exit_lab(self.app.db, self.app.cfg, days), "habits": habits,
+                      "ladder": self.app.cfg.flag("PROFIT_LADDER"), "protect_after": self.app.cfg.get("PROTECT_AFTER_X"),
+                      "protect_trail": self.app.cfg.get("PROTECT_TRAIL_PCT")})
+
+    async def scout_view(self, request):
+        st = self.app.scout.status()
+        return _json(st)
+
+    async def scout_run(self, request):
+        scout = self.app.scout
+        if scout.running:
+            raise ValueError("the autopilot is already running")
+        asyncio.create_task(scout.scout())
+        return _json({"ok": True})
 
     async def stats(self, request):
         days = int(num(request.query.get("days"), 30) or 30)
@@ -254,6 +281,9 @@ class Dashboard:
         r.add_get("/api/lookup/{addr}", self.lookup)
         r.add_get("/api/positions", self.positions)
         r.add_get("/api/stats", self.stats)
+        r.add_get("/api/exits", self.exits_view)
+        r.add_get("/api/scout", self.scout_view)
+        r.add_post("/api/scout/run", self.scout_run)
         r.add_get("/api/settings", self.settings)
         r.add_get("/api/find", self.find_status)
         r.add_get("/api/find/{id}", self.find_status)

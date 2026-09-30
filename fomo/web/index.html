@@ -18,6 +18,7 @@
   <button data-tab="hot">Hot coins</button>
   <button data-tab="whales">Whales</button>
   <button data-tab="trades">My trades</button>
+  <button data-tab="exits">Exit lab</button>
   <button data-tab="stats">Copy results</button>
   <button data-tab="find">Find whales</button>
   <button data-tab="settings">Settings</button>
@@ -58,6 +59,11 @@
       </form>
     </div>
     <div class="card">
+      <div class="card-head"><h2>🤖 Whale autopilot</h2><span class="row"><span class="form-msg" id="scout-msg"></span><button class="small" id="scout-run" type="button">Scout now</button></span></div>
+      <p class="hint" id="scout-summary"></p>
+      <div class="table-wrap"><table id="scout"></table></div>
+    </div>
+    <div class="card">
       <div class="card-head"><h2>Your whales</h2><span class="muted">copy results, last 30 days</span></div>
       <p class="hint"><b>Copy</b> = what you'd have made buying when the alert arrived and selling when the whale sold (fees included, no stop-loss).
         HOT = made money · NEW = under 5 copies · COLD = losing, auto-muted.</p>
@@ -90,6 +96,25 @@
     <div class="card">
       <div class="card-head"><h2>Closed coins</h2></div>
       <div class="table-wrap"><table id="closed"></table></div>
+    </div>
+  </section>
+
+  <section id="tab-exits" class="tab">
+    <div class="tiles" id="exit-tiles"></div>
+    <div class="grid2">
+      <div class="card">
+        <div class="card-head"><h2>Which exit style made the most</h2><span class="muted" id="lab-note"></span></div>
+        <p class="hint">Every whale alert from the last 30 days, replayed with its real price path. Anything a style hasn't sold is sold when the whale sells. 1% fee each way.</p>
+        <div class="chart" id="lab-chart"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>What to change</h2></div>
+        <ul class="facts" id="exit-advice"></ul>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Your recent sells</h2><span class="muted">what the coin did before and after</span></div>
+      <div class="table-wrap"><table id="my-sells"></table></div>
     </div>
   </section>
 

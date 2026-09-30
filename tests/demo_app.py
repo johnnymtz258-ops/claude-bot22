@@ -11,6 +11,7 @@ from fomo.discovery import Discovery
 from fomo.engine import Engine
 from fomo.portfolio import Portfolio
 from fomo.runners import RunnerScanner
+from fomo.scout import WhaleScout
 from fomo.telegram import Notifier
 from fomo.tracker import Tracker
 from fomo.whales import Whales
@@ -54,6 +55,7 @@ class DemoApp:
         self.stream = FakeStream()
         self.find_task = None
         self.runners = RunnerScanner(self.cfg, self.db, self.market, self.engine, self.whales, self.notify)
+        self.scout = WhaleScout(self.cfg, self.db, self.rpc, self.market, self.whales, self.runners, self.notify, lambda: None)
         self._sig = 0
 
     def set_setting(self, name, value):
@@ -94,6 +96,9 @@ class DemoApp:
                 row = self.db.row("select * from copies where id=?", (c,))
                 for dt, p in ((300, 0.8 if x > 1.5 else 0.95), (3600, 0.7 if x > 2 else 1.02), (7200, x)):
                     row = copies.update_path(self.db, row, p, t + dt)
+                peak = x * 1.8 if x > 1 else 1.3   # most coins run past where the whale finally sells
+                for k, p in enumerate([1.0, 0.85, 1.3, (1.3 + peak) / 2, peak, (peak + x) / 2, x]):
+                    self.db.run("insert or ignore into price_marks(mint,ts,price) values(?,?,?)", (mint, t + k * 1100, p))
                 copies.sell(self.db, row, 1.0, x, 1.0, "whale exited", t + 8000)
         self.whales.refresh_auto_mutes()
         # today's action
@@ -126,6 +131,29 @@ class DemoApp:
                                                    tokens=1_100_000, block_time=now - 20))
         for sym, (mint, price, liq) in COINS.items():
             self.price(sym, price, liq)
+        # recorded price paths for today's coins (what the tracker stores once a minute)
+        paths = {"CASHED": (0.000075, 0.00132), "MOIN": (0.00031, 0.00041), "TE": (0.0003, 0.00022),
+                 "BAGSPAY": (0.00054, 0.00056)}
+        for sym, (a, b) in paths.items():
+            mint = COINS[sym][0]
+            for k in range(0, 61):
+                wobble = 1 + 0.12 * ((k * 7919) % 13 - 6) / 6
+                self.db.run("insert or ignore into price_marks(mint,ts,price) values(?,?,?)",
+                            (mint, now - 600 + k * 10 - 3000, (a + (b - a) * k / 60) * wobble))
+            if sym == "TE":  # after you sold TE it bounced +45%
+                for k, px in enumerate([0.00017, 0.00021, 0.00026, 0.00027, 0.00022]):
+                    self.db.run("insert or ignore into price_marks(mint,ts,price) values(?,?,?)", (mint, now - 180 + k * 30, px))
+        self.whales.add("GjJyeC1rB1p4d6k1Mzw5Y6vYGZyLr8N8zQJ7XU4yzF1G", "auto-GjJy", source="auto")
+        for addr, status, pnl, wr, trips, reason in (
+                ("GjJyeC1rB1p4d6k1Mzw5Y6vYGZyLr8N8zQJ7XU4yzF1G", "followed", 6.4, 0.62, 13, "+6.4 SOL over 13 trades, 62% won"),
+                ("AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9", "rejected", -1.9, 0.31, 11, "❌ Losing lately"),
+                ("9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu", "rejected", 0.4, 0.5, 4, "only 4 closed trades")):
+            self.db.run("""insert or replace into whale_candidates(address,found_ts,analyzed_ts,coins,verdict,pnl_sol,
+                win_rate,trips,status,reason) values(?,?,?,?,?,?,?,?,?,?)""",
+                        (addr, now - 7200, now - 7000, "CASHED,MOIN", "", pnl, wr, trips, status, reason))
+        self.db.set_meta("scout_last_run", now - 7000)
+        self.scout.last_run = now - 7000
+        self.db.set_meta("scout_last_summary", '{"ts": 0, "coins": ["a", "b"], "checked": 6, "followed": 1}')
         await self.tracker.tick(now)
 
 

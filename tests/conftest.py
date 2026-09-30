@@ -7,6 +7,7 @@ from fomo.db import Database
 from fomo.engine import Engine
 from fomo.portfolio import Portfolio
 from fomo.runners import RunnerScanner
+from fomo.scout import WhaleScout
 from fomo.tracker import Tracker
 from fomo.whales import Whales
 from tests.helpers import FakeMarket, FakeRPC, Notes
@@ -28,6 +29,7 @@ class Bot:
                                self.notes)
         self._sig = 0
         self.runners = RunnerScanner(self.cfg, self.db, self.market, self.engine, self.whales, self.notes)
+        self.scout = WhaleScout(self.cfg, self.db, self.rpc, self.market, self.whales, self.runners, self.notes, lambda: None)
 
     def run(self, coro):
         return asyncio.get_event_loop().run_until_complete(coro)
