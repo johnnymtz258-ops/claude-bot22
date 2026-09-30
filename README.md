@@ -14,6 +14,7 @@ longer runs. Its own two-month review found it had no edge. Your manual whale co
 |---|---|
 | 🟢/🟡/⚪️ **WHALE BUY** (grade A/B/C) | A whale you follow buys a coin: entry market cap, how far price has moved since, the whale's measured record, safety checks |
 | 🐋🐋 **2ND WHALE IN** | Another of your whales buys the same coin within 6h — the strongest signal |
+| 📈 **COMMUNITY RUNNER** | No whale, but 2,000+ trades a day, heavy buying, 2+ social links and the top-10 wallets hold under 30%. Measured separately (scored as sold after 24h) |
 | 🟠 **WHALE SOLD x%** / 🔴 **WHALE EXITED** | A whale sells a coin **you hold**. Partial trims are labeled as trims |
 | 🚨 **LIQUIDITY PULLED** | Only when liquidity really disappears (confirmed twice, and far more than a dip explains) |
 | 🌙 Daily summary | Once a day, silent |
@@ -31,6 +32,9 @@ run; the exit signal is the whale leaving, not a red candle.
 - **Chase** — how far the price already moved since the whale's buy (LATE above 50%).
 - **Safety** — live freeze authority = skipped; live mint authority, RugCheck dangers or thin
   liquidity lower the grade.
+- **Community** — top-10 *wallets'* share of supply (pools excluded), trades in 24h, social links.
+  STRONG lifts the grade, THIN lowers it, and WHALE-ONLY (a few wallets hold most of it, hardly
+  anyone trades it) isn't sent at all by default (`HIDE_WHALE_ONLY`) but is still tracked and scored.
 - **Conviction** — a buy 3× bigger than that whale's usual size.
 
 A = strong, B = normal, C = weak (sent silently). `/stats` shows whether A really beats C for you.
@@ -61,6 +65,8 @@ Whales you tracked in the old bot are imported automatically on first start.
 - `/analyze WALLET` — reads a wallet's last ~200 swaps and rebuilds its round trips: win rate,
   profit in SOL, median hold time, typical entry market cap. Verdict: ✅ copyable, 🆕 not enough
   data, ❌ losing, 🤖 too fast to copy by hand.
+- `/suggest` — runs `/find` on today's biggest runners (2x+ in 24h with real liquidity). The
+  quickest way to grow your whale list — more good whales means more alerts.
 - Tap **➕ Follow** under either result, or use the dashboard's *Find whales* tab.
 
 ## Your profit/loss

@@ -10,6 +10,7 @@ import asyncio
 import time
 
 from . import copies, messages
+from .community import CommunityChecker
 from .market import IGNORED_MINTS
 from .swaps import parse_swap
 from .util import num
@@ -22,7 +23,7 @@ THIN_LIQUIDITY_USD = 5_000
 
 def grade_buy(*, status: str, stats: dict, confluence: int, chase: float | None, safety: dict,
               rug: dict | None, liquidity: float, usd_value: float, usual_usd: float,
-              late_chase_pct: float) -> tuple[str, list]:
+              late_chase_pct: float, community: dict | None = None) -> tuple[str, list]:
     """Grade a whale buy. Returns ('A'|'B'|'C'|'SKIP', [(ok, reason), ...]).
 
     ok=True is a plus, ok=False a warning, ok=None neutral information.
@@ -67,6 +68,10 @@ def grade_buy(*, status: str, stats: dict, confluence: int, chase: float | None,
         points -= 1
         reasons.append((False, f"Thin liquidity (${liquidity:,.0f}) — big slippage"))
 
+    if community:
+        points += community["points"]
+        reasons.append(({"STRONG": True, "OK": None}.get(community["label"], False), community["line"]))
+
     if usual_usd > 0 and usd_value >= 3 * usual_usd:
         points += 1
         reasons.append((True, f"Big buy for this whale ({usd_value / usual_usd:.1f}× their usual size)"))
@@ -85,6 +90,7 @@ class Engine:
         self.portfolio = portfolio
         self.notify = notify  # async (text, *, buttons=None, silent=False, mint="", wallet="", kind="") -> msg id
         self.my_wallets = set(cfg.my_wallets)
+        self.community = CommunityChecker(rpc, market)
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=5000)
         self._inflight: set[tuple[str, str]] = set()
         self._buying: set[tuple[str, str]] = set()  # whale+coin buys being handled right now
@@ -202,14 +208,16 @@ class Engine:
         whale = self.whales.get(wallet) or {}
         stats = self.whales.stats(wallet)
         info = c["info"]
-        safety, rug = await asyncio.gather(self.market.safety(mint), self._rugcheck(mint))
+        safety, rug, community = await asyncio.gather(self.market.safety(mint), self._rugcheck(mint),
+                                                      self.community.check(mint, info))
         now_price = num(info.get("price_usd"))
         chase = (now_price / c["price"] - 1) * 100 if now_price > 0 and c["price"] > 0 else None
         confluence = self._confluence(mint, c["ts"])
         grade, reasons = grade_buy(
             status=stats["status"], stats=stats, confluence=len(confluence), chase=chase, safety=safety, rug=rug,
             liquidity=num(info.get("liquidity_usd"), -1), usd_value=c["usd_value"],
-            usual_usd=self.whales.usual_buy_usd(wallet), late_chase_pct=self.cfg.get("LATE_CHASE_PCT"))
+            usual_usd=self.whales.usual_buy_usd(wallet), late_chase_pct=self.cfg.get("LATE_CHASE_PCT"),
+            community=community)
         if not swap["new_position"] and grade != "SKIP":
             reasons.append((None, "Adding to a bag they already held"))
 
@@ -227,6 +235,8 @@ class Engine:
                          price=entry_price, mc_usd=num(info.get("mc_usd")) or c["trade_mc"], whale_price=c["price"])
         if not (self.whales.is_alerting(whale) and self.cfg.flag("ALERTS_ENABLED")):
             return
+        if community["label"] == "WHALE-ONLY" and self.cfg.flag("HIDE_WHALE_ONLY"):
+            return  # a few wallets hold it and hardly anyone trades it: tracked and scored, not sent
         text = messages.buy_alert(
             symbol=info.get("symbol") or self.market.symbol(mint), mint=mint, whale_name=whale.get("name") or wallet[:6],
             whale_addr=wallet, stats=stats, grade=grade, reasons=reasons, usd_value=c["usd_value"],

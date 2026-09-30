@@ -27,7 +27,8 @@ def _summ(rows: list[dict]) -> dict:
 
 
 def copy_report(db, cfg, days: int = 30) -> dict:
-    rows = _copy_returns(db, cfg, int(time.time()) - days * 86400)
+    everything = _copy_returns(db, cfg, int(time.time()) - days * 86400)
+    rows = [r for r in everything if r["whale"] != "runner"]  # whale copies; runners reported separately
     winners = [r for r in rows if r["peak_x"] >= 1.5]
     by_grade = {g: _summ([r for r in rows if r.get("grade") == g]) for g in ("A", "B", "C")}
     return {
@@ -37,6 +38,7 @@ def copy_report(db, cfg, days: int = 30) -> dict:
         "solo": _summ([r for r in rows if num(r.get("confluence")) < 2]),
         "typical_dip": statistics.median([num(r["dip_before_peak_pct"]) for r in winners]) if winners else 0.0,
         "winners": len(winners),
+        "runners": _summ([r for r in everything if r["whale"] == "runner"]),
         # how many winners would a -20% stop-loss have sold before their run?
         "stop20_would_kill": sum(1 for r in winners if num(r["dip_before_peak_pct"]) <= -20),
     }
@@ -44,12 +46,12 @@ def copy_report(db, cfg, days: int = 30) -> dict:
 
 def recent_buys(db, market, whales, limit: int = 15, since_hours: float = 48) -> list[dict]:
     rows = db.rows("""select a.*, s.usd_value, s.ts trade_ts from alerts a left join swaps s on s.id=a.swap_id
-        where a.kind='BUY' and a.grade<>'SKIP' and a.ts>=? order by a.ts desc limit ?""",
+        where a.kind in ('BUY','RUNNER') and a.grade<>'SKIP' and a.ts>=? order by a.ts desc limit ?""",
                    (int(time.time() - since_hours * 3600), limit))
     out = []
     for r in rows:
         info = market.cached(r["mint"])
-        swap_mc = num(db.scalar("select mc_usd from swaps where id=?", (r["swap_id"],)))
+        swap_mc = num(db.scalar("select mc_usd from swaps where id=?", (r["swap_id"],))) or num(r["mc_usd"])
         now_mc = num(info.get("mc_usd"))
         out.append({**r, "symbol": info.get("symbol") or r["mint"][:4], "whale": whales.name(r["wallet"]),
                     "entry_mc": swap_mc, "now_mc": now_mc, "image": info.get("image") or "",

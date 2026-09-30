@@ -115,17 +115,45 @@ def pump_sell(wallet=WHALE, mint=MINT, sol=2.0, tokens=1_500_000.0, holding=3_00
                     close_ata_for=[(wallet, mint)] if close else None, block_time=block_time)
 
 
-def pair(mint=MINT, symbol="CASHED", price=0.00085, mc=850_000.0, liq=90_000.0, pair_addr=None, created_ms=None):
+def pair(mint=MINT, symbol="CASHED", price=0.00085, mc=850_000.0, liq=90_000.0, pair_addr=None, created_ms=None,
+         **over):
+    p = _pair(mint, symbol, price, mc, liq, pair_addr, created_ms)
+    for key, value in over.items():  # e.g. buys_h1=50, trades_h24=100, change_h1=200, socials=0
+        if key == "buys_h1":
+            p["txns"]["h1"]["buys"] = value
+        elif key == "trades_h24":
+            p["txns"]["h24"] = {"buys": value // 2, "sells": value - value // 2}
+        elif key == "change_h1":
+            p["priceChange"]["h1"] = value
+        elif key == "socials":
+            p["info"]["socials"], p["info"]["websites"] = [{"type": "twitter"}] * value, []
+    return p
+
+
+def _pair(mint, symbol, price, mc, liq, pair_addr, created_ms):
     return {"chainId": "solana", "dexId": "pumpswap", "url": f"https://dexscreener.com/solana/{pair_addr or 'P' + mint[1:]}",
             "pairAddress": pair_addr or ("P" + mint[1:]), "baseToken": {"address": mint, "name": symbol.title(), "symbol": symbol},
             "quoteToken": {"address": WSOL, "name": "Wrapped SOL", "symbol": "SOL"}, "priceNative": "0.0000057",
-            "priceUsd": str(price), "txns": {"h1": {"buys": 420, "sells": 310}}, "volume": {"h1": 120000, "h24": 900000},
+            "priceUsd": str(price), "txns": {"h1": {"buys": 420, "sells": 310}, "h24": {"buys": 5200, "sells": 4100}},
+            "volume": {"h1": 120000, "h24": 900000},
+            "info": {"imageUrl": "", "websites": [{"url": "https://x.io"}],
+                     "socials": [{"type": "twitter", "url": "https://x.com/c"}, {"type": "telegram", "url": "https://t.me/c"}]},
             "priceChange": {"m5": 2.1, "h1": 12.5, "h24": 80}, "liquidity": {"usd": liq} if liq is not None else {},
             "fdv": mc, "marketCap": mc, "pairCreatedAt": created_ms or int((time.time() - 3 * 3600) * 1000)}
 
 
+ON_CURVE = ['AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9', '9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu',
+            'GyGKxMyg1p9SsHfm15MkNUu1u9TN2JtTspcdmrtGUdse', 'EdmxWPmx2WH6WgFfTdu9xfkYf3k1g5wD1zccTVySEEh1',
+            '8SFqwqnq4whPhs8icwHA2hQg3hUoN1qrCLK1SBx3WKwe', 'AKkzLhjhyFtM9j7WAhbaqYpFe49cXeJBg2kzLRC2PnNa',
+            'GmaDrppBC7P5ARKV8g3djiwP89vz1jLK23V2GBjuAEGB', '2KW2XRd9kwqet15Aha2oK3tYvd3nWbTFH1MBiRAv1BE1',
+            'J2xccRtuG43drESLYznHhLhQkLTdfepcKYbiQ9BsJVaf', '5Z6Ay5NEcbg3xhopc522sBCRXQujkTiuDRnHGfQdcnSf',
+            '7v54NWdBtkjuAFJrLGsS2SXnuk8nKam81mZJeeYxVFi9', 'mBKqcnGotbsSb5vNrdyhzZ5EhqZdids9QYiTRckvi7v']
+POOL_PDA = "83ZH8AYNycZZsMduTSrLDeXk4pWj6KxyuvT2cXZ2NuMX"  # off-curve, like a pool / bonding curve
+
+
 class FakeRPC:
     def __init__(self):
+        self.holders: dict[str, list] = {}  # mint -> [(owner, amount)] for holder-concentration checks
         self.txs: dict[str, dict] = {}
         self.mints: dict[str, dict] = {}
         self.balances: dict[tuple[str, str], float] = {}
@@ -149,6 +177,12 @@ class FakeRPC:
         return rows[:limit]
 
     async def call(self, method, params, **kw):
+        if method == "getTokenLargestAccounts" and params[0] in self.holders:
+            return {"value": [{"address": f"{params[0][:8]}-acct{i}", "uiAmountString": str(amount)}
+                              for i, (_, amount) in enumerate(self.holders[params[0]])]}
+        if method == "getMultipleAccounts":
+            owners = {f"{m[:8]}-acct{i}": o for m, rows in self.holders.items() for i, (o, _) in enumerate(rows)}
+            return {"value": [{"data": {"parsed": {"info": {"owner": owners.get(a, "")}}}} for a in params[0]]}
         return None
 
     def health(self):
@@ -163,6 +197,7 @@ class FakeMarket(Market):
         self.pairs: dict[str, dict] = {}
         self.sol = sol
         self.rug: dict | None = {"score": 5, "danger": [], "warn": []}
+        self.watchlist: list[str] = []
 
     def set_pair(self, **kw):
         p = pair(**kw)
@@ -180,6 +215,9 @@ class FakeMarket(Market):
         if "rugcheck" in url:
             return None
         return None
+
+    async def discovery_lists(self):
+        return list(self.watchlist)
 
     async def rugcheck(self, mint, timeout=3.0):
         await asyncio.sleep(0.01)  # a real network call yields to other tasks

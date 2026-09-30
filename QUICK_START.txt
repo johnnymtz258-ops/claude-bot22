@@ -17,6 +17,7 @@ WHAT YOU'LL GET
   🟢 WHALE BUY (grade A/B/C)   a whale you follow bought — entry market cap, their real record
   🐋🐋 2ND WHALE IN            another of your whales bought the same coin
   🔴 WHALE EXITED / 🟠 SOLD x%  a whale is selling a coin YOU hold
+  📈 COMMUNITY RUNNER          no whale, but a big spread-out crowd buying (measured separately)
   🚨 LIQUIDITY PULLED          only for real rugs (confirmed twice)
   No more "sell, it dropped" alarms. The exit signal is the whale leaving.
 
@@ -32,6 +33,7 @@ FIND NEW WHALES
   /find COIN              early buyers of a coin that already ran (e.g. CASHED)
   /find COIN1 COIN2       wallets early in BOTH are listed first
   /analyze WALLET         is this wallet copyable? then tap ➕ Follow
+  /suggest                finds whales in today's biggest runners (more whales = more alerts)
 
 BROWSER EXTENSION (optional)
   Chrome → chrome://extensions → Developer mode ON → Load unpacked → pick browser_extension.

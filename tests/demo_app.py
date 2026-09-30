@@ -10,6 +10,7 @@ from fomo.db import Database
 from fomo.discovery import Discovery
 from fomo.engine import Engine
 from fomo.portfolio import Portfolio
+from fomo.runners import RunnerScanner
 from fomo.telegram import Notifier
 from fomo.tracker import Tracker
 from fomo.whales import Whales
@@ -52,6 +53,7 @@ class DemoApp:
         self.discovery = Discovery(self.rpc, self.market, self.db, self.cfg)
         self.stream = FakeStream()
         self.find_task = None
+        self.runners = RunnerScanner(self.cfg, self.db, self.market, self.engine, self.whales, self.notify)
         self._sig = 0
 
     def set_setting(self, name, value):

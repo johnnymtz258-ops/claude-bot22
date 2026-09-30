@@ -331,6 +331,8 @@
     if (r.confluence.n) facts.push([`2+ whales in the same coin: `, `${pct(r.confluence.avg)} avg`, ` over ${plural(r.confluence.n, "copy", "copies")}, vs ${pct(r.solo.avg)} for a single whale.`]);
     if (r.winners) facts.push([`Winners dipped `, `${pct(r.typical_dip)}`, ` (median) before running. ${r.stop20_would_kill} of ${r.winners} would have been sold by a −20% stop-loss — which is why the bot follows the whale's exit instead.`]);
     if (a.n) facts.push([`Copies that reached 2x: `, `${Math.round(a.hit_2x * 100)}%`, "."]);
+    if (r.runners && r.runners.n) facts.push([`Community runners (no whale): `, `${pct(r.runners.avg)} avg`,
+      ` over ${plural(r.runners.n, "alert")}, ${Math.round(r.runners.win_rate * 100)}% won. Measured separately from whale copies.`]);
     if (!facts.length) facts.push(["", "No copies yet.", " Every alert opens a simulated copy; results appear as whales sell."]);
     $("facts").replaceChildren(...facts.map(([pre, strong, post]) => el("li", {}, pre, el("b", {}, strong), post)));
   }

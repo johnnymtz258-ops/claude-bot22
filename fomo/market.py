@@ -36,8 +36,10 @@ def pair_to_info(pair: dict) -> dict:
     base = pair.get("baseToken") or {}
     liq = (pair.get("liquidity") or {}).get("usd")
     txns = (pair.get("txns") or {}).get("h1") or {}
+    txns24 = (pair.get("txns") or {}).get("h24") or {}
     change = pair.get("priceChange") or {}
     info = pair.get("info") or {}
+    links = [x for x in (info.get("socials") or []) + (info.get("websites") or []) if isinstance(x, dict)]
     return {
         "mint": str(base.get("address") or ""),
         "symbol": str(base.get("symbol") or "?")[:24],
@@ -55,6 +57,10 @@ def pair_to_info(pair: dict) -> dict:
         "change_h24": num(change.get("h24")),
         "buys_h1": int(num(txns.get("buys"))),
         "sells_h1": int(num(txns.get("sells"))),
+        "buys_h24": int(num(txns24.get("buys"))),
+        "sells_h24": int(num(txns24.get("sells"))),
+        "socials_count": len(links),
+        "socials": [str(x.get("type") or x.get("platform") or x.get("label") or "site").lower() for x in links][:6],
         "volume_h1": num((pair.get("volume") or {}).get("h1")),
         "volume_h24": num((pair.get("volume") or {}).get("h24")),
     }
@@ -220,6 +226,20 @@ class Market:
             if is_address(mint):
                 return mint
         return address
+
+    async def discovery_lists(self) -> list[str]:
+        """Solana coins DexScreener users are paying attention to right now
+        (new profiles, community takeovers, boosts). Attention only — never a reason to buy by itself."""
+        urls = [f"{DEX}/token-profiles/latest/v1", f"{DEX}/community-takeovers/latest/v1",
+                f"{DEX}/token-boosts/latest/v1", f"{DEX}/token-boosts/top/v1"]
+        found: list[str] = []
+        for data in await asyncio.gather(*(self._get(u) for u in urls)):
+            for item in data if isinstance(data, list) else []:
+                if isinstance(item, dict) and str(item.get("chainId", "")).lower() == "solana":
+                    address = str(item.get("tokenAddress") or "")
+                    if is_address(address) and address not in IGNORED_MINTS:
+                        found.append(address)
+        return list(dict.fromkeys(found))
 
     async def search(self, query: str, limit: int = 5) -> list[dict]:
         from urllib.parse import quote

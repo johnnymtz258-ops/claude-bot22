@@ -15,10 +15,12 @@ HELP = f"""<b>🐋 FomoBot Whale Copy {VERSION}</b>
 /add WALLET name — follow a whale
 /whale name — one whale's record · /analyze WALLET — check before following
 /find COIN [COIN2 …] — early buyers of coins that ran (new whales)
+/suggest — find new whales from today's biggest runners (more alerts)
 /mute name · /unmute name · /remove name
 
 <b>Coins</b>
 /recent — latest whale buys · /hot — coins with 2+ whales
+/runners — community coins with no whale (high activity, spread-out holders)
 /coin COIN — which whales are in, entries, who's still holding
 
 <b>Your trades</b> (reply to an alert, or add the coin)
@@ -247,6 +249,36 @@ class Commands:
             return
         text, buttons = format_find(result)
         await self.app.telegram.edit(msg_id, text[:4000], buttons)
+
+    async def cmd_suggest(self, args, reply_mint):
+        runners = self.app.runners
+        if not runners.universe:
+            await runners.tick()
+        coins = runners.suggest_coins(3)
+        if not coins:
+            await self.say("No coin has run 2x+ today with enough liquidity to research yet. Try again later, "
+                           "or use /find on a coin you know ran.")
+            return
+        await self.say("🔎 Researching today's biggest runners for early whales: "
+                       + ", ".join(f"${esc(c['symbol'])} ({pct(c['change_h24'])} 24h)" for c in coins))
+        await self.cmd_find([c["mint"] for c in coins], "")
+
+    async def cmd_runners(self, args, reply_mint):
+        rows = self.app.db.rows("select * from alerts where kind='RUNNER' order by ts desc limit 10")
+        record = self.app.whales.stats("runner", fresh=True)
+        lines = ["<b>📈 Community runners</b> — no whale, broad crowd buying",
+                 (f"Record: {record['n']} · {record['win_rate'] * 100:.0f}% won · avg {pct(record['avg'])} "
+                  f"(sold after {self.app.cfg.get('RUNNER_HOLD_HOURS'):g}h)") if record["n"]
+                 else "Record: still being measured"]
+        for r in rows:
+            info = self.app.market.cached(r["mint"])
+            now_mc = num(info.get("mc_usd"))
+            change = f" → {mc(now_mc)} ({pct((now_mc / r['mc_usd'] - 1) * 100)})" if now_mc and r["mc_usd"] else ""
+            lines.append(f"{ago(r['ts'])} · <b>${esc(info.get('symbol') or r['mint'][:4])}</b> @ {mc(r['mc_usd'])}{change}")
+        if not rows:
+            lines.append("None yet. " + ("Scanner is on." if self.app.cfg.flag("RUNNER_ALERTS")
+                                         else "Turn on with /set RUNNER_ALERTS on"))
+        await self.say("\n".join(lines))
 
     # -- coins -------------------------------------------------------------------------------
     async def cmd_lookup(self, args, reply_mint):
@@ -485,6 +517,10 @@ def format_stats(app, days: int = 30) -> str:
                          f"{r['stop20_would_kill']}/{r['winners']} would have been sold by a -20% stop.")
     else:
         lines.append("No copies yet — they start with the first whale buy.")
+    run = r["runners"]
+    if run["n"]:
+        lines.append(f"<b>Community runners</b> (no whale, sold after {app.cfg.get('RUNNER_HOLD_HOURS'):g}h): "
+                     f"{run['n']} · {run['win_rate'] * 100:.0f}% won · avg {pct(run['avg'])}")
     s = app.portfolio.summary(days)
     lines.append(f"\n<b>Your trades</b>: realized {usd(s['realized'], signed=True)} · open "
                  f"{usd(s['unrealized'], signed=True)} · {s['closed']} closed coin{'' if s['closed'] == 1 else 's'} · "

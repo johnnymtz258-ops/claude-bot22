@@ -58,7 +58,7 @@ def chat():
 
 def test_every_read_command_answers(chat):
     for cmd in ("/help", "/whales", "/recent", "/hot", "/positions", "/stats", "/stats 7", "/status", "/settings",
-                "/whale Rocket", "/coin CASHED"):
+                "/whale Rocket", "/coin CASHED", "/runners", "/suggest"):
         reply = chat.say(cmd)
         assert reply and "⚠️" not in reply.split("\n")[0], (cmd, reply)
     assert "Rocket" in chat.say("/whales") and "HOT" in chat.say("/whales")

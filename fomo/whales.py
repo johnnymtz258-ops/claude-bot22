@@ -82,6 +82,8 @@ class Whales:
     def name(self, address: str) -> str:
         if address in self.my_wallets:
             return "You"
+        if address == "runner":
+            return "📈 Community runner"
         return str(self.db.scalar("select name from whales where address=?", (address,), default="") or short(address))
 
     def is_alerting(self, whale: dict) -> bool:

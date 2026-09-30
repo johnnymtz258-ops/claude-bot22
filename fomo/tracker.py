@@ -71,13 +71,14 @@ class Tracker:
             if price > 0 and price <= num(c["entry_price"]) * DEAD_PRICE_FRACTION:
                 copies.sell(self.db, c, 1.0, price, fee, "rugged / price collapsed", now)
                 return
-        max_hold = self.cfg.get("COPY_MAX_HOLD_HOURS") * 3600
+        max_hold = self.cfg.get("RUNNER_HOLD_HOURS" if c["whale"] == "runner" else "COPY_MAX_HOLD_HOURS") * 3600
         if now - int(c["open_ts"]) >= max_hold and num(c.get("last_price")) > 0:
             copies.sell(self.db, c, 1.0, num(c["last_price"]), fee, "max hold reached", now)
 
     async def _check_whale_balances(self, now: int) -> None:
         """Catch whale exits the stream missed (e.g. tokens moved to another wallet)."""
-        for c in self.db.rows("select * from copies where status='open' and open_ts<=?", (now - 600,)):
+        for c in self.db.rows("select * from copies where status='open' and whale<>'runner' and open_ts<=?",
+                              (now - 600,)):
             balance = await self.rpc.token_balance(c["whale"], c["mint"])
             if balance is not None and balance <= 0 and num(c.get("last_price")) > 0:
                 copies.sell(self.db, c, 1.0, num(c["last_price"]), self.cfg.get("COPY_FEE_PCT"),
