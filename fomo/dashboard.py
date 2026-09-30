@@ -69,7 +69,8 @@ class Dashboard:
             "alerts_on": a.cfg.flag("ALERTS_ENABLED"), "last_trade_ts": a.engine.last_event_ts,
             "alerts_24h": a.db.scalar("select count(*) from alerts where kind='BUY' and grade<>'SKIP' and ts>=?",
                                       (int(time.time()) - 86400,), default=0),
-            "me": s, "copies": rep["all"], "errors": [e for e in (a.engine.last_error, a.tracker.last_error,
+            "me": s, "copies": rep["all"], "funnel": reports.alert_funnel(a.db),
+            "funnel_labels": reports.FUNNEL_LABELS, "errors": [e for e in (a.engine.last_error, a.tracker.last_error,
                                                                   a.rpc.health()["last_error"]) if e][:3],
         })
 

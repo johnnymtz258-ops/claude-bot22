@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import time
 
-from . import copies, messages
+from . import copies, exits, messages
 from .util import ago, esc, mc, num, pct, usd
 
 RUNNER = "runner"          # pseudo-wallet used for runner copies
@@ -126,6 +126,9 @@ class RunnerScanner:
                          f"avg {pct(record['avg'])} (sold after {self.cfg.get('RUNNER_HOLD_HOURS'):g}h)")
         else:
             lines.append("Runner alerts are new — their record is being measured. Start small.")
+        plan = exits.hold_plan(self.db, RUNNER)
+        if plan:
+            lines.append(esc(exits.hold_plan_line(plan)))
         lines.append(f"<code>{mint}</code>")
         links = [(label, url, None) for label, url in messages.token_links(mint, info.get("pair_address", ""))]
         msg_id = await self.notify("\n".join(lines), buttons=[links, [("🔎 Find its early whales", None, f"find:{mint}")]],

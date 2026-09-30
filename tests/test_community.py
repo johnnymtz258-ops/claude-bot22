@@ -51,9 +51,9 @@ def test_whale_only_coin_is_tracked_but_not_sent(bot):
 
 def test_strong_community_lifts_the_grade(bot):
     bot.whales.add(WHALE, "Rocket")
-    bot.market.set_pair(mint=MINT, price=0.000075, mc=75_000)
+    bot.market.set_pair(mint=MINT, price=0.0005, mc=500_000)
     spread_holders(bot)
-    bot.feed(WHALE, pump_buy())
+    bot.feed(WHALE, pump_buy(sol=1.5, tokens=450_000))
     assert "Community STRONG" in bot.notes.sent[0]["text"]
     assert bot.db.row("select grade from alerts")["grade"] == "B"  # NEW whale (0) + strong community (+1)
 
@@ -102,3 +102,18 @@ def test_runner_record_is_separate_in_stats(bot):
     bot.run(bot.runners.tick())
     r = copy_report(bot.db, bot.cfg)
     assert r["runners"]["n"] == 1 and r["all"]["n"] == 0
+
+
+def test_early_coin_with_normal_concentration_is_alerted_loud(bot):
+    bot.whales.add(WHALE, "Rocket")
+    bot.market.set_pair(mint=MINT, price=0.000075, mc=75_000, trades_h24=90, socials=0)
+    bot.rpc.holders[MINT] = [(POOL_PDA, 0.6 * SUPPLY)] + [(w, 0.045 * SUPPLY) for w in ON_CURVE[:10]]  # top-10 = 45%
+    bot.feed(WHALE, pump_buy())
+    assert bot.notes.kinds() == ["BUY"] and not bot.notes.sent[0]["silent"]
+    assert "Community EARLY" in bot.notes.sent[0]["text"]
+    assert bot.db.row("select grade from alerts")["grade"] == "B"
+
+
+def test_early_coin_with_one_giant_holder_is_still_whale_only():
+    info = {"mc_usd": 50_000, "buys_h24": 40, "sells_h24": 10}
+    assert assess(info, {"ok": True, "top10_pct": 40, "top1_pct": 30})["label"] == "WHALE-ONLY"

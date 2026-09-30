@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import time
 
-from . import copies, messages
+from . import copies, exits, messages
 from .community import CommunityChecker
 from .market import IGNORED_MINTS
 from .swaps import parse_swap
@@ -70,7 +70,7 @@ def grade_buy(*, status: str, stats: dict, confluence: int, chase: float | None,
 
     if community:
         points += community["points"]
-        reasons.append(({"STRONG": True, "OK": None}.get(community["label"], False), community["line"]))
+        reasons.append(({"STRONG": True, "OK": None, "EARLY": None}.get(community["label"], False), community["line"]))
 
     if usual_usd > 0 and usd_value >= 3 * usual_usd:
         points += 1
@@ -198,8 +198,13 @@ class Engine:
 
     async def on_whale_buy(self, c: dict) -> None:
         wallet, swap, mint = c["wallet"], c["swap"], c["swap"]["mint"]
-        if c["usd_value"] < self.cfg.get("MIN_WHALE_BUY_USD") or c["trade_mc"] > self.cfg.get("MAX_ENTRY_MC_USD"):
-            return  # dust/test buy, or the coin is past the "early" range
+        too_small = c["usd_value"] < self.cfg.get("MIN_WHALE_BUY_USD")
+        if too_small or c["trade_mc"] > self.cfg.get("MAX_ENTRY_MC_USD"):
+            # dust/test buy, or the coin is past the "early" range — noted so /status can explain quiet days
+            self.db.insert("insert into alerts(ts,kind,mint,wallet,swap_id,mc_usd,status) values(?,?,?,?,?,?,?)",
+                           (int(time.time()), "SEEN", mint, wallet, c["swap_id"], c["trade_mc"],
+                            "too_small" if too_small else "too_big"))
+            return
         repeat_since = int(time.time()) - int(self.cfg.get("REPEAT_ALERT_HOURS") * 3600)
         if self.db.scalar("select 1 from alerts where wallet=? and mint=? and kind='BUY' and ts>=?",
                           (wallet, mint, repeat_since)):
@@ -227,29 +232,39 @@ class Engine:
                                    now_price or c["price"], chase or 0.0, len(confluence),
                                    " | ".join(t for _, t in reasons)))
         latency = max(0, int(time.time()) - c["ts"])
+
+        def status(value: str) -> None:
+            self.db.run("update alerts set status=? where id=?", (value, alert_id))
+
         if grade == "SKIP" or latency > ALERT_MAX_AGE:
+            status("unsafe" if grade == "SKIP" else "late")
             return  # unsafe coin, or seen too late for anyone to have acted on it
         # Every alert-worthy first buy is copied (muted whales too) so muted whales keep being scored.
         entry_price = now_price or c["price"]
         copies.open_copy(self.db, whale=wallet, mint=mint, swap_id=c["swap_id"], alert_id=alert_id,
                          price=entry_price, mc_usd=num(info.get("mc_usd")) or c["trade_mc"], whale_price=c["price"])
-        if not (self.whales.is_alerting(whale) and self.cfg.flag("ALERTS_ENABLED")):
+        if not self.whales.is_alerting(whale):
+            status("muted")
+            return
+        if not self.cfg.flag("ALERTS_ENABLED"):
+            status("paused")
             return
         if community["label"] == "WHALE-ONLY" and self.cfg.flag("HIDE_WHALE_ONLY"):
+            status("whale_only")
             return  # a few wallets hold it and hardly anyone trades it: tracked and scored, not sent
         text = messages.buy_alert(
             symbol=info.get("symbol") or self.market.symbol(mint), mint=mint, whale_name=whale.get("name") or wallet[:6],
             whale_addr=wallet, stats=stats, grade=grade, reasons=reasons, usd_value=c["usd_value"],
             base_amount=swap["base_amount"], base=swap["base"], entry_mc=c["trade_mc"],
             now_mc=num(info.get("mc_usd")), chase=chase, confluence=confluence, latency_s=latency, info=info,
-            late_detect=c["source"] != "stream")
+            late_detect=c["source"] != "stream", hold_line=exits.hold_plan_line(exits.hold_plan(self.db, wallet)))
         buttons = [[(label, url, None) for label, url in messages.token_links(mint, info.get("pair_address", ""))],
                    [(f"🔕 Mute {whale.get('name', '')[:12]}", None, f"mute:{wallet}"),
                     ("🐋 Whales in coin", None, f"coin:{mint}")]]
         silent = grade == "C" and self.cfg.flag("QUIET_LOW_GRADE")
         msg_id = await self.notify(text, buttons=buttons, silent=silent, mint=mint, wallet=wallet, kind="BUY")
-        if msg_id:
-            self.db.run("update alerts set tg_message_id=? where id=?", (msg_id, alert_id))
+        self.db.run("update alerts set tg_message_id=?, status=? where id=?",
+                    (msg_id or 0, "silent" if silent else "sent", alert_id))
 
     async def _rugcheck(self, mint: str):
         try:

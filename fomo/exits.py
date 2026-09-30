@@ -221,3 +221,61 @@ def coach(db, cfg, position: dict, holders: list[dict], now: int | None = None) 
         hint = "Hold while the whales hold"
     return {"multiple": multiple, "peak_multiple": peak_multiple, "from_peak_pct": from_peak,
             "whales_in": whales_in, "hint": hint, "entry_price": entry, "peak_price": peak}
+
+
+# -- 4. hold plan (shown on buy alerts) ------------------------------------------------------------
+
+def _whale_hold_seconds(db, whale: str) -> float:
+    """Median time from a whale's first buy of a coin to when it had fully sold (observed trades)."""
+    holds = []
+    for r in db.rows("""select mint, min(case when side='BUY' then ts end) first_buy,
+            min(case when side='SELL' and holding_after<=0 then ts end) out_ts
+            from swaps where wallet=? group by mint""", (whale,)):
+        if r["first_buy"] and r["out_ts"] and r["out_ts"] > r["first_buy"]:
+            holds.append(r["out_ts"] - r["first_buy"])
+    return statistics.median(holds) if len(holds) >= 3 else 0.0
+
+
+def hold_plan(db, whale: str) -> dict | None:
+    """How long this whale's picks take to play out, from measured copies (pooled if the whale is new)."""
+    def profile(rows):
+        winners = [r for r in rows if num(r["entry_price"]) > 0 and num(r["peak_price"]) >= 1.2 * num(r["entry_price"])
+                   and num(r["peak_ts"]) > num(r["open_ts"])]
+        if len(rows) < 4 or len(winners) < 3:
+            return None
+        p15 = [num(r["p15m"]) / num(r["entry_price"]) for r in rows if r["p15m"] and num(r["entry_price"]) > 0]
+        return {"n": len(rows), "winners": len(winners),
+                "time_to_peak_s": statistics.median(num(r["peak_ts"]) - num(r["open_ts"]) for r in winners),
+                "peak_x": statistics.median(num(r["peak_price"]) / num(r["entry_price"]) for r in winners),
+                "at_15m_pct": (statistics.median(p15) - 1) * 100 if len(p15) >= 3 else None}
+
+    # picks younger than an hour haven't played out yet
+    query = """select * from copies where {} and open_ts>=? and open_ts<=? and entry_price>0
+        order by open_ts desc limit 60"""
+    now = int(time.time())
+    window = (now - 60 * 86400, now - 3600)
+    plan = profile(db.rows(query.format("whale=?"), (whale, *window)))
+    scope = "this whale" if plan else ""
+    if not plan and whale != "runner":
+        plan = profile(db.rows(query.format("whale<>'runner'"), window))
+        scope = "your whales overall" if plan else ""
+    if not plan:
+        return None
+    plan["scope"] = scope
+    plan["whale_hold_s"] = _whale_hold_seconds(db, whale) if whale != "runner" else 0.0
+    return plan
+
+
+def hold_plan_line(plan: dict | None) -> str:
+    from .util import dur
+    if not plan:
+        return "⏱ Hold plan: not enough history yet — the bot learns this whale's timing as it trades."
+    t = plan["time_to_peak_s"]
+    line = (f"⏱ Hold plan ({plan['scope']}, {plan['n']} picks): winners peaked ~{dur(t)} after the buy at "
+            f"~{plan['peak_x']:.1f}x. Try to hold at least ~{dur(t / 2)}")
+    if plan.get("at_15m_pct") is not None:
+        line += f"; if you must leave early, at 15m picks were typically {plan['at_15m_pct']:+.0f}%"
+    line += "."
+    if plan.get("whale_hold_s"):
+        line += f" This whale usually holds ~{dur(plan['whale_hold_s'])}."
+    return line

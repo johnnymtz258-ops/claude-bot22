@@ -92,6 +92,9 @@ def dur(seconds) -> str:
         return f"{seconds}s"
     if seconds < 3600:
         return f"{seconds // 60}m"
+    if seconds < 36000:
+        hours, minutes = seconds // 3600, seconds % 3600 // 60
+        return f"{hours}h{minutes:02d}m" if minutes else f"{hours}h"
     if seconds < 86400:
         return f"{seconds // 3600}h"
     return f"{seconds // 86400}d"

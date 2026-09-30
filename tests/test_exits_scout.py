@@ -181,3 +181,41 @@ def test_adding_an_auto_whale_yourself_makes_it_yours(bot):
     now = int(time.time())
     bot.db.run("update whales set added_ts=?, last_trade_ts=?", (now - 10 * 86400, now - 6 * 86400))
     assert bot.run(bot.scout.prune(now)) == []
+
+
+# -- hold plan & alert funnel ----------------------------------------------------------------------
+
+def seed_copies(bot, whale, n, peak_x=2.5, peak_after=4800, at15=1.2):
+    now = int(time.time())
+    for i in range(n):
+        t = now - (i + 1) * 20000
+        bot.db.run("""insert into copies(whale,mint,swap_id,open_ts,entry_price,peak_price,peak_ts,p15m,status,
+            return_pct,last_price) values(?,?,?,?,?,?,?,?,?,?,?)""",
+                   (whale, f"Coin{i}", 0, t, 1.0, peak_x, t + peak_after, at15, "closed", 40.0, 1.4))
+
+
+def test_hold_plan_uses_this_whales_history(bot):
+    seed_copies(bot, WHALE, 6)
+    plan = exits.hold_plan(bot.db, WHALE)
+    assert plan["scope"] == "this whale" and plan["time_to_peak_s"] == 4800 and plan["peak_x"] == pytest.approx(2.5)
+    line = exits.hold_plan_line(plan)
+    assert "peaked ~1h20m after the buy at ~2.5x" in line and "at least ~40m" in line and "+20%" in line
+
+
+def test_hold_plan_falls_back_to_all_whales_then_to_a_note(bot):
+    assert "not enough history" in exits.hold_plan_line(exits.hold_plan(bot.db, WHALE2))
+    seed_copies(bot, WHALE, 6)
+    assert exits.hold_plan(bot.db, WHALE2)["scope"] == "your whales overall"
+
+
+def test_buy_alert_includes_hold_plan_and_funnel_counts_outcomes(bot):
+    from fomo.reports import alert_funnel
+    from tests.helpers import pump_buy
+    seed_copies(bot, WHALE, 6)
+    bot.whales.add(WHALE, "Rocket")
+    bot.market.set_pair(mint=MINT, price=0.000075, mc=75_000)
+    bot.feed(WHALE, pump_buy())
+    assert "⏱ Hold plan (this whale, 6 picks)" in bot.notes.sent[0]["text"]
+    bot.feed(WHALE, pump_buy(mint="MoiNmemeTokenMint22222222222222222222222pump"[:44], sol=0.2, tokens=100_000))
+    f = alert_funnel(bot.db)
+    assert f["counts"] == {"sent": 1, "too_small": 1}

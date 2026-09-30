@@ -73,12 +73,38 @@ def socials_count(info: dict) -> int:
     return int(num(info.get("socials_count")))
 
 
+EARLY_MC_USD = 300_000
+EARLY_AGE_SECONDS = 2 * 3600
+
+
+def is_early(info: dict, now: float | None = None) -> bool:
+    """Early coins (young or small) naturally have concentrated holders and few trades so far."""
+    now = now or time.time()
+    mcap = num(info.get("mc_usd"))
+    created = num(info.get("pair_created_ts"))
+    return (0 < mcap < EARLY_MC_USD) or (created > 0 and now - created < EARLY_AGE_SECONDS) or not info
+
+
 def assess(info: dict, conc: dict | None) -> dict:
     """Community label + grading points + one readable line."""
     trades = int(num(info.get("buys_h24")) + num(info.get("sells_h24")))
     buys_h1 = int(num(info.get("buys_h1")))
     socials = socials_count(info)
     top10 = num((conc or {}).get("top10_pct"), -1) if (conc or {}).get("ok") else -1.0
+    top1 = num((conc or {}).get("top1_pct"), -1) if (conc or {}).get("ok") else -1.0
+    if is_early(info):
+        # Judge early coins only on real red flags: one wallet holding a huge share, or near-total control.
+        if top1 >= 25 or top10 >= 75:
+            label, points = "WHALE-ONLY", -2
+        elif top10 >= 55:
+            label, points = "THIN", -1
+        else:
+            label, points = "EARLY", 0
+        parts = [f"early coin, {trades:,} trades so far"]
+        if top10 >= 0:
+            parts.append(f"top-10 wallets hold {top10:.0f}%")
+        return {"label": label, "points": points, "trades_24h": trades, "socials": socials, "top10_pct": top10,
+                "line": f"Community {label}: " + " · ".join(parts)}
     if top10 >= 60 or (top10 >= 45 and trades < 300):
         label, points = "WHALE-ONLY", -2
     elif trades < 300 or top10 >= 45 or (socials == 0 and trades < 1500):

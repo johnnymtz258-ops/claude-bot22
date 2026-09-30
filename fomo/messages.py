@@ -41,7 +41,7 @@ def whale_record(stats: dict) -> str:
 def buy_alert(*, symbol: str, mint: str, whale_name: str, whale_addr: str, stats: dict, grade: str,
               reasons: list, usd_value: float, base_amount: float, base: str, entry_mc: float,
               now_mc: float, chase: float | None, confluence: list[dict], latency_s: int,
-              info: dict, late_detect: bool) -> str:
+              info: dict, late_detect: bool, hold_line: str = "") -> str:
     n = len(confluence)
     if n >= 2:
         head = f"🐋🐋 {'2ND' if n == 2 else f'{n}TH' if n > 3 else '3RD'} WHALE IN · ${esc(symbol)}"
@@ -69,6 +69,8 @@ def buy_alert(*, symbol: str, mint: str, whale_name: str, whale_addr: str, stats
         lines.append(" · ".join(facts))
     for ok, text in reasons:
         lines.append(("✅ " if ok else "⚠️ " if ok is False else "• ") + esc(text))
+    if hold_line:
+        lines.append(esc(hold_line))
     lines.append(f"<code>{mint}</code>")
     return "\n".join(lines)
 

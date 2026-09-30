@@ -612,6 +612,17 @@ def format_status(app) -> str:
              f"RPC: {'Helius' if app.cfg.uses_helius else 'public (slow — add HELIUS_API_KEY)'} · "
              f"{rpc['calls']:,} calls · {rpc['errors']} errors",
              f"SOL {usd(num(app.db.get_meta('sol_usd')))} · alerts {'ON' if app.cfg.flag('ALERTS_ENABLED') else 'PAUSED'}"]
+    funnel = reports.alert_funnel(app.db)
+    if funnel["total"]:
+        parts = [f"{n} {reports.FUNNEL_LABELS.get(k, k)}" for k, n in
+                 sorted(funnel["counts"].items(), key=lambda kv: -kv[1])]
+        lines.append(f"Whale buys seen (24h): {funnel['total']} → " + " · ".join(parts))
+        if funnel["counts"].get("too_small", 0) >= 5:
+            lines.append("Tip: many small whale buys skipped — /set MIN_WHALE_BUY_USD 50 to see more.")
+        if funnel["counts"].get("muted", 0) >= 5:
+            lines.append("Tip: lots of buys from muted whales — /whales shows who's muted.")
+    else:
+        lines.append("Whale buys seen (24h): none yet — more whales = more alerts (/suggest, /scout now).")
     if app.cfg.dashboard_enabled:
         lines.append(f"Dashboard: http://localhost:{app.cfg.dashboard_port}")
     errors = [e for e in (app.engine.last_error, app.tracker.last_error, rpc["last_error"],

@@ -102,7 +102,14 @@ class Database:
         self.conn.execute("pragma journal_mode=wal")
         self.conn.execute("pragma synchronous=normal")
         self.conn.executescript(SCHEMA)
+        self._add_missing_columns()
         self.conn.commit()
+
+    def _add_missing_columns(self) -> None:
+        """Upgrade databases created by earlier versions in place (nothing is lost)."""
+        columns = {r[1] for r in self.conn.execute("pragma table_info(alerts)")}
+        if "status" not in columns:
+            self.conn.execute("alter table alerts add column status text default ''")
 
     # -- tiny query helpers -------------------------------------------------------------
     def run(self, sql: str, params=()) -> int:

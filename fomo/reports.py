@@ -44,6 +44,22 @@ def copy_report(db, cfg, days: int = 30) -> dict:
     }
 
 
+FUNNEL_LABELS = {
+    "sent": "sent", "silent": "sent silently (grade C)", "whale_only": "hidden: whale-only coin",
+    "muted": "from muted whales", "paused": "while alerts were paused", "late": "seen too late",
+    "unsafe": "unsafe coin (freeze authority)", "too_small": "below MIN_WHALE_BUY_USD",
+    "too_big": "above MAX_ENTRY_MC_USD", "earlier": "before this update",
+}
+
+
+def alert_funnel(db, hours: float = 24) -> dict:
+    """What happened to every whale buy seen recently — explains quiet days."""
+    rows = db.rows("""select status, count(*) n from alerts where kind in ('BUY','SEEN') and ts>=?
+        group by status""", (int(time.time() - hours * 3600),))
+    counts = {r["status"] or "earlier": int(r["n"]) for r in rows}
+    return {"total": sum(counts.values()), "counts": counts}
+
+
 def recent_buys(db, market, whales, limit: int = 15, since_hours: float = 48) -> list[dict]:
     rows = db.rows("""select a.*, s.usd_value, s.ts trade_ts from alerts a left join swaps s on s.id=a.swap_id
         where a.kind in ('BUY','RUNNER') and a.grade<>'SKIP' and a.ts>=? order by a.ts desc limit ?""",

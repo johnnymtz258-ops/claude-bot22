@@ -309,7 +309,11 @@
       td(b.confluence > 1 ? `🐋×${b.confluence}` : ""), td(links(b.mint, ""))));
     table($("feed"), ["When", "Grade", "Whale", "Coin", { label: "Whale entry", num: 1 }, { label: "Now", num: 1 },
       { label: "Since whale", num: 1 }, "Whales", ""], rows, "No whale buys in the last 3 days. Add whales on the Whales tab.");
-    $("feed-note").textContent = "click a row for details";
+    const fn = o.funnel || { total: 0, counts: {} };
+    $("feed-note").textContent = fn.total
+      ? `24h: ${fn.total} whale buys seen → ` + Object.entries(fn.counts).sort((a, b) => b[1] - a[1])
+          .map(([k, n]) => `${n} ${(o.funnel_labels || {})[k] || k}`).join(" · ")
+      : "click a row for details";
     $("messages").replaceChildren(...(f.messages.length ? f.messages.map((m) => el("li", {},
       el("b", {}, `${new Date(m.ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} `), m.text))
       : [el("li", { class: "empty" }, "Nothing sent since the bot started.")]));
