@@ -61,6 +61,7 @@ def test_strong_community_lifts_the_grade(bot):
 # -- community runners -------------------------------------------------------------------------
 
 def runner_coin(bot, mint=MINT, **over):
+    bot.cfg.set("RUNNER_ALERTS", "on")  # off by default; these tests exercise the scanner itself
     bot.market.set_pair(mint=mint, symbol="RUN", price=0.0012, mc=1_200_000, liq=150_000, **over)
     bot.market.watchlist.append(mint)
     spread_holders(bot, mint)

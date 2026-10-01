@@ -14,7 +14,7 @@ longer runs. Its own two-month review found it had no edge. Your manual whale co
 |---|---|
 | 🟢/🟡/⚪️ **WHALE BUY** (grade A/B/C) | A whale you follow buys a coin: entry market cap, how far price has moved since, the whale's measured record, safety checks |
 | 🐋🐋 **2ND WHALE IN** | Another of your whales buys the same coin within 6h — the strongest signal |
-| 📈 **COMMUNITY RUNNER** | No whale, but 2,000+ trades a day, heavy buying, 2+ social links and the top-10 wallets hold under 30%. Measured separately (scored as sold after 24h) |
+| 📈 **COMMUNITY RUNNER** (off by default) | No whale, but 2,000+ trades a day, heavy buying, 2+ social links and the top-10 wallets hold under 30%. Measured separately (scored as sold after 24h) |
 | 🟠 **WHALE SOLD x%** / 🔴 **WHALE EXITED** | A whale sells a coin **you hold**. Partial trims are labeled as trims |
 | 🚨 **LIQUIDITY PULLED** | Only when liquidity really disappears (confirmed twice, and far more than a dip explains) |
 | 🌙 Daily summary | Once a day, silent |

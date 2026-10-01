@@ -50,7 +50,7 @@ TUNABLES = {t.name: t for t in (
     Tunable("AUTO_SCOUT_HOURS", 6, "How often the autopilot looks for new whales", 1, 48),
     Tunable("AUTO_MUTE_COLD_WHALES", 1, "Stop alerts from whales whose copies keep losing (1 = on)", 0, 1, True),
     Tunable("HIDE_WHALE_ONLY", 1, "Don't send whale buys of coins a few wallets hold with no real community (1 = on)", 0, 1, True),
-    Tunable("RUNNER_ALERTS", 1, "Also alert high-activity community coins with no whale involved (1 = on)", 0, 1, True),
+    Tunable("RUNNER_ALERTS", 0, "Also alert high-activity community coins with no whale involved (1 = on; off by default — they underperformed whale alerts)", 0, 1, True),
     Tunable("RUNNER_MAX_PER_HOUR", 4, "Most community-runner alerts per hour", 0, 30),
     Tunable("RUNNER_MIN_MC_USD", 80_000, "Community runners: smallest market cap", 5_000, 100_000_000),
     Tunable("RUNNER_MAX_MC_USD", 8_000_000, "Community runners: largest market cap", 50_000, 1_000_000_000),
