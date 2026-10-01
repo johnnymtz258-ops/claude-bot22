@@ -54,3 +54,44 @@ def test_watch_targets_up_and_down(bot):
     assert bot.notes.kinds() == ["WATCH", "WATCH"]
     bot.run(bot.tracker.tick(now + 40))
     assert bot.notes.kinds() == ["WATCH", "WATCH"]           # each target fires once
+
+
+def test_wallets_buying_together_count_as_one_whale(bot):
+    from tests.helpers import WHALE2, MINT2
+    bot.whales.add(WHALE, "A")
+    bot.whales.add(WHALE2, "B")
+    now = int(time.time())
+    for mint in (MINT2, "Past1" + "1" * 39):            # bought the same two coins seconds apart before
+        for w in (WHALE, WHALE2):
+            bot.db.run("insert into swaps(sig,wallet,ts,side,mint,usd_value) values(?,?,?,?,?,?)",
+                       (f"{w[:4]}{mint[:6]}", w, now - 5000, "BUY", mint, 500))
+    bot.market.set_pair(mint=MINT, price=0.000075, mc=75_000)
+    bot.feed(WHALE, pump_buy(wallet=WHALE))
+    bot.feed(WHALE2, pump_buy(wallet=WHALE2))
+    assert "2ND WHALE IN" not in bot.notes.sent[-1]["text"]
+    assert bot.db.row("select confluence from alerts order by id desc limit 1")["confluence"] == 1
+
+
+def test_fast_flipper_is_flagged(bot):
+    bot.whales.add(WHALE, "Rocket")
+    now = int(time.time())
+    for i in range(5):
+        m = f"Flip{i}" + "1" * 39
+        bot.db.run("insert into swaps(sig,wallet,ts,side,mint) values(?,?,?,?,?)", (f"b{i}", WHALE, now - 9000 + i, "BUY", m))
+        bot.db.run("insert into swaps(sig,wallet,ts,side,mint) values(?,?,?,?,?)", (f"s{i}", WHALE, now - 8940 + i, "SELL", m))
+    bot.market.set_pair(mint=MINT, price=0.000075, mc=75_000)
+    bot.feed(WHALE, pump_buy())
+    assert "Fast flipper: usually starts selling ~1m after buying (100% of the time within 2m)" in bot.notes.sent[0]["text"]
+
+
+def test_rebuy_after_whales_left_is_flagged(bot_with_wallet):
+    from tests.helpers import pump_sell
+    bot = bot_with_wallet
+    bot.whales.add(WHALE, "Rocket")
+    bot.market.set_pair(mint=MINT, price=0.000075, mc=75_000)
+    bot.feed(WHALE, pump_buy())
+    bot.feed(ME, pump_buy(wallet=ME, sol=0.2, tokens=300_000))
+    assert "REBUY" not in bot.notes.kinds()                   # whale still holds: fine
+    bot.feed(WHALE, pump_sell(sol=1.0, tokens=3_000_000, holding=3_000_000, close=True))
+    bot.feed(ME, pump_buy(wallet=ME, sol=0.2, tokens=300_000, new=False, pre_tokens=300_000))
+    assert bot.notes.kinds()[-1] == "REBUY" and "has already sold" in bot.notes.sent[-1]["text"]

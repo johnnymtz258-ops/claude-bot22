@@ -7,6 +7,7 @@ Your BUY/SELL -> recorded exactly in your positions.
 from __future__ import annotations
 
 import asyncio
+import statistics
 import time
 
 from . import copies, exits, messages
@@ -164,6 +165,8 @@ class Engine:
         if is_me:
             self.portfolio.record_wallet_swap(wallet, signature, swap, usd_value, swap["fee_sol"] * sol_usd,
                                               trade_mc, ts)
+            if swap["side"] == "BUY" and source == "stream":
+                await self._rebuy_guard(swap["mint"], ts, info)
             return
         self.db.run("update whales set last_trade_ts=max(coalesce(last_trade_ts,0),?) where address=?", (ts, wallet))
         ctx = {"wallet": wallet, "swap": swap, "swap_id": swap_id, "usd_value": usd_value, "price": price,
@@ -193,8 +196,13 @@ class Engine:
                 and s2.mint=s.mint and s2.side='BUY' order by ts limit 1) entry_mc
                 from swaps s where mint=? and side='BUY' and is_me=0 and ts>=? group by wallet order by min(ts)""",
                             (mint, since))
-        return [{"wallet": r["wallet"], "name": self.whales.name(r["wallet"]), "entry_mc": num(r["entry_mc"])}
-                for r in rows]
+        out: list[dict] = []
+        for r in rows:
+            # wallets that keep buying together are one group (bundles/bots), not separate whales
+            if any(self.whales.same_group(r["wallet"], o["wallet"]) for o in out):
+                continue
+            out.append({"wallet": r["wallet"], "name": self.whales.name(r["wallet"]), "entry_mc": num(r["entry_mc"])})
+        return out
 
     async def on_whale_buy(self, c: dict) -> None:
         wallet, swap, mint = c["wallet"], c["swap"], c["swap"]["mint"]
@@ -226,6 +234,10 @@ class Engine:
             community=community)
         if not swap["new_position"] and grade != "SKIP":
             reasons.append((None, "Adding to a bag they already held"))
+        flip = self.whales.flip_speed(wallet)
+        if flip.get("median_s") is not None and flip["median_s"] <= 600 and grade != "SKIP":
+            reasons.append((False, f"Fast flipper: usually starts selling ~{max(1, round(flip['median_s'] / 60))}m after buying "
+                                   f"({flip['within_2m'] * 100:.0f}% of the time within 2m) — take profit quickly"))
 
         alert_id = self.db.insert("""insert into alerts(ts,kind,mint,wallet,swap_id,grade,mc_usd,price_usd,chase_pct,
                 confluence,reasons) values(?,?,?,?,?,?,?,?,?,?,?)""",
@@ -267,6 +279,47 @@ class Engine:
         msg_id = await self.notify(text, buttons=buttons, silent=silent, mint=mint, wallet=wallet, kind="BUY")
         self.db.run("update alerts set tg_message_id=?, status=? where id=?",
                     (msg_id or 0, "silent" if silent else "sent", alert_id))
+
+    def rebuy_stats(self) -> dict:
+        """How your buys did when every whale in the coin had already sold, vs while one still held."""
+        out = {"after": [], "during": []}
+        for b in self.db.rows("select * from swaps where is_me=1 and side='BUY' and price_usd>0 order by ts desc limit 400"):
+            nxt = self.db.row("""select price_usd from swaps where is_me=1 and mint=? and side='SELL' and ts>?
+                order by ts limit 1""", (b["mint"], b["ts"]))
+            state = self._whale_state(b["mint"], b["ts"])
+            if nxt and state:
+                out[state].append((num(nxt["price_usd"]) / num(b["price_usd"]) - 1) * 100)
+        return {k: {"n": len(v), "median": statistics.median(v) if v else 0.0, "won": sum(x > 0 for x in v)}
+                for k, v in out.items()}
+
+    def _whale_state(self, mint: str, ts: int) -> str:
+        """'during' if a tracked whale held the coin at `ts`, 'after' if all had sold, '' if none was in."""
+        wallets = [r["wallet"] for r in self.db.rows(
+            "select distinct wallet from swaps where mint=? and is_me=0 and side='BUY' and ts<=?", (mint, ts))]
+        if not wallets:
+            return ""
+        for w in wallets:
+            last = self.db.row("select holding_after from swaps where wallet=? and mint=? and ts<=? order by ts desc limit 1",
+                               (w, mint, ts))
+            if last and num(last["holding_after"]) > 0:
+                return "during"
+        return "after"
+
+    async def _rebuy_guard(self, mint: str, ts: int, info: dict) -> None:
+        """You bought a coin every tracked whale has already left — historically your worst trades."""
+        if not self.cfg.flag("REBUY_GUARD") or self._whale_state(mint, ts) != "after":
+            return
+        now = int(time.time())
+        if self.db.scalar("select 1 from alerts where kind='REBUY' and mint=? and ts>=?", (mint, now - 3600)):
+            return
+        st = self.rebuy_stats()["after"]
+        history = (f" Your buys after whales left: {st['n']}, median {st['median']:+.0f}%, {st['won']} won."
+                   if st["n"] >= 5 else "")
+        text = (f"<b>⚠️ Every whale in ${esc(info.get('symbol') or self.market.symbol(mint))} has already sold</b>\n"
+                f"You just bought after they left.{history} Consider a quick exit if it doesn't bounce.\n<code>{mint}</code>")
+        msg_id = await self.notify(text, mint=mint, kind="REBUY")
+        self.db.insert("insert into alerts(ts,kind,mint,wallet,tg_message_id,status) values(?,?,?,?,?,?)",
+                       (now, "REBUY", mint, "", msg_id or 0, "rebuy"))
 
     async def _maybe_add_alert(self, c: dict) -> None:
         """A whale buying MORE of a coin you hold is a hold signal — tell you (at most every 30 min)."""

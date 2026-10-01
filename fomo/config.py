@@ -56,6 +56,7 @@ TUNABLES = {t.name: t for t in (
     Tunable("RUNNER_MIN_MC_USD", 80_000, "Community runners: smallest market cap", 5_000, 100_000_000),
     Tunable("RUNNER_MAX_MC_USD", 8_000_000, "Community runners: largest market cap", 50_000, 1_000_000_000),
     Tunable("RUNNER_HOLD_HOURS", 24, "Community-runner copies are scored as if sold after this many hours", 1, 168),
+    Tunable("REBUY_GUARD", 1, "Warn when you buy a coin every tracked whale has already sold (1 = on)", 0, 1, True),
     Tunable("QUIET_LOW_GRADE", 1, "Send grade-C alerts without sound (1 = on)", 0, 1, True),
     Tunable("ALERTS_ENABLED", 1, "Master switch for Telegram alerts (/pause, /resume)", 0, 1, True),
     Tunable("DAILY_SUMMARY_HOUR", 21, "Local hour for the daily summary (-1 = off)", -1, 23),

@@ -168,6 +168,26 @@ class Whales:
             order by close_ts desc limit ?""", (address, n))
         return [num(r["return_pct"]) for r in rows]
 
+    def flip_speed(self, address: str) -> dict:
+        """How fast this whale starts selling after a buy (first sell), across the coins we've seen."""
+        holds = []
+        for r in self.db.rows("""select min(case when side='BUY' then ts end) b, min(case when side='SELL' then ts end) s
+                from swaps where wallet=? group by mint""", (address,)):
+            if r["b"] and r["s"] and r["s"] >= r["b"]:
+                holds.append(r["s"] - r["b"])
+        if len(holds) < 4:
+            return {"n": len(holds)}
+        return {"n": len(holds), "median_s": statistics.median(holds),
+                "within_2m": sum(h <= 120 for h in holds) / len(holds)}
+
+    def same_group(self, a: str, b: str, window: int = 90) -> bool:
+        """Two wallets that keep buying the same coins within ~a minute of each other act as one."""
+        rows = self.db.rows("""select x.mint from
+            (select mint, min(ts) t from swaps where wallet=? and side='BUY' group by mint) x join
+            (select mint, min(ts) t from swaps where wallet=? and side='BUY' group by mint) y
+            on x.mint=y.mint where abs(x.t-y.t)<=?""", (a, b, window))
+        return len(rows) >= 2
+
     def leaderboard(self, days: int = 30) -> list[dict]:
         board = []
         for w in self.active():

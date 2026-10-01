@@ -82,6 +82,12 @@ made entries worse in practice, so it's off.
 
 - **Whale form** on every buy alert: that whale's last 5 calls (🟩+120% · 🟥-30% …).
 - **➕ Whale added more**: when a whale you follow buys more of a coin you hold — a hold signal.
+- **⚠️ Whale-exit re-buy warning**: buying a coin after every tracked whale has sold. In real data
+  those buys lost a median -24% (6 of 19 won) vs +3.8% while a whale still held.
+- **Bundle groups**: wallets that keep buying the same coins within a minute of each other count as
+  one whale, so they can't fake a "2ND/3RD WHALE IN".
+- **⚡ Fast-flipper warning**: whales that usually start selling within ~10 minutes are flagged on
+  the alert so you take profit quickly.
 - **🎯 /watch COIN 2x** or **/watch COIN 1.5m**: your own market-cap targets, pinged once when hit
   (works downwards too). `/watches`, `/unwatch N`.
 
