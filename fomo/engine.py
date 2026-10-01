@@ -13,7 +13,7 @@ from . import copies, exits, messages
 from .community import CommunityChecker
 from .market import IGNORED_MINTS
 from .swaps import parse_swap
-from .util import num
+from .util import esc, mc, num, pct, usd
 
 ALERT_MAX_AGE = 600          # a trade first seen later than this is recorded but not alerted
 SELL_ALERT_COOLDOWN = 600    # at most one partial-sell message per whale+coin per 10 minutes
@@ -208,7 +208,8 @@ class Engine:
         repeat_since = int(time.time()) - int(self.cfg.get("REPEAT_ALERT_HOURS") * 3600)
         if self.db.scalar("select 1 from alerts where wallet=? and mint=? and kind='BUY' and ts>=?",
                           (wallet, mint, repeat_since)):
-            return  # the whale is adding to a buy we already handled
+            await self._maybe_add_alert(c)  # the whale is adding to a buy we already handled
+            return
 
         whale = self.whales.get(wallet) or {}
         stats = self.whales.stats(wallet)
@@ -257,7 +258,8 @@ class Engine:
             whale_addr=wallet, stats=stats, grade=grade, reasons=reasons, usd_value=c["usd_value"],
             base_amount=swap["base_amount"], base=swap["base"], entry_mc=c["trade_mc"],
             now_mc=num(info.get("mc_usd")), chase=chase, confluence=confluence, latency_s=latency, info=info,
-            late_detect=c["source"] != "stream", hold_line=exits.hold_plan_line(exits.hold_plan(self.db, wallet)))
+            late_detect=c["source"] != "stream", hold_line=exits.hold_plan_line(exits.hold_plan(self.db, wallet)),
+            form=self.whales.recent_form(wallet))
         buttons = [[(label, url, None) for label, url in messages.token_links(mint, info.get("pair_address", ""))],
                    [(f"🔕 Mute {whale.get('name', '')[:12]}", None, f"mute:{wallet}"),
                     ("🐋 Whales in coin", None, f"coin:{mint}")]]
@@ -265,6 +267,26 @@ class Engine:
         msg_id = await self.notify(text, buttons=buttons, silent=silent, mint=mint, wallet=wallet, kind="BUY")
         self.db.run("update alerts set tg_message_id=?, status=? where id=?",
                     (msg_id or 0, "silent" if silent else "sent", alert_id))
+
+    async def _maybe_add_alert(self, c: dict) -> None:
+        """A whale buying MORE of a coin you hold is a hold signal — tell you (at most every 30 min)."""
+        wallet, mint = c["wallet"], c["swap"]["mint"]
+        now = int(time.time())
+        whale = self.whales.get(wallet) or {}
+        if (not self.portfolio.holds(mint) or not self.whales.is_alerting(whale) or not self.cfg.flag("ALERTS_ENABLED")
+                or now - c["ts"] > ALERT_MAX_AGE
+                or self.db.scalar("select 1 from alerts where kind='ADD' and wallet=? and mint=? and ts>=?",
+                                  (wallet, mint, now - 1800))):
+            return
+        info = c["info"]
+        position = self.portfolio.position(mint, num(info.get("price_usd")) or None)
+        text = (f"<b>➕ {esc(whale.get('name') or wallet[:6])} added {usd(c['usd_value'])} more · "
+                f"${esc(info.get('symbol') or self.market.symbol(mint))}</b>\n"
+                f"Bought more at {mc(c['trade_mc'])} MC — still building the position. You hold "
+                f"{usd(position['value'])} ({pct(position['pnl_pct'])}).\n<code>{mint}</code>")
+        msg_id = await self.notify(text, mint=mint, wallet=wallet, kind="ADD")
+        self.db.insert("insert into alerts(ts,kind,mint,wallet,swap_id,mc_usd,tg_message_id,status) values(?,?,?,?,?,?,?,?)",
+                       (now, "ADD", mint, wallet, c["swap_id"], c["trade_mc"], msg_id or 0, "add"))
 
     async def _rugcheck(self, mint: str):
         try:

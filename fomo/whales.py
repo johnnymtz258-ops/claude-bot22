@@ -162,6 +162,12 @@ class Whales:
                 changes.append((w, "unmuted"))
         return changes
 
+    def recent_form(self, address: str, n: int = 5) -> list[float]:
+        """Net % of this whale's last n finished copies (newest first)."""
+        rows = self.db.rows("""select return_pct from copies where whale=? and status='closed'
+            order by close_ts desc limit ?""", (address, n))
+        return [num(r["return_pct"]) for r in rows]
+
     def leaderboard(self, days: int = 30) -> list[dict]:
         board = []
         for w in self.active():

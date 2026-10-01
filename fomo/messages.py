@@ -38,10 +38,16 @@ def whale_record(stats: dict) -> str:
     return text
 
 
+def form_line(form: list[float]) -> str:
+    if not form:
+        return ""
+    return f"Last {len(form)} calls: " + " · ".join(("🟩" if r > 0 else "🟥") + pct(r) for r in form)
+
+
 def buy_alert(*, symbol: str, mint: str, whale_name: str, whale_addr: str, stats: dict, grade: str,
               reasons: list, usd_value: float, base_amount: float, base: str, entry_mc: float,
               now_mc: float, chase: float | None, confluence: list[dict], latency_s: int,
-              info: dict, late_detect: bool, hold_line: str = "") -> str:
+              info: dict, late_detect: bool, hold_line: str = "", form: list | None = None) -> str:
     n = len(confluence)
     if n >= 2:
         head = f"🐋🐋 {'2ND' if n == 2 else f'{n}TH' if n > 3 else '3RD'} WHALE IN · ${esc(symbol)}"
@@ -49,6 +55,8 @@ def buy_alert(*, symbol: str, mint: str, whale_name: str, whale_addr: str, stats
         head = f"{GRADE_ICON.get(grade, '🟢')} WHALE BUY · ${esc(symbol)}"
     lines = [f"<b>{head}</b>  <i>grade {grade}</i>",
              f"🐋 <a href=\"{whale_link(whale_addr)}\">{esc(whale_name)}</a> — {whale_record(stats)}"]
+    if form:
+        lines.append(form_line(form))
     paid = f"{base_amount:,.2f} {base}" if base == "SOL" else usd(base_amount)
     timing = dur(latency_s) + " ago"
     lines.append(f"Bought {usd(usd_value)} ({paid}) at <b>{mc(entry_mc)}</b> MC · {timing}"

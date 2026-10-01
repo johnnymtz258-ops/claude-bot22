@@ -430,15 +430,18 @@
   async function renderScout() {
     const s = await api("/api/scout");
     const sum = s.last_summary || {};
-    $("scout-summary").textContent = `${s.enabled ? "On" : "Off (turn on in Settings: AUTO_WHALES)"} · following ${s.auto_whales}/${s.limit} auto-picked whales · last scout ${s.last_run ? ago(s.last_run) : "not yet"}`
-      + (sum.coins ? ` — researched ${plural(sum.coins.length, "coin")}, checked ${plural(sum.checked || 0, "wallet")}, followed ${sum.followed || 0}` : "")
-      + ". Follows wallets profitable right now; drops its own picks when they go cold, idle or unprofitable. Your whales are never touched.";
+    $("scout-summary").textContent = `${s.enabled ? "On" : "Off (Settings: WHALE_PICKS)"} · ${s.auto_follow ? "auto-follows picks" : "suggests, you follow"} · last run ${s.last_run ? ago(s.last_run) : "not yet"}`
+      + (sum.coins ? ` — researched ${plural(sum.coins.length, "coin")}, checked ${plural(sum.checked || 0, "wallet")}, picked ${(sum.picked || 0) + (sum.followed || 0)}` : "")
+      + ". Wallets profitable right now and early in today's runners. Tap Follow on the ones you like.";
     $("scout-run").disabled = s.running;
-    table($("scout"), ["Wallet", "Found in", "Status", { label: "Profit", num: 1 }, { label: "Won", num: 1 }, { label: "Trades", num: 1 }, "Why"],
+    table($("scout"), ["Wallet", "Found in", "Status", { label: "Profit", num: 1 }, { label: "Won", num: 1 }, { label: "Trades", num: 1 }, "Why", ""],
       s.candidates.map((c) => el("tr", {}, td(el("span", { class: "mono" }, short(c.address))), td(c.coins.split(",").filter(Boolean).map((x) => `$${x}`).join(", ")),
-        td(c.status === "followed" ? "➕ followed" : c.status === "dropped" ? "➖ dropped" : "passed"),
+        td(c.status === "followed" ? "➕ followed" : c.status === "picked" ? "⭐ picked" : c.status === "dropped" ? "➖ dropped" : "passed"),
         td(`${num(c.pnl_sol) > 0 ? "+" : ""}${num(c.pnl_sol).toFixed(1)} SOL`, `num ${signClass(c.pnl_sol)}`),
-        td(`${Math.round(num(c.win_rate) * 100)}%`, "num"), td(String(c.trips), "num"), td(c.reason, "wrap"))),
+        td(`${Math.round(num(c.win_rate) * 100)}%`, "num"), td(String(c.trips), "num"), td(c.reason, "wrap"),
+        td(c.status === "picked" ? el("button", { class: "small", onclick: async (e) => {
+          try { await post("/api/whales", { address: c.address, source: "picks" }); e.target.textContent = "Following"; e.target.disabled = true; }
+          catch (err) { e.target.textContent = err.message; } } }, "Follow") : ""))),
       "The autopilot hasn't scouted yet — it runs a few minutes after start, then every few hours.");
   }
 

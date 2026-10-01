@@ -155,12 +155,18 @@ def test_scout_follows_profitable_early_buyers(bot, monkeypatch):
     monkeypatch.setattr(bot.scout, "_last_trade_ts", last_trade)
     monkeypatch.setattr(bot.scout, "pick_coins", lambda limit=3: [MINT])
     s = bot.run(bot.scout.scout(now))
-    assert s == {"ts": now, "coins": [MINT], "checked": 2, "followed": 1}
-    w = bot.whales.get(WHALE)
-    assert w["source"] == "auto" and w["active"] == 1
-    assert bot.whales.get(WHALE2) is None
+    # default: suggest only — you decide who to follow
+    assert s == {"ts": now, "coins": [MINT], "checked": 2, "followed": 0, "picked": 1}
+    assert bot.whales.get(WHALE) is None
+    assert bot.notes.kinds() == ["PICKS"] and WHALE in bot.notes.sent[0]["text"]
+    assert bot.notes.sent[0]["buttons"][0][0] == ("➕ Follow #1", None, f"track:{WHALE}")
     assert bot.db.row("select status from whale_candidates where address=?", (WHALE2,))["status"] == "rejected"
-    assert bot.notes.kinds() == ["AUTO"]
+    # opt-in auto-follow still works
+    bot.cfg.set("AUTO_WHALES", "on")
+    bot.db.run("delete from whale_candidates")
+    bot.run(bot.scout.scout(now))
+    w = bot.whales.get(WHALE)
+    assert w["source"] == "auto" and w["active"] == 1 and bot.notes.kinds()[-1] == "AUTO"
 
 
 def test_prune_drops_idle_or_cold_auto_whales_but_never_yours(bot):

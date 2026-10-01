@@ -17,7 +17,7 @@ HELP = f"""<b>🐋 FomoBot Whale Copy {VERSION}</b>
 /find COIN [COIN2 …] — early buyers of coins that ran (new whales)
 /suggest — find new whales from today's biggest runners (more alerts)
 /mute name · /unmute name · /remove name
-/scout — the whale autopilot (finds, follows & drops whales by recent profit) · /scout now
+/scout — whale picks: profitable wallets from today's runners, sent to you to follow · /scout now
 
 <b>Coins</b>
 /recent — latest whale buys · /hot — coins with 2+ whales
@@ -28,6 +28,7 @@ HELP = f"""<b>🐋 FomoBot Whale Copy {VERSION}</b>
 /bought 20 · /bought 20 at 850k — you bought $20 (at that market cap)
 /sold 5 · /sold 30% · /sold all — you sold (add "at 1.2m" if you like)
 /positions — your coins + whales still in · /undo — undo last entry
+/watch COIN 2x · /watch COIN 1.5m — ping me at a market-cap target · /watches · /unwatch N
 /exits — which exit style works best + your sell-too-early / too-late habits
 
 <b>Bot</b>
@@ -275,35 +276,72 @@ class Commands:
         if args and args[0].lower() == "now":
             if scout.running:
                 raise ValueError("the autopilot is already running")
-            await self.say("🤖 Scouting now — this takes a few minutes. You'll get a message for every whale it follows.")
+            await self.say("🔎 Looking for whale picks — this takes a few minutes. You'll get them with Follow buttons.")
             self.app.find_task = asyncio.create_task(self._run_scout())
             return
         st = scout.status()
         s = st["last_summary"]
-        lines = [f"<b>🤖 Whale autopilot</b> — {'ON' if st['enabled'] else 'OFF (/set AUTO_WHALES on)'}",
-                 f"Following {st['auto_whales']}/{st['limit']} auto-picked whales "
-                 f"(plus {self.app.whales.count() - st['auto_whales']} of yours)",
-                 f"Last scout: {ago(st['last_run']) + ' ago' if st['last_run'] else 'not yet'}"
+        mode = "auto-follows them" if st["auto_follow"] else "sends them to you to follow"
+        lines = [f"<b>🔎 Whale picks</b> — {'ON' if st['enabled'] else 'OFF (/set WHALE_PICKS on)'}, {mode}",
+                 f"Every {self.app.cfg.get('AUTO_SCOUT_HOURS'):g}h it researches today's biggest runners and picks wallets "
+                 "profitable right now (6+ trades, +1 SOL, 45%+ won, active in 2 days, no snipers/bots).",
+                 f"Last run: {ago(st['last_run']) + ' ago' if st['last_run'] else 'not yet'}"
                  + (f" · researched {len(s.get('coins', []))} coins, checked {s.get('checked', 0)} wallets, "
-                    f"followed {s.get('followed', 0)}" if s else ""),
-                 "Follows only wallets profitable right now (6+ trades, +1 SOL, 45%+ won, active in 2 days). "
-                 "Drops its own picks when they go cold, idle 4 days, or stop being profitable. Yours are never touched."]
-        recent = [c for c in st["candidates"] if c["status"] in ("followed", "dropped")][:8]
+                    f"picked {s.get('picked', s.get('followed', 0))}" if s else ""),
+                 "/scout now runs it right away."]
+        recent = [c for c in st["candidates"] if c["status"] in ("picked", "followed")][:6]
         for c in recent:
-            lines.append(f"{'➕' if c['status'] == 'followed' else '➖'} <code>{short(c['address'])}</code> "
-                         f"{c['status']} · {esc(c['reason'])}")
+            lines.append(f"• <code>{short(c['address'])}</code> {esc(c['reason'])}")
         await self.say("\n".join(lines))
 
     async def _run_scout(self):
         try:
             s = await self.app.scout.scout()
-            await self.say(f"🤖 Scout done: researched {len(s['coins'])} coins, checked {s['checked']} wallets, "
-                           f"followed {s['followed']}." + ("" if s["coins"] else " No fresh runners to research right now."))
+            await self.say(f"🔎 Done: researched {len(s['coins'])} coins, checked {s['checked']} wallets, "
+                           f"picked {s.get('picked', 0) + s['followed']}." + ("" if s["coins"] else " No fresh runners to research right now."))
         except Exception as exc:
             await self.say(f"⚠️ Scout failed: {esc(type(exc).__name__)} {esc(exc)}")
 
     async def cmd_exits(self, args, reply_mint):
         await self.say(format_exits(self.app))
+
+    async def cmd_watch(self, args, reply_mint):
+        """/watch COIN 2x | 1.5m | at 1.5m — tell me when the market cap gets there."""
+        target_text = next((a for a in args if a.lower().endswith("x") and parse_amount(a[:-1]) > 0), "")
+        mc_text = next((a for a in args if not find_address(a) and a.lower() not in {"at", "@"}
+                        and parse_amount(a.lstrip("@")) >= 1000), "")
+        if not (target_text or mc_text):
+            raise ValueError("usage: /watch COIN 2x  or  /watch COIN 1.5m (reply to an alert to skip COIN)")
+        mint = await self._mint([a for a in args if a not in (target_text, mc_text)], reply_mint)
+        info = await self.app.market.token(mint, max_age=15)
+        now_mc = num(info.get("mc_usd"))
+        if now_mc <= 0:
+            raise ValueError("no live market cap for this coin yet — try again in a minute")
+        target = now_mc * parse_amount(target_text[:-1]) if target_text else parse_amount(mc_text.lstrip("@"))
+        direction = "up" if target >= now_mc else "down"
+        self.app.db.insert("insert into watches(mint,target_mc,base_mc,direction,created_ts) values(?,?,?,?,?)",
+                           (mint, target, now_mc, direction, int(time.time())))
+        await self.say(f"🎯 Watching ${esc(info.get('symbol', '?'))}: I'll ping you when it "
+                       f"{'reaches' if direction == 'up' else 'drops to'} {mc(target)} MC (now {mc(now_mc)}).\n"
+                       "/watches lists them · /unwatch N removes one")
+
+    async def cmd_watches(self, args, reply_mint):
+        rows = self.app.db.rows("select * from watches where hit_ts=0 order by created_ts")
+        if not rows:
+            await self.say("No targets set. /watch COIN 2x")
+            return
+        lines = ["<b>🎯 Your targets</b>"]
+        for r in rows:
+            info = self.app.market.cached(r["mint"])
+            lines.append(f"{r['id']}. ${esc(info.get('symbol') or r['mint'][:4])} → {mc(r['target_mc'])} "
+                         f"(now {mc(info.get('mc_usd'))})")
+        await self.say("\n".join(lines))
+
+    async def cmd_unwatch(self, args, reply_mint):
+        n = int(parse_amount(args[0])) if args else 0
+        if not n or not self.app.db.run("delete from watches where id=?", (n,)):
+            raise ValueError("usage: /unwatch N — /watches shows the numbers")
+        await self.say(f"Removed target {n}.")
 
     async def cmd_runners(self, args, reply_mint):
         rows = self.app.db.rows("select * from alerts where kind='RUNNER' order by ts desc limit 10")

@@ -142,3 +142,14 @@ def test_old_bot_whales_are_imported_once(tmp_path):
     names = {r["address"]: r["name"] for r in db.rows("select * from whales")}
     assert names[WHALE] == "Rocket" and names[WHALE2] == "Dino"  # your name beats the old "auto-flow" tag
     assert import_legacy_whales(db, old, [wallets_file]) == 0
+
+
+def test_autopilot_whales_are_dropped_once_and_yours_kept(tmp_path):
+    from fomo.db import drop_autopilot_whales
+    db = Database(tmp_path / "w.db")
+    db.run("insert into whales(address,name,added_ts,source) values(?,?,?,?)", (WHALE, "auto-1", 0, "auto"))
+    db.run("insert into whales(address,name,added_ts,source) values(?,?,?,?)", (WHALE2, "Mine", 0, "manual"))
+    assert drop_autopilot_whales(db) == 1
+    assert {r["address"] for r in db.rows("select address from whales where active=1")} == {WHALE2}
+    db.run("update whales set active=1 where address=?", (WHALE,))  # if you re-add one later, it stays
+    assert drop_autopilot_whales(db) == 0

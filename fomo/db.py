@@ -86,6 +86,10 @@ create table if not exists whale_candidates(
 create table if not exists position_notes(
     mint text, kind text, level real, ts integer, primary key(mint, kind, level));
 
+create table if not exists watches(
+    id integer primary key autoincrement, mint text, target_mc real, base_mc real, direction text,
+    created_ts integer, hit_ts integer default 0);
+
 create table if not exists finds(
     id integer primary key autoincrement, ts integer, mints text, status text,
     progress text default '', result_json text default '', finished_ts integer default 0);
@@ -152,6 +156,15 @@ class Database:
         self.run("delete from processed where ts<?", (cutoff,))
         self.run("delete from price_marks where ts<?", (int(time.time()) - 45 * 86400,))
         self.run("delete from tg_messages where ts<?", (int(time.time()) - 60 * 86400,))
+
+
+def drop_autopilot_whales(db: Database) -> int:
+    """One-time: unfollow whales the earlier autopilot followed by itself (whales you added are kept)."""
+    if db.get_meta("autopilot_whales_dropped") == "1":
+        return 0
+    dropped = db.run("update whales set active=0 where source='auto' and active=1")
+    db.set_meta("autopilot_whales_dropped", "1")
+    return dropped
 
 
 def import_legacy_whales(db: Database, legacy_db: Path, wallet_files: list[Path]) -> int:

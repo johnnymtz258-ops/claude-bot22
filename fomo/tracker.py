@@ -10,7 +10,7 @@ import statistics
 import time
 
 from . import copies, exits, messages
-from .util import esc, num
+from .util import esc, mc, num, usd
 
 PRICE_EVERY = 15
 WHALE_BALANCE_CHECK_EVERY = 600
@@ -54,7 +54,9 @@ class Tracker:
         recent = [r["mint"] for r in self.db.rows(
             "select distinct mint from alerts where kind='BUY' and ts>=?", (now - 3 * 3600,))]
         closed = self.portfolio.recently_closed()
-        mints = {c["mint"] for c in open_copies} | {p["mint"] for p in positions} | set(recent) | set(closed)
+        watches = self.db.rows("select * from watches where hit_ts=0")
+        mints = ({c["mint"] for c in open_copies} | {p["mint"] for p in positions} | set(recent) | set(closed)
+                 | {w["mint"] for w in watches})
         infos = await self.market.tokens(sorted(mints), max_age=PRICE_EVERY - 2) if mints else {}
         for mint, info in infos.items():
             self.marks.record(mint, num(info.get("price_usd")), now)
@@ -62,6 +64,7 @@ class Tracker:
             self._update_copy(c, infos.get(c["mint"]), now)
         for p in positions:
             await self._watch_position(p, infos.get(p["mint"]), now)
+        await self._check_watches(watches, infos, now)
         if now - self._last_balance_check >= WHALE_BALANCE_CHECK_EVERY:
             self._last_balance_check = now
             await self._check_whale_balances(now)
@@ -157,6 +160,27 @@ class Tracker:
             initial_note_ts=excluded.initial_note_ts""",
                     (mint, w["liq_peak"], w["liq_peak_ts"], w["liq_peak_price"], w["rug_pending_ts"],
                      w["rug_alert_ts"], w["initial_note_ts"]))
+
+    # -- your market-cap targets (/watch) ------------------------------------------------------------
+    async def _check_watches(self, watches: list[dict], infos: dict, now: int) -> None:
+        for w in watches:
+            info = infos.get(w["mint"]) or {}
+            mcap = num(info.get("mc_usd"))
+            if mcap <= 0:
+                continue
+            hit = mcap >= w["target_mc"] if w["direction"] == "up" else mcap <= w["target_mc"]
+            if not hit:
+                continue
+            self.db.run("update watches set hit_ts=? where id=?", (now, w["id"]))
+            position = self.portfolio.position(w["mint"], num(info.get("price_usd")))
+            holders = [h for h in self.whales.holders_of(w["mint"]) if h["still_in"]]
+            move = (mcap / w["base_mc"] - 1) * 100 if w["base_mc"] > 0 else 0.0
+            text = (f"<b>🎯 ${esc(info.get('symbol', '?'))} hit your {mc(w['target_mc'])} target</b>\n"
+                    f"Now {mc(mcap)} MC ({move:+.0f}% since you set it)."
+                    + (f" You hold {usd(position['value'])} ({position['pnl_pct']:+.0f}%)." if position and position["open"] else "")
+                    + (f" {len(holders)} tracked whale{'s' if len(holders) != 1 else ''} still in." if holders else "")
+                    + f"\n<code>{w['mint']}</code>")
+            await self.notify(text, mint=w["mint"], kind="WATCH")
 
     # -- exit nudges ---------------------------------------------------------------------------------
     def _noted(self, mint: str, kind: str, level: float, since: int) -> bool:

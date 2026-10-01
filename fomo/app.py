@@ -11,7 +11,7 @@ import aiohttp
 
 from . import VERSION, config
 from .commands import Commands, format_stats
-from .db import Database, import_legacy_whales
+from .db import Database, drop_autopilot_whales, import_legacy_whales
 from .discovery import Discovery
 from .engine import Engine
 from .market import Market
@@ -137,6 +137,7 @@ class App:
             imported = import_legacy_whales(self.db, cfg.legacy_db_path,
                                             [config.ROOT / "tracked_wallets.json",
                                              config.ROOT / "legacy" / "tracked_wallets.json"])
+            drop_autopilot_whales(self.db)
             self.refresh_wallets()
             tasks = [self.stream.run(), self.tracker.run_prices(), self.tracker.run_poller(),
                      self.telegram_loop(), self.daily_loop(), self.runners.run(),

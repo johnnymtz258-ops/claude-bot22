@@ -1,3 +1,4 @@
+import re
 import time
 
 import pytest
@@ -21,7 +22,7 @@ def test_whale_buy_sends_graded_alert_and_opens_copy(bot):
     text = bot.notes.sent[0]["text"]
     assert "WHALE BUY" in text and "$CASHED" in text and "Rocket" in text
     assert "$75K</b> MC" in text            # whale's entry market cap from the swap itself
-    assert "Mint &amp; freeze authority revoked" in text and "0s ago" in text
+    assert "Mint &amp; freeze authority revoked" in text and re.search(r"· [0-9]s ago", text)
     swap = bot.db.row("select * from swaps")
     assert swap["usd_value"] == pytest.approx(225) and swap["mc_usd"] == pytest.approx(75_000)
     copy = bot.db.row("select * from copies")

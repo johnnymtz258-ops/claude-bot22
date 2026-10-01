@@ -69,16 +69,21 @@ Whales you tracked in the old bot are imported automatically on first start.
   quickest way to grow your whale list — more good whales means more alerts.
 - Tap **➕ Follow** under either result, or use the dashboard's *Find whales* tab.
 
-## Whale autopilot
+## Whale picks (the bot finds whales, you choose)
 
 Every few hours (`AUTO_SCOUT_HOURS`, default 6) the bot researches today's biggest runners and
-coins your alerts caught that went 3x+, reads their early buyers' recent trading, and **follows
-only wallets that are profitable right now**: 6+ closed trades, +1 SOL or more, 45%+ won, active
-in the last 2 days, not a sniper or bot. Once a day it **drops its own picks** that turned COLD,
-went quiet for 4 days, or stopped being profitable. Whales you add yourself are never dropped
-(adding an auto-picked whale yourself makes it yours). Up to `AUTO_WHALE_LIMIT` (15) at a time.
-Every follow/drop is reported with the reason. `/scout` shows it; `/scout now` runs it.
-Uses a few thousand Helius requests per run — fine on the free plan.
+coins your alerts caught that went 3x+, reads their early buyers' recent trading, and **sends you
+up to 3 wallets that are profitable right now** (6+ closed trades, +1 SOL or more, 45%+ won,
+active in the last 2 days, no snipers or bots) with ➕ Follow buttons. `/scout now` runs it on
+demand. It does not follow anyone by itself unless you `/set AUTO_WHALES on` — auto-following
+made entries worse in practice, so it's off.
+
+## Extra signals around your entries
+
+- **Whale form** on every buy alert: that whale's last 5 calls (🟩+120% · 🟥-30% …).
+- **➕ Whale added more**: when a whale you follow buys more of a coin you hold — a hold signal.
+- **🎯 /watch COIN 2x** or **/watch COIN 1.5m**: your own market-cap targets, pinged once when hit
+  (works downwards too). `/watches`, `/unwatch N`.
 
 ## Selling: too early vs too late
 

@@ -1,4 +1,7 @@
-"""Whale autopilot: finds profitable wallets on its own, follows them, and drops them when they stop working.
+"""Whale picks: finds wallets that are profitable right now in today's runners and sends them to you.
+
+By default it only *suggests* (you tap ➕ Follow) — following picks automatically (AUTO_WHALES) made
+entries worse in practice, so it's off unless you turn it on.
 
 Every AUTO_SCOUT_HOURS:
   1. Pick up to 3 coins that just ran: today's biggest community runners (2x+ in 24h with real
@@ -69,7 +72,8 @@ class WhaleScout:
         await asyncio.sleep(300)  # let the bot settle (wallet backfill etc.) first
         while True:
             try:
-                if self.cfg.flag("AUTO_WHALES") and time.time() - self.last_run >= self.cfg.get("AUTO_SCOUT_HOURS") * 3600:
+                active = self.cfg.flag("WHALE_PICKS") or self.cfg.flag("AUTO_WHALES")
+                if active and time.time() - self.last_run >= self.cfg.get("AUTO_SCOUT_HOURS") * 3600:
                     await self.scout()
                 if self.cfg.flag("AUTO_WHALES"):
                     await self.prune()
@@ -100,8 +104,9 @@ class WhaleScout:
         self.last_run = now
         self.db.set_meta("scout_last_run", now)
         coins = self.pick_coins()
-        followed, checked = [], 0
-        room = int(self.cfg.get("AUTO_WHALE_LIMIT")) - self.auto_count()
+        followed, picks, checked = [], [], 0
+        auto = self.cfg.flag("AUTO_WHALES")
+        room = int(self.cfg.get("AUTO_WHALE_LIMIT")) - self.auto_count() if auto else 3
         for mint in coins:
             self.db.set_meta(f"scouted:{mint}", now)
             coin = await self.discovery.research_coin(mint)
@@ -117,8 +122,11 @@ class WhaleScout:
                 result["last_trade_ts"] = await self._last_trade_ts(cand["wallet"])
                 checked += 1
                 ok, reason = qualifies(result, now)
-                self._remember(cand, coin, result, "followed" if ok else "rejected", reason, now)
-                if ok:
+                self._remember(cand, coin, result, ("followed" if auto else "picked") if ok else "rejected", reason, now)
+                if ok and not auto:
+                    room -= 1
+                    picks.append((cand, coin, result, reason))
+                elif ok:
                     name = f"auto-{short(cand['wallet'])[:4]}"
                     added, _ = self.whales.add(cand["wallet"], name, source="auto")
                     if added:
@@ -135,7 +143,17 @@ class WhaleScout:
                     buttons=[[("Unfollow", None, f"untrack:{cand['wallet']}"),
                               ("GMGN", f"https://gmgn.ai/sol/address/{cand['wallet']}", None)]],
                     silent=True, kind="AUTO")
-        summary = {"ts": now, "coins": coins, "checked": checked, "followed": len(followed)}
+        if picks:
+            lines = ["🔎 <b>Whale picks</b> — profitable right now and early in today's runners. Tap to follow:"]
+            buttons = []
+            for i, (cand, coin, result, reason) in enumerate(picks, 1):
+                lines.append(f"{i}. <code>{cand['wallet']}</code>\n   early in ${esc(coin['symbol'])} at "
+                             f"{mc(cand['entry_mc'])} (peaked {cand['to_peak']:.0f}x) · {esc(reason)} · "
+                             f"median hold {int(result['median_hold_s'] // 60)}m")
+                buttons.append([(f"➕ Follow #{i}", None, f"track:{cand['wallet']}"),
+                                (f"GMGN #{i}", f"https://gmgn.ai/sol/address/{cand['wallet']}", None)])
+            await self.notify("\n".join(lines), buttons=buttons, silent=True, kind="PICKS")
+        summary = {"ts": now, "coins": coins, "checked": checked, "followed": len(followed), "picked": len(picks)}
         self.db.set_meta("scout_last_summary", json.dumps(summary))
         return summary
 
@@ -192,7 +210,8 @@ class WhaleScout:
             summary = json.loads(self.db.get_meta("scout_last_summary", "") or "{}")
         except ValueError:
             summary = {}
-        return {"enabled": self.cfg.flag("AUTO_WHALES"), "running": self.running, "last_run": self.last_run,
+        return {"enabled": self.cfg.flag("WHALE_PICKS") or self.cfg.flag("AUTO_WHALES"),
+                "auto_follow": self.cfg.flag("AUTO_WHALES"), "running": self.running, "last_run": self.last_run,
                 "auto_whales": self.auto_count(), "limit": int(self.cfg.get("AUTO_WHALE_LIMIT")),
                 "last_summary": summary, "error": self.last_error,
                 "candidates": self.db.rows("select * from whale_candidates order by analyzed_ts desc limit 40")}

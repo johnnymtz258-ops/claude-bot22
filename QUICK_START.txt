@@ -34,11 +34,12 @@ FIND NEW WHALES
   /find COIN1 COIN2       wallets early in BOTH are listed first
   /analyze WALLET         is this wallet copyable? then tap ➕ Follow
   /suggest                finds whales in today's biggest runners (more whales = more alerts)
-  /scout                  the autopilot: follows profitable whales by itself, drops ones that stop working
+  /scout now              whale picks: profitable wallets from today's runners, sent to you with Follow buttons
 
 SELLING BETTER
   /exits                  which exit style works best on your whales + your too-early/too-late habits
   You'll get one nudge at 2x/3x/5x/10x, and a 🛡 warning if a 2x+ coin gives back 35% from its peak.
+  /watch COIN 2x          ping me when it hits a market-cap target (/watches, /unwatch N)
 
 BROWSER EXTENSION (optional)
   Chrome → chrome://extensions → Developer mode ON → Load unpacked → pick browser_extension.
