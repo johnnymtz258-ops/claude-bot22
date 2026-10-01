@@ -303,7 +303,7 @@
       tile("Copy result (30d)", c.n ? pct(c.avg) : "—", c.n ? `avg per copy · ${c.n} copies · ${Math.round(c.win_rate * 100)}% won` : "builds as whales trade", signClass(c.avg)),
       tile("$100 on every alert", c.n ? usd(c.per_100, true) : "—", "30 days, fees included", signClass(c.per_100)));
     const rows = f.buys.map((b) => el("tr", { class: "click", onclick: () => openCoin(b.mint) },
-      td(ago(b.trade_ts || b.ts)), td(el("span", { class: "grade" }, b.grade)), td(b.whale), td(coinCell(b.symbol, b.image, b.mint)),
+      td(ago(b.trade_ts || b.ts)), td(el("span", { class: "grade", title: b.scalp ? "Scalp: take profit into the pump, don't hold" : "" }, b.scalp ? `⚡${b.grade}` : b.grade)), td(b.whale), td(coinCell(b.symbol, b.image, b.mint)),
       td(mc(b.entry_mc), "num"), td(mc(b.now_mc), "num"),
       td(b.change === null ? "—" : pct(b.change), `num ${signClass(b.change)}`),
       td(b.confluence > 1 ? `🐋×${b.confluence}` : ""), td(links(b.mint, ""))));
@@ -333,17 +333,25 @@
     await post(`/api/whales/${address}/${action}`);
     renderWhales();
   }
+  // what a whale's coins did hours after they bought; ⚡ marks scalp-only whales (most coins died)
+  function afterText(a) {
+    if (!a || a.n < 3) return "—";
+    const scalp = a.n >= 5 && a.dead >= 0.6 * a.n;
+    return `${scalp ? "⚡ " : ""}${a.dead}/${a.n}`;
+  }
   async function renderWhales() {
     renderScout().catch(() => {});
     const rows = await api("/api/whales");
     table($("whales"), ["Whale", "Status", { label: "Copies", num: 1 }, { label: "Won", num: 1 }, { label: "Avg", num: 1 },
-      { label: "Median", num: 1 }, { label: "Hit 2x", num: 1 }, { label: "Dip before run", num: 1 }, "Last trade", ""],
+      { label: "Median", num: 1 }, { label: "Hit 2x", num: 1 }, { label: "Dip before run", num: 1 },
+      { label: "Coins dead 6h later", num: 1 }, "Last trade", ""],
       rows.map((w) => el("tr", { class: "click", onclick: () => openWhale(w.address) },
         td(el("span", {}, el("b", {}, w.name), " ", el("span", { class: "muted mono" }, short(w.address)))),
         td(el("span", { class: "status-badge" }, STATUS[w.status], w.muted ? " · 🔕 muted" : w.auto_muted === 1 ? " · auto-muted" : "")),
         td(String(w.n), "num"), td(w.n ? `${Math.round(w.win_rate * 100)}%` : "—", "num"),
         td(w.n ? pct(w.avg) : "—", `num ${signClass(w.avg)}`), td(w.n ? pct(w.median) : "—", `num ${signClass(w.median)}`),
         td(w.n ? `${Math.round(w.hit_2x * 100)}%` : "—", "num"), td(w.winners ? pct(w.typical_dip) : "—", "num"),
+        td(afterText(w.after), "num"),
         td(ago(w.last_trade_ts)),
         td(el("span", { class: "row" },
           el("button", { class: "ghost small", onclick: (e) => { e.stopPropagation(); whaleAction(w.address, w.muted || w.auto_muted === 1 ? "unmute" : "mute"); } },

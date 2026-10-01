@@ -105,6 +105,12 @@ class Commands:
             ok, text = whales.add(arg, source="find")
             self.app.refresh_wallets()
             await tg.answer(cq["id"], text)
+        elif action == "x2":
+            await tg.answer(cq["id"], "Setting a 2x target…")
+            try:
+                await self.cmd_watch([arg, "2x"], "")
+            except ValueError as exc:
+                await self.say(f"⚠️ {esc(exc)}")
         elif action == "coin":
             await tg.answer(cq["id"])
             await self.cmd_coin([arg], "")
@@ -589,6 +595,11 @@ def format_stats(app, days: int = 30) -> str:
         grades = " | ".join(f"{g}: {s['n']} · {pct(s['avg'])}" for g, s in r["by_grade"].items() if s["n"])
         if grades:
             lines.append(f"By grade — {grades}")
+        later = reports.grade_outcomes(app.db, min(days, 30))
+        shown = [(("⚡ scalp" if g == "scalp" else g), v) for g, v in later.items() if v["n"]]
+        if shown:
+            lines.append("Coins 6h after the alert — " + " | ".join(
+                f"{g}: {v['n']} · median {v['median_x']:.2f}x · {v['dead']} dead · {v['hit_2x']} hit 2x" for g, v in shown))
         if r["confluence"]["n"]:
             lines.append(f"2+ whales: {r['confluence']['n']} · avg {pct(r['confluence']['avg'])} vs solo "
                          f"{pct(r['solo']['avg'])}")

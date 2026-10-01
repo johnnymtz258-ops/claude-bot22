@@ -15,6 +15,7 @@ from .community import CommunityChecker
 from .market import IGNORED_MINTS
 from .swaps import parse_swap
 from .util import esc, mc, num, pct, usd
+from .whales import AFTERMATH_MIN, aftermath, dumps
 
 ALERT_MAX_AGE = 600          # a trade first seen later than this is recorded but not alerted
 SELL_ALERT_COOLDOWN = 600    # at most one partial-sell message per whale+coin per 10 minutes
@@ -24,15 +25,20 @@ THIN_LIQUIDITY_USD = 5_000
 
 def grade_buy(*, status: str, stats: dict, confluence: int, chase: float | None, safety: dict,
               rug: dict | None, liquidity: float, usd_value: float, usual_usd: float,
-              late_chase_pct: float, community: dict | None = None) -> tuple[str, list]:
+              late_chase_pct: float, community: dict | None = None, after: dict | None = None,
+              micro: dict | None = None) -> tuple[str, list]:
     """Grade a whale buy. Returns ('A'|'B'|'C'|'SKIP', [(ok, reason), ...]).
 
     ok=True is a plus, ok=False a warning, ok=None neutral information.
+    `after` is what this whale's earlier coins did hours later; `micro` (pooled outcomes of small
+    coins) is given only when this coin is a micro-cap. Either one makes it a SCALP: never grade A,
+    because A means "fine to hold" and these coins usually pump and then die.
     """
     points = {"HOT": 2, "OK": 1, "NEW": 0, "WEAK": -1, "COLD": -2}[status]
     reasons = []
     if status == "HOT":
-        reasons.append((True, f"HOT whale: copying them averaged {stats['avg']:+.0f}% over {stats['n']} buys"))
+        reasons.append((True, f"HOT whale: {stats.get('win_rate', 0) * 100:.0f}% of {stats['n']} copies won, "
+                              f"median {stats.get('median', stats['avg']):+.0f}%"))
     elif status == "NEW":
         reasons.append((None, "New whale: fewer than 5 copies measured, record still building"))
     elif status in {"WEAK", "COLD"}:
@@ -77,7 +83,20 @@ def grade_buy(*, status: str, stats: dict, confluence: int, chase: float | None,
         points += 1
         reasons.append((True, f"Big buy for this whale ({usd_value / usual_usd:.1f}× their usual size)"))
 
+    if dumps(after):
+        reasons.append((False, f"Their coins don't last: {after['dead']} of {after['n']} were down 50%+ "
+                               "six hours after they bought — scalp only"))
+    if micro is not None:
+        if micro["n"] >= AFTERMATH_MIN:
+            reasons.append((False, f"Micro-cap: of your last {micro['n']} whale alerts this small, {micro['hit_2x']} "
+                                   f"hit 2x but {micro['dead']} were down 50%+ six hours later — take profit into the pump"))
+        else:
+            reasons.append((False, "Micro-cap: coins this small usually pump and then fall back to launch — "
+                                   "take profit into the pump"))
+
     grade = "A" if points >= 2 else "B" if points >= 0 else "C"
+    if grade == "A" and (dumps(after) or micro is not None):
+        grade = "B"
     return grade, reasons
 
 
@@ -227,11 +246,14 @@ class Engine:
         now_price = num(info.get("price_usd"))
         chase = (now_price / c["price"] - 1) * 100 if now_price > 0 and c["price"] > 0 else None
         confluence = self._confluence(mint, c["ts"])
+        after = self.whales.aftermath(wallet)
+        micro = self._micro_stats(c["trade_mc"], info)
+        scalp = dumps(after) or micro is not None
         grade, reasons = grade_buy(
             status=stats["status"], stats=stats, confluence=len(confluence), chase=chase, safety=safety, rug=rug,
             liquidity=num(info.get("liquidity_usd"), -1), usd_value=c["usd_value"],
             usual_usd=self.whales.usual_buy_usd(wallet), late_chase_pct=self.cfg.get("LATE_CHASE_PCT"),
-            community=community)
+            community=community, after=after, micro=micro)
         if not swap["new_position"] and grade != "SKIP":
             reasons.append((None, "Adding to a bag they already held"))
         flip = self.whales.flip_speed(wallet)
@@ -240,10 +262,10 @@ class Engine:
                                    f"({flip['within_2m'] * 100:.0f}% of the time within 2m) — take profit quickly"))
 
         alert_id = self.db.insert("""insert into alerts(ts,kind,mint,wallet,swap_id,grade,mc_usd,price_usd,chase_pct,
-                confluence,reasons) values(?,?,?,?,?,?,?,?,?,?,?)""",
+                confluence,reasons,scalp) values(?,?,?,?,?,?,?,?,?,?,?,?)""",
                                   (int(time.time()), "BUY", mint, wallet, c["swap_id"], grade, c["trade_mc"],
                                    now_price or c["price"], chase or 0.0, len(confluence),
-                                   " | ".join(t for _, t in reasons)))
+                                   " | ".join(t for _, t in reasons), int(scalp)))
         latency = max(0, int(time.time()) - c["ts"])
 
         def status(value: str) -> None:
@@ -265,20 +287,35 @@ class Engine:
         if community["label"] == "WHALE-ONLY" and self.cfg.flag("HIDE_WHALE_ONLY"):
             status("whale_only")
             return  # a few wallets hold it and hardly anyone trades it: tracked and scored, not sent
+        if scalp and not self.cfg.flag("SCALP_ALERTS"):
+            status("scalp")
+            return
+        plan = exits.hold_plan(self.db, wallet)
         text = messages.buy_alert(
             symbol=info.get("symbol") or self.market.symbol(mint), mint=mint, whale_name=whale.get("name") or wallet[:6],
             whale_addr=wallet, stats=stats, grade=grade, reasons=reasons, usd_value=c["usd_value"],
             base_amount=swap["base_amount"], base=swap["base"], entry_mc=c["trade_mc"],
             now_mc=num(info.get("mc_usd")), chase=chase, confluence=confluence, latency_s=latency, info=info,
-            late_detect=c["source"] != "stream", hold_line=exits.hold_plan_line(exits.hold_plan(self.db, wallet)),
-            form=self.whales.recent_form(wallet))
+            late_detect=c["source"] != "stream",
+            hold_line=(messages.scalp_plan_line(num(info.get("mc_usd")) or c["trade_mc"], plan, self.cfg.get("SCALP_TRAIL_PCT"))
+                       if scalp else exits.hold_plan_line(plan)),
+            form=self.whales.recent_form(wallet), scalp=scalp)
         buttons = [[(label, url, None) for label, url in messages.token_links(mint, info.get("pair_address", ""))],
                    [(f"🔕 Mute {whale.get('name', '')[:12]}", None, f"mute:{wallet}"),
                     ("🐋 Whales in coin", None, f"coin:{mint}")]]
+        if scalp:
+            buttons.append([("🎯 Ping me at 2x", None, f"x2:{mint}")])
         silent = grade == "C" and self.cfg.flag("QUIET_LOW_GRADE")
         msg_id = await self.notify(text, buttons=buttons, silent=silent, mint=mint, wallet=wallet, kind="BUY")
         self.db.run("update alerts set tg_message_id=?, status=? where id=?",
                     (msg_id or 0, "silent" if silent else "sent", alert_id))
+
+    def _micro_stats(self, trade_mc: float, info: dict) -> dict | None:
+        """Pooled outcomes of earlier micro-cap alerts when this coin is one (else None)."""
+        limit = self.cfg.get("MICRO_MC_USD")
+        if limit <= 0 or not (0 < trade_mc < limit or info.get("dex") == "pumpfun"):
+            return None
+        return aftermath(self.db, "a.wallet<>'runner' and a.mc_usd>0 and a.mc_usd<?", (limit,))
 
     def rebuy_stats(self) -> dict:
         """How your buys did when every whale in the coin had already sold, vs while one still held."""

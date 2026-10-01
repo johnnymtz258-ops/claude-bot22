@@ -10,6 +10,7 @@ import statistics
 import time
 
 from . import copies, exits, messages
+from .db import OUTCOME_POINTS
 from .util import esc, mc, num, usd
 
 PRICE_EVERY = 15
@@ -18,6 +19,8 @@ RUG_CONFIRM_SECONDS = 20
 RUG_REALERT_SECONDS = 6 * 3600
 LIQ_PEAK_WINDOW = 2 * 3600
 DEAD_PRICE_FRACTION = 0.03   # a copy whose price fell 97%+ (confirmed) is closed as rugged
+OUTCOME_EVERY = 300          # alerts older than 3h are re-priced every 5 minutes until their 24h reading
+OUTCOME_WINDOW = 30 * 3600
 
 
 class Tracker:
@@ -35,6 +38,8 @@ class Tracker:
         self.marks = exits.MarkRecorder(db)
         self._protect_pending: dict[str, int] = {}
         self._lab_cache: tuple[float, dict] = (0.0, {})
+        self._last_outcome = 0
+        self._peak_pending: dict[int, tuple[float, int]] = {}
         self.loops = 0
         self.last_error = ""
 
@@ -55,8 +60,14 @@ class Tracker:
             "select distinct mint from alerts where kind='BUY' and ts>=?", (now - 3 * 3600,))]
         closed = self.portfolio.recently_closed()
         watches = self.db.rows("select * from watches where hit_ts=0")
+        outcomes = self.db.rows("""select id,ts,mint,price_usd,peak_price,p1h,p6h,p24h from alerts
+            where kind='BUY' and price_usd>0 and ts>=? and p24h is null""", (now - OUTCOME_WINDOW,))
+        older = set()
+        if now - self._last_outcome >= OUTCOME_EVERY:
+            self._last_outcome = now
+            older = {a["mint"] for a in outcomes}
         mints = ({c["mint"] for c in open_copies} | {p["mint"] for p in positions} | set(recent) | set(closed)
-                 | {w["mint"] for w in watches})
+                 | {w["mint"] for w in watches} | older)
         infos = await self.market.tokens(sorted(mints), max_age=PRICE_EVERY - 2) if mints else {}
         for mint, info in infos.items():
             self.marks.record(mint, num(info.get("price_usd")), now)
@@ -65,6 +76,7 @@ class Tracker:
         for p in positions:
             await self._watch_position(p, infos.get(p["mint"]), now)
         await self._check_watches(watches, infos, now)
+        self._update_outcomes(outcomes, infos, now)
         if now - self._last_balance_check >= WHALE_BALANCE_CHECK_EVERY:
             self._last_balance_check = now
             await self._check_whale_balances(now)
@@ -84,6 +96,31 @@ class Tracker:
         max_hold = self.cfg.get("RUNNER_HOLD_HOURS" if c["whale"] == "runner" else "COPY_MAX_HOLD_HOURS") * 3600
         if now - int(c["open_ts"]) >= max_hold and num(c.get("last_price")) > 0:
             copies.sell(self.db, c, 1.0, num(c["last_price"]), fee, "max hold reached", now)
+
+    def _update_outcomes(self, alerts: list[dict], infos: dict, now: int) -> None:
+        """Record what each alerted coin did afterwards: its peak, and its price 1h / 6h / 24h later."""
+        for a in alerts:
+            price = num((infos.get(a["mint"]) or {}).get("price_usd"))
+            if price <= 0:
+                continue
+            updates = {}
+            for col, after, grace in OUTCOME_POINTS:
+                if a[col] is None and a["ts"] + after <= now <= a["ts"] + after + grace:
+                    updates[col] = price
+            peak = max(num(a["peak_price"]), num(a["price_usd"]))
+            if price > peak and now - a["ts"] <= 86400:
+                if price < peak * copies.GLITCH_JUMP:
+                    updates["peak_price"], updates["peak_ts"] = price, now
+                else:  # a huge jump in one tick has to be seen twice before it counts
+                    pending = self._peak_pending.get(a["id"])
+                    if pending and 0.8 <= price / pending[0] <= 1.25 and now - pending[1] >= 15:
+                        updates["peak_price"], updates["peak_ts"] = price, now
+                        self._peak_pending.pop(a["id"], None)
+                    else:
+                        self._peak_pending[a["id"]] = (price, now)
+            if updates:
+                self.db.run(f"update alerts set {', '.join(k + '=?' for k in updates)} where id=?",
+                            (*updates.values(), a["id"]))
 
     async def _check_whale_balances(self, now: int) -> None:
         """Catch whale exits the stream missed (e.g. tokens moved to another wallet)."""
@@ -220,9 +257,10 @@ class Tracker:
                 await self.notify(messages.ladder_note(
                     symbol=pos["symbol"], mint=mint, level=reached[-1], position=pos, whales_in=c["whales_in"],
                     typical_peak=self._typical_peak(holders),
-                    best_rule=best["label"] if best and best["n"] >= 5 else ""), mint=mint, kind="LADDER")
-        armed = self.cfg.get("PROTECT_AFTER_X") > 0 and c["peak_multiple"] >= self.cfg.get("PROTECT_AFTER_X")
-        if armed and c["from_peak_pct"] >= self.cfg.get("PROTECT_TRAIL_PCT") and not self._noted(mint, "protect", 0, since):
+                    best_rule=best["label"] if best and best["n"] >= 5 else "", scalp=c["scalp"]),
+                    mint=mint, kind="LADDER")
+        armed = c["protect_after"] > 0 and c["peak_multiple"] >= c["protect_after"]
+        if armed and c["from_peak_pct"] >= c["trail"] and not self._noted(mint, "protect", 0, since):
             first = self._protect_pending.setdefault(mint, now)
             if now - first >= RUG_CONFIRM_SECONDS:  # seen on two readings, not a single wick
                 self._note(mint, "protect", 0, now)

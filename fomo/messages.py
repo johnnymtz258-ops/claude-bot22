@@ -10,6 +10,7 @@ There are deliberately no "price dropped, sell" messages: the exit signal is the
 from __future__ import annotations
 
 from .util import ago, dur, esc, mc, mult, num, pct, usd
+from .whales import dumps
 
 GRADE_ICON = {"A": "🟢", "B": "🟡", "C": "⚪️"}
 STATUS_TEXT = {"HOT": "🔥 HOT", "OK": "✅ OK", "NEW": "🆕 NEW", "WEAK": "〰️ WEAK", "COLD": "🧊 COLD"}
@@ -32,7 +33,9 @@ def whale_record(stats: dict) -> str:
     if stats.get("n", 0) == 0:
         return f"{status} · no copies measured yet"
     text = (f"{status} · {stats['n']} copies · {stats['win_rate'] * 100:.0f}% won · "
-            f"avg {pct(stats['avg'])}")
+            f"median {pct(stats.get('median', stats['avg']))}")
+    if abs(stats["avg"] - stats.get("median", stats["avg"])) >= 25:
+        text += f" (avg {pct(stats['avg'])})"
     if stats.get("typical_dip", 0) <= -10:
         text += f" · winners dipped {stats['typical_dip']:.0f}% first"
     return text
@@ -47,12 +50,15 @@ def form_line(form: list[float]) -> str:
 def buy_alert(*, symbol: str, mint: str, whale_name: str, whale_addr: str, stats: dict, grade: str,
               reasons: list, usd_value: float, base_amount: float, base: str, entry_mc: float,
               now_mc: float, chase: float | None, confluence: list[dict], latency_s: int,
-              info: dict, late_detect: bool, hold_line: str = "", form: list | None = None) -> str:
+              info: dict, late_detect: bool, hold_line: str = "", form: list | None = None,
+              scalp: bool = False) -> str:
     n = len(confluence)
     if n >= 2:
         head = f"🐋🐋 {'2ND' if n == 2 else f'{n}TH' if n > 3 else '3RD'} WHALE IN · ${esc(symbol)}"
     else:
         head = f"{GRADE_ICON.get(grade, '🟢')} WHALE BUY · ${esc(symbol)}"
+    if scalp:
+        head = "⚡ SCALP · " + head
     lines = [f"<b>{head}</b>  <i>grade {grade}</i>",
              f"🐋 <a href=\"{whale_link(whale_addr)}\">{esc(whale_name)}</a> — {whale_record(stats)}"]
     if form:
@@ -81,6 +87,21 @@ def buy_alert(*, symbol: str, mint: str, whale_name: str, whale_addr: str, stats
         lines.append(esc(hold_line))
     lines.append(f"<code>{mint}</code>")
     return "\n".join(lines)
+
+
+def scalp_plan_line(now_mc: float, plan: dict | None, trail_pct: float) -> str:
+    """Take-profit plan for coins that usually pump and die (shown instead of the hold plan)."""
+    line = "⚡ Scalp plan: sell half at 2x"
+    if now_mc > 0:
+        line += f" (~{mc(now_mc * 2)} MC), the rest by 3x (~{mc(now_mc * 3)})"
+    else:
+        line += ", the rest by 3x"
+    line += f" or once it falls {trail_pct:.0f}% from the top."
+    if plan and plan.get("time_to_peak_s"):
+        line += f" Pumps like this peaked ~{dur(plan['time_to_peak_s'])} after the buy."
+        if plan.get("at_15m_pct") is not None and plan["at_15m_pct"] < 0:
+            line += f" By 15m they were typically {plan['at_15m_pct']:+.0f}%."
+    return line + " Don't hold and hope."
 
 
 def sell_alert(*, symbol: str, mint: str, whale_name: str, whale_addr: str, fraction: float, usd_value: float,
@@ -125,10 +146,14 @@ def take_initial_note(*, symbol: str, mint: str, position: dict, multiple: float
 
 
 def ladder_note(*, symbol: str, mint: str, level: float, position: dict, whales_in: int, typical_peak: float,
-                best_rule: str) -> str:
-    lines = [f"<b>📈 ${esc(symbol)} hit {level:g}x on your cost</b>",
-             f"{usd(position['cost'])} in → {usd(position['value'])} now. Ladder: sell about a third, let the rest ride"
-             + (f" while {whales_in} whale{'s' if whales_in != 1 else ''} hold." if whales_in else ".")]
+                best_rule: str, scalp: bool = False) -> str:
+    lines = [f"<b>📈 ${esc(symbol)} hit {level:g}x on your cost</b>"]
+    if scalp:
+        lines.append(f"{usd(position['cost'])} in → {usd(position['value'])} now. ⚡ Scalp coin: sell at least half "
+                     "here — coins like this usually give the whole pump back.")
+    else:
+        lines.append(f"{usd(position['cost'])} in → {usd(position['value'])} now. Ladder: sell about a third, let the rest ride"
+                     + (f" while {whales_in} whale{'s' if whales_in != 1 else ''} hold." if whales_in else "."))
     if typical_peak > 0:
         lines.append(f"Your whales' picks peak around {mult(typical_peak)} (median).")
     if best_rule:
@@ -165,6 +190,10 @@ def whale_line(w: dict, i: int) -> str:
     muted = " 🔕 muted" if w.get("muted") else " · auto-muted" if w.get("auto_muted") == 1 else ""
     last = f" · last trade {ago(w['last_trade_ts'])} ago" if w.get("last_trade_ts") else ""
     body = (f"{i}. <b>{esc(w['name'])}</b> {STATUS_TEXT[s['status']]}{muted}\n"
-            f"   {s['n']} copies · {s['win_rate'] * 100:.0f}% won · avg {pct(s['avg'])} · "
+            f"   {s['n']} copies · {s['win_rate'] * 100:.0f}% won · median {pct(s['median'])} · avg {pct(s['avg'])} · "
             f"2x rate {s['hit_2x'] * 100:.0f}%{last}")
+    after = w.get("after") or {}
+    if after.get("n", 0) >= 3:
+        body += (f"\n   Their coins 6h later: {after['dead']}/{after['n']} down 50%+"
+                 + (" · ⚡ scalp only" if dumps(after) else ""))
     return body + f"\n   <code>{w['address']}</code>"

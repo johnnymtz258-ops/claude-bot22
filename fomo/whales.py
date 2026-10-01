@@ -141,7 +141,9 @@ class Whales:
     def _status(s: dict) -> str:
         if s["n"] < MIN_COPIES_FOR_STATUS:
             return "NEW"
-        if s["score"] >= 15:
+        # HOT needs consistency: most copies won and the typical one made money, so one or two
+        # lottery hits (a +1000% outlier) can't make a whale whose median copy loses look great
+        if s["score"] >= 15 and s["median"] > 0 and s["win_rate"] >= 0.5:
             return "HOT"
         if s["score"] >= 0:
             return "OK"
@@ -168,6 +170,10 @@ class Whales:
             order by close_ts desc limit ?""", (address, n))
         return [num(r["return_pct"]) for r in rows]
 
+    def aftermath(self, address: str, days: int = 30) -> dict:
+        """What this whale's coins did after they bought: price 6h later (24h if 6h is missing) vs the alert."""
+        return aftermath(self.db, "a.wallet=?", (address,), days)
+
     def flip_speed(self, address: str) -> dict:
         """How fast this whale starts selling after a buy (first sell), across the coins we've seen."""
         holds = []
@@ -192,7 +198,7 @@ class Whales:
         board = []
         for w in self.active():
             s = self.stats(w["address"], days)
-            board.append({**w, **s, "stats": s})
+            board.append({**w, **s, "stats": s, "after": self.aftermath(w["address"])})
         order = {"HOT": 0, "OK": 1, "NEW": 2, "WEAK": 3, "COLD": 4}
         board.sort(key=lambda r: (order[r["status"]], -r["score"], -(r["last_trade_ts"] or 0)))
         return board
@@ -223,3 +229,30 @@ class Whales:
             })
         out.sort(key=lambda h: h["first_buy_ts"] or 9e18)
         return out
+
+
+DEAD_X = 0.5         # a coin down 50%+ six hours after the buy counts as dead
+AFTERMATH_MIN = 5    # coins needed before we judge
+DUMP_SHARE = 0.6     # whales whose coins are dead this often are scalp-only
+
+
+def aftermath(db, where: str, params: tuple, days: int = 30) -> dict:
+    """Later outcome of alerted coins (one row per coin): n, dead, median multiple, hit 2x."""
+    rows = db.rows(f"""select a.mint, a.price_usd, coalesce(a.p6h, a.p24h) later, a.peak_price from alerts a
+        where a.kind='BUY' and a.price_usd>0 and a.ts>=? and {where} order by a.ts""",
+                   (int(time.time()) - days * 86400, *params))
+    seen, xs, peaks = set(), [], []
+    for r in rows:
+        if r["mint"] in seen or not r["later"]:
+            continue
+        seen.add(r["mint"])
+        xs.append(num(r["later"]) / num(r["price_usd"]))
+        peaks.append(num(r["peak_price"]) / num(r["price_usd"]))
+    n = len(xs)
+    return {"n": n, "dead": sum(x < DEAD_X for x in xs), "median_x": statistics.median(xs) if n else 0.0,
+            "hit_2x": sum(p >= 2 for p in peaks)}
+
+
+def dumps(after: dict | None) -> bool:
+    """True when enough of these coins were dead hours later that holding them is a losing game."""
+    return bool(after) and after["n"] >= AFTERMATH_MIN and after["dead"] >= DUMP_SHARE * after["n"]

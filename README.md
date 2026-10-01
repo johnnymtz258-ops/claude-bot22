@@ -26,7 +26,8 @@ run; the exit signal is the whale leaving, not a red candle.
 
 - **Whale record** — every alert opens a simulated copy: bought at the price when the alert
   arrived, sold when the whale sells, 1% fee each way, no stop-loss. A whale's status comes from
-  those copies, not from what the whale says or a guess: 🔥 HOT (copying made money), ✅ OK,
+  those copies, not from what the whale says or a guess: 🔥 HOT (copying made money consistently:
+  most copies won and the median copy was positive — one or two lucky +1000% hits don't count), ✅ OK,
   🆕 NEW (under 5 copies), 〰️ WEAK, 🧊 COLD (losing — auto-muted but still scored).
 - **Confluence** — two or three of your whales in the same coin.
 - **Chase** — how far the price already moved since the whale's buy (LATE above 50%).
@@ -37,7 +38,20 @@ run; the exit signal is the whale leaving, not a red candle.
   anyone trades it) isn't sent at all by default (`HIDE_WHALE_ONLY`) but is still tracked and scored.
 - **Conviction** — a buy 3× bigger than that whale's usual size.
 
-A = strong, B = normal, C = weak (sent silently). `/stats` shows whether A really beats C for you.
+- **⚡ SCALP** — two kinds of setup usually pump and then fall back to launch, so they are never
+  graded A (A means "fine to hold"):
+  - micro-caps: the whale bought below `MICRO_MC_USD` ($60K), or the coin is still on the pump.fun curve;
+  - whales whose coins don't last: 60%+ of their last 5+ alerted coins were down 50% or more six
+    hours later (the bot now records every alerted coin's price 1h, 6h and 24h later).
+
+  SCALP alerts say so in the title, replace the hold plan with a take-profit plan ("sell half at 2x
+  (~$40K MC), the rest by 3x or once it falls 25% from the top"), and have a 🎯 Ping me at 2x button.
+  If you hold one, the profit protector arms at 1.5x and warns at -25% from the peak
+  (`SCALP_PROTECT_AFTER_X`, `SCALP_TRAIL_PCT`). `/set SCALP_ALERTS off` stops sending them
+  (still tracked and scored).
+
+A = strong and fine to hold, B = normal or scalp, C = weak (sent silently). `/stats` shows where
+each grade's coins were 6h after the alert, so you can check the grades are honest.
 
 ## Setup (Mac)
 

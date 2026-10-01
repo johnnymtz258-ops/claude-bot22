@@ -114,6 +114,11 @@ class Database:
         columns = {r[1] for r in self.conn.execute("pragma table_info(alerts)")}
         if "status" not in columns:
             self.conn.execute("alter table alerts add column status text default ''")
+        # what the coin did after the alert (peak and price 1h / 6h / 24h later), and whether it was a scalp
+        for name, kind in (("scalp", "integer default 0"), ("peak_price", "real default 0"), ("peak_ts", "integer default 0"),
+                           ("p1h", "real"), ("p6h", "real"), ("p24h", "real")):
+            if name not in columns:
+                self.conn.execute(f"alter table alerts add column {name} {kind}")
 
     # -- tiny query helpers -------------------------------------------------------------
     def run(self, sql: str, params=()) -> int:
@@ -156,6 +161,46 @@ class Database:
         self.run("delete from processed where ts<?", (cutoff,))
         self.run("delete from price_marks where ts<?", (int(time.time()) - 45 * 86400,))
         self.run("delete from tg_messages where ts<?", (int(time.time()) - 60 * 86400,))
+
+
+OUTCOME_POINTS = (("p1h", 3600, 3600), ("p6h", 6 * 3600, 3 * 3600), ("p24h", 86400, 6 * 3600))  # (column, after, grace)
+
+
+def backfill_alert_outcomes(db: Database, now: int | None = None) -> int:
+    """Fill in what alerted coins did afterwards from prices the bot already recorded (older databases)."""
+    now = int(now or time.time())
+    filled = 0
+    for a in db.rows("""select id,ts,mint,price_usd,peak_price,p1h,p6h,p24h from alerts
+            where kind='BUY' and price_usd>0 and ts<=? and (p1h is null or p6h is null or p24h is null)""", (now - 3600,)):
+        updates = {}
+        for col, after, grace in OUTCOME_POINTS:
+            if a[col] is not None or a["ts"] + after > now:
+                continue
+            lo, hi = a["ts"] + after, a["ts"] + after + grace
+            price = db.scalar("select price from price_marks where mint=? and ts between ? and ? order by ts limit 1",
+                              (a["mint"], lo, hi))
+            if not price:
+                price = db.scalar("select last_price from copies where alert_id=? and last_ts between ? and ?",
+                                  (a["id"], lo, hi))
+            if not price:
+                price = db.scalar("select price_usd from tokens where mint=? and updated_ts between ? and ?",
+                                  (a["mint"], lo, hi))
+            if not price and col == "p24h" and a["p6h"] is None and "p6h" not in updates:
+                # older databases only kept a coin's latest price: any reading 6-48h later stands in for "a day later"
+                price = db.scalar("select price_usd from tokens where mint=? and updated_ts between ? and ?",
+                                  (a["mint"], a["ts"] + 6 * 3600, a["ts"] + 48 * 3600))
+            if price and price > 0:
+                updates[col] = float(price)
+        peak = max([float(a["peak_price"] or 0)] + [float(x or 0) for x in (
+            db.scalar("select max(price) from price_marks where mint=? and ts between ? and ?",
+                      (a["mint"], a["ts"], a["ts"] + 86400)),
+            db.scalar("select max(peak_price) from copies where alert_id=?", (a["id"],)))])
+        if peak > float(a["peak_price"] or 0):
+            updates["peak_price"] = peak
+        if updates:
+            db.run(f"update alerts set {', '.join(k + '=?' for k in updates)} where id=?", (*updates.values(), a["id"]))
+            filled += 1
+    return filled
 
 
 def drop_autopilot_whales(db: Database) -> int:

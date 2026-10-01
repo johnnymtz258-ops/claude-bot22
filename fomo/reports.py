@@ -49,7 +49,17 @@ FUNNEL_LABELS = {
     "muted": "from muted whales", "paused": "while alerts were paused", "late": "seen too late",
     "unsafe": "unsafe coin (freeze authority)", "too_small": "below MIN_WHALE_BUY_USD",
     "too_big": "above MAX_ENTRY_MC_USD", "earlier": "before this update",
+    "scalp": "hidden: scalp setup (SCALP_ALERTS off)",
 }
+
+
+def grade_outcomes(db, days: float = 14) -> dict:
+    """Where alerted coins were hours later (6h, else 24h), by grade and for ⚡ scalp setups — keeps grades honest."""
+    from .whales import aftermath
+    shown = "coalesce(a.status,'') not in ('late','unsafe')"
+    out = {g: aftermath(db, f"{shown} and a.grade=? and a.scalp=0", (g,), days) for g in ("A", "B", "C")}
+    out["scalp"] = aftermath(db, f"{shown} and a.scalp=1", (), days)
+    return out
 
 
 def alert_funnel(db, hours: float = 24) -> dict:

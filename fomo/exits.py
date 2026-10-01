@@ -199,7 +199,8 @@ def coach(db, cfg, position: dict, holders: list[dict], now: int | None = None) 
     now = int(now or time.time())
     cost, tokens, price = num(position.get("cost")), num(position.get("tokens")), num(position.get("price"))
     if cost <= 0 or tokens <= 0 or price <= 0:
-        return {"multiple": 0.0, "peak_multiple": 0.0, "from_peak_pct": 0.0, "hint": ""}
+        return {"multiple": 0.0, "peak_multiple": 0.0, "from_peak_pct": 0.0, "hint": "", "whales_in": 0,
+                "scalp": False, "protect_after": 0, "trail": 100}
     entry = cost / tokens
     since = int(position.get("episode_ts") or position.get("first_ts") or now)
     path = marks(db, position["mint"], since, now)
@@ -208,8 +209,16 @@ def coach(db, cfg, position: dict, holders: list[dict], now: int | None = None) 
     from_peak = (1 - price / peak) * 100 if peak > 0 else 0.0
     whales_in = sum(1 for h in holders if h["still_in"])
     protect_after, trail = cfg.get("PROTECT_AFTER_X"), cfg.get("PROTECT_TRAIL_PCT")
+    # SCALP coins (micro-caps, whales whose coins usually die) pump fast and give it all back: protect sooner
+    scalp = bool(db.scalar("select 1 from alerts where mint=? and kind='BUY' and scalp=1 and ts>=?",
+                           (position["mint"], now - 2 * 86400)))
+    if scalp:
+        protect_after = min(protect_after, cfg.get("SCALP_PROTECT_AFTER_X")) if protect_after > 0 else 0
+        trail = min(trail, cfg.get("SCALP_TRAIL_PCT"))
     if protect_after > 0 and peak_multiple >= protect_after and from_peak >= trail:
         hint = f"Gave back {from_peak:.0f}% from its {peak_multiple:.1f}x peak — protect what's left"
+    elif scalp and multiple >= 1.5:
+        hint = f"{multiple:.1f}x on a scalp coin — these usually fade, take some"
     elif multiple >= 2:
         hit = [lv for lv in LADDER_LEVELS if multiple >= lv][-1]
         hint = f"{multiple:.1f}x — ladder says a slice at {hit:g}x" + (", whales still in" if whales_in else "")
@@ -220,7 +229,8 @@ def coach(db, cfg, position: dict, holders: list[dict], now: int | None = None) 
     else:
         hint = "Hold while the whales hold"
     return {"multiple": multiple, "peak_multiple": peak_multiple, "from_peak_pct": from_peak,
-            "whales_in": whales_in, "hint": hint, "entry_price": entry, "peak_price": peak}
+            "whales_in": whales_in, "hint": hint, "entry_price": entry, "peak_price": peak,
+            "scalp": scalp, "protect_after": protect_after, "trail": trail}
 
 
 # -- 4. hold plan (shown on buy alerts) ------------------------------------------------------------
