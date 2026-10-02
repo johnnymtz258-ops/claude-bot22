@@ -41,6 +41,7 @@ class FakeStream:
 class DemoApp:
     def __init__(self):
         self.cfg = Config(my_wallets=[ME], rpc_http=["x"], max_whales=60, dashboard_port=8787)
+        self.cfg.set("CONFIRM_SECONDS", "0")
         self.started = time.time() - 3 * 3600
         self.db = Database(":memory:")
         self.rpc = FakeRPC()

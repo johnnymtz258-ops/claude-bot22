@@ -51,15 +51,25 @@ def test_two_lottery_wins_dont_make_a_whale_hot(bot):
     assert s["status"] == "OK"
 
 
-def test_micro_cap_alert_is_a_scalp_with_a_plan(bot):
+def test_micro_caps_are_not_sent_by_default(bot):
     bot.whales.add(WHALE, "Flipper")
-    make_hot(bot)
     bot.market.set_pair(mint=MINT, price=0.00002, mc=20_000, liq=8_000)
     bot.feed(WHALE, pump_buy(tokens=11_250_000))             # $225 at $20K market cap
+    assert bot.notes.sent == []
+    assert bot.db.scalar("select status from alerts where kind='BUY'") == "micro"
+    assert bot.db.scalar("select count(*) from copies") == 1      # still scored
+
+
+def test_micro_cap_alert_when_turned_on_is_a_scalp_with_a_plan(bot):
+    bot.whales.add(WHALE, "Flipper")
+    bot.cfg.set("MICRO_ALERTS", "on")
+    make_hot(bot)
+    bot.market.set_pair(mint=MINT, price=0.00002, mc=20_000, liq=8_000)
+    bot.feed(WHALE, pump_buy(tokens=11_250_000))
     msg = bot.notes.sent[0]
     assert msg["kind"] == "BUY" and msg["text"].startswith("<b>⚡ SCALP · ")
     assert "grade B" in msg["text"] and "Micro-cap" in msg["text"]
-    assert "sell half at 2x (~$40K MC)" in msg["text"] and "Hold plan" not in msg["text"]
+    assert "sell half at 2x (~$40K MC)" in msg["text"]
     assert ("🎯 Ping me at 2x", None, f"x2:{MINT}") in msg["buttons"][-1]
     assert bot.db.scalar("select scalp from alerts where kind='BUY'") == 1
 
@@ -74,16 +84,7 @@ def test_whale_whose_coins_die_is_a_scalp(bot):
     bot.feed(WHALE, pump_buy())
     text = bot.notes.sent[0]["text"]
     assert "⚡ SCALP" in text and "grade B" in text and "5 of 6 were down 50%+" in text
-
-
-def test_scalp_alerts_can_be_turned_off(bot):
-    bot.whales.add(WHALE, "Flipper")
-    bot.cfg.set("SCALP_ALERTS", "off")
-    bot.market.set_pair(mint=MINT, price=0.00002, mc=20_000, liq=8_000)
-    bot.feed(WHALE, pump_buy(tokens=11_250_000))
-    assert bot.notes.sent == []
-    assert bot.db.scalar("select status from alerts where kind='BUY'") == "scalp"
-    assert bot.db.scalar("select count(*) from copies") == 1      # still scored
+    assert "don't hold overnight" in text
 
 
 def test_big_coins_from_healthy_whales_are_not_scalps(bot):

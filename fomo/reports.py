@@ -49,7 +49,10 @@ FUNNEL_LABELS = {
     "muted": "from muted whales", "paused": "while alerts were paused", "late": "seen too late",
     "unsafe": "unsafe coin (freeze authority)", "too_small": "below MIN_WHALE_BUY_USD",
     "too_big": "above MAX_ENTRY_MC_USD", "earlier": "before this update",
-    "scalp": "hidden: scalp setup (SCALP_ALERTS off)",
+    "scalp": "hidden: scalp setup (older version)",
+    "chased": "not sent: already ran past the whale's price",
+    "dumping": "not sent: already dumping below the whale's price",
+    "micro": "not sent: micro-cap (MICRO_ALERTS off)",
 }
 
 

@@ -93,7 +93,7 @@ def test_dips_never_send_sell_messages(bot):
     for i, (price, liq) in enumerate(((0.0007, 83_000), (0.0004, 63_000), (0.0003, 55_000), (0.0009, 95_000))):
         bot.market.set_pair(mint=MINT, price=price, mc=price * 1e9, liq=liq)
         bot.run(bot.tracker.tick(now + 30 * i))
-    assert bot.notes.sent == []
+    assert bot.notes.kinds() == ["STOP"]                 # only the one -40% stop warning, never per-dip alarms
 
 
 def test_missing_liquidity_is_not_a_rug(bot):

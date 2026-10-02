@@ -108,13 +108,29 @@ def test_profit_protector_after_2x_confirmed(bot):
     assert bot.notes.kinds() == ["PROTECT"]             # once per holding period
 
 
-def test_protector_never_fires_on_an_early_dip(bot):
+def test_early_dip_alone_never_fires_but_a_big_loss_warns_once(bot):
     bot.cfg.set("PROFIT_LADDER", "off")
     hold(bot)
     t = int(time.time())
-    for i, price in enumerate([0.0015, 0.0006, 0.0005, 0.0004]):   # up 1.5x then -73%: never reached 2x
+    for i, price in enumerate([0.0012, 0.0009, 0.0007, 0.00065]):  # never 1.5x, down to -35%: normal dip
         tick_at(bot, price, t + i * 70)
     assert bot.notes.kinds() == []
+    tick_at(bot, 0.00055, t + 400)                                 # -45%: first sighting
+    tick_at(bot, 0.00055, t + 430)
+    assert bot.notes.kinds() == ["STOP"] and "plan was to cut it at -40%" in bot.notes.sent[0]["text"]
+    tick_at(bot, 0.0004, t + 500)
+    assert bot.notes.kinds() == ["STOP"]                           # once per holding period
+
+
+def test_protector_arms_at_one_and_a_half_x(bot):
+    bot.cfg.set("PROFIT_LADDER", "off")
+    hold(bot)
+    t = int(time.time())
+    for i, price in enumerate([0.0012, 0.0016, 0.0016]):
+        tick_at(bot, price, t + i * 70)
+    tick_at(bot, 0.001, t + 300)                                   # -37% from a 1.6x top
+    tick_at(bot, 0.001, t + 330)
+    assert bot.notes.kinds() == ["PROTECT"]
 
 
 # -- autopilot ---------------------------------------------------------------------------------------
@@ -214,14 +230,15 @@ def test_hold_plan_falls_back_to_all_whales_then_to_a_note(bot):
     assert exits.hold_plan(bot.db, WHALE2)["scope"] == "your whales overall"
 
 
-def test_buy_alert_includes_hold_plan_and_funnel_counts_outcomes(bot):
+def test_buy_alert_includes_exit_plan_and_funnel_counts_outcomes(bot):
     from fomo.reports import alert_funnel
     from tests.helpers import pump_buy
     seed_copies(bot, WHALE, 6)
     bot.whales.add(WHALE, "Rocket")
     bot.market.set_pair(mint=MINT, price=0.000075, mc=75_000)
     bot.feed(WHALE, pump_buy())
-    assert "⏱ Hold plan (this whale, 6 picks)" in bot.notes.sent[0]["text"]
+    text = bot.notes.sent[0]["text"]
+    assert "📋 Plan: sell half at 2x (~$150K MC)" in text and "Winners peaked ~1h20m after the buy" in text
     bot.feed(WHALE, pump_buy(mint="MoiNmemeTokenMint22222222222222222222222pump"[:44], sol=0.2, tokens=100_000))
     f = alert_funnel(bot.db)
     assert f["counts"] == {"sent": 1, "too_small": 1}

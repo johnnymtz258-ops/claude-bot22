@@ -1,7 +1,7 @@
 """Background loops: price tracking for copies and positions, rug watch, backup polling.
 
 The only price-based message it can send is a rug alarm (liquidity pulled, seen on two
-readings at least 20s apart). Dips never trigger a sell message.
+readings at least 20s apart). The only dip message is one STOP_LOSS_PCT warning per coin you hold.
 """
 from __future__ import annotations
 
@@ -259,6 +259,16 @@ class Tracker:
                     typical_peak=self._typical_peak(holders),
                     best_rule=best["label"] if best and best["n"] >= 5 else "", scalp=c["scalp"]),
                     mint=mint, kind="LADDER")
+        stop = self.cfg.get("STOP_LOSS_PCT")
+        if stop > 0 and 0 < c["multiple"] <= 1 - stop / 100 and not self._noted(mint, "stop", 0, since):
+            first = self._protect_pending.setdefault(mint + ":stop", now)
+            if now - first >= RUG_CONFIRM_SECONDS:  # seen on two readings, not a single wick
+                self._note(mint, "stop", 0, now)
+                self._protect_pending.pop(mint + ":stop", None)
+                await self.notify(messages.stop_note(symbol=pos["symbol"], mint=mint, coach=c, position=pos,
+                                                     stop_pct=stop), mint=mint, kind="STOP")
+        else:
+            self._protect_pending.pop(mint + ":stop", None)
         armed = c["protect_after"] > 0 and c["peak_multiple"] >= c["protect_after"]
         if armed and c["from_peak_pct"] >= c["trail"] and not self._noted(mint, "protect", 0, since):
             first = self._protect_pending.setdefault(mint, now)

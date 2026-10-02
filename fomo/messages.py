@@ -5,7 +5,7 @@
   🚨 LIQUIDITY PULLED                confirmed twice; the only price-based alarm
   📊 DAILY SUMMARY
 
-There are deliberately no "price dropped, sell" messages: the exit signal is the whale.
+The only "price dropped" message is one stop-loss warning per coin you hold (STOP_LOSS_PCT).
 """
 from __future__ import annotations
 
@@ -89,19 +89,17 @@ def buy_alert(*, symbol: str, mint: str, whale_name: str, whale_addr: str, stats
     return "\n".join(lines)
 
 
-def scalp_plan_line(now_mc: float, plan: dict | None, trail_pct: float) -> str:
-    """Take-profit plan for coins that usually pump and die (shown instead of the hold plan)."""
-    line = "⚡ Scalp plan: sell half at 2x"
-    if now_mc > 0:
-        line += f" (~{mc(now_mc * 2)} MC), the rest by 3x (~{mc(now_mc * 3)})"
-    else:
-        line += ", the rest by 3x"
-    line += f" or once it falls {trail_pct:.0f}% from the top."
+def exit_plan_line(now_mc: float, cfg, scalp: bool, plan: dict | None = None) -> str:
+    """The exit plan that backtested best on your alerts: half at 2x, trail the rest, cut a big loss."""
+    trail, stop = cfg.get("PROTECT_TRAIL_PCT"), cfg.get("STOP_LOSS_PCT")
+    line = "📋 Plan: sell half at 2x" + (f" (~{mc(now_mc * 2)} MC)" if now_mc > 0 else "")
+    line += f". Sell the rest if it falls {trail:.0f}% from its top"
+    line += f" or {stop:.0f}% below your entry." if stop > 0 else "."
+    if scalp:
+        line += " ⚡ This whale's coins usually die within hours — don't hold overnight."
     if plan and plan.get("time_to_peak_s"):
-        line += f" Pumps like this peaked ~{dur(plan['time_to_peak_s'])} after the buy."
-        if plan.get("at_15m_pct") is not None and plan["at_15m_pct"] < 0:
-            line += f" By 15m they were typically {plan['at_15m_pct']:+.0f}%."
-    return line + " Don't hold and hope."
+        line += f" Winners peaked ~{dur(plan['time_to_peak_s'])} after the buy."
+    return line
 
 
 def sell_alert(*, symbol: str, mint: str, whale_name: str, whale_addr: str, fraction: float, usd_value: float,
@@ -170,6 +168,14 @@ def protect_note(*, symbol: str, mint: str, coach: dict, position: dict) -> str:
                else "No tracked whale is in anymore. ")
             + "If you usually sell too late, this is the moment to lock some in.\n"
             f"<code>{mint}</code>")
+
+
+def stop_note(*, symbol: str, mint: str, coach: dict, position: dict, stop_pct: float) -> str:
+    return (f"<b>✂️ ${esc(symbol)} is down {100 - coach['multiple'] * 100:.0f}% on your cost</b>\n"
+            f"{usd(position['cost'])} in → {usd(position['value'])} now. Your plan was to cut it at -{stop_pct:.0f}%. "
+            + (f"{coach['whales_in']} whale{'s' if coach['whales_in'] != 1 else ''} still in. " if coach.get("whales_in")
+               else "No tracked whale is in anymore. ")
+            + f"\n<code>{mint}</code>")
 
 
 def position_line(p: dict, holders: list[dict]) -> str:

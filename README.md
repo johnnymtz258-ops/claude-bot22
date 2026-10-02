@@ -38,17 +38,28 @@ run; the exit signal is the whale leaving, not a red candle.
   anyone trades it) isn't sent at all by default (`HIDE_WHALE_ONLY`) but is still tracked and scored.
 - **Conviction** — a buy 3× bigger than that whale's usual size.
 
-- **⚡ SCALP** — two kinds of setup usually pump and then fall back to launch, so they are never
-  graded A (A means "fine to hold"):
-  - micro-caps: the whale bought below `MICRO_MC_USD` ($60K), or the coin is still on the pump.fun curve;
-  - whales whose coins don't last: 60%+ of their last 5+ alerted coins were down 50% or more six
-    hours later (the bot now records every alerted coin's price 1h, 6h and 24h later).
+- **⚡ SCALP** — whales whose coins don't last (60%+ of their last 5+ alerted coins were down 50% or
+  more six hours later) are never graded A, and their alerts say not to hold overnight.
 
-  SCALP alerts say so in the title, replace the hold plan with a take-profit plan ("sell half at 2x
-  (~$40K MC), the rest by 3x or once it falls 25% from the top"), and have a 🎯 Ping me at 2x button.
-  If you hold one, the profit protector arms at 1.5x and warns at -25% from the peak
-  (`SCALP_PROTECT_AFTER_X`, `SCALP_TRAIL_PCT`). `/set SCALP_ALERTS off` stops sending them
-  (still tracked and scored).
+### What is never sent (tracked and scored, shown in /status)
+
+Backtested on real alerts at the price you could actually get a minute later (1% fee each way,
+exit plan below), the alerts that passed these checks averaged 1.15x (48% won); the ones they block
+averaged 0.77x (12% won):
+
+- **Confirm price** (`CONFIRM_SECONDS` 45): the bot waits until 45s after the whale's buy and re-checks
+  the price. Copy-trade bots spike these coins in the first seconds.
+  - already more than `LATE_CHASE_PCT` (50%) above the whale's price → not sent (you'd be their exit);
+  - already more than `DUMP_GATE_PCT` (20%) below it → not sent (usually a rug or a bot dump).
+- **Micro-caps** (`MICRO_MC_USD` $30K, or still on the pump.fun curve) → not sent unless
+  `/set MICRO_ALERTS on`. These were the rug pulls.
+
+### The exit plan on every alert
+
+"📋 Plan: sell half at 2x (~$X MC). Sell the rest if it falls 35% from its top or 40% below your entry."
+The bot backs it up on coins you hold: a 🛡 warning once the coin has been 1.5x and falls 35% from its
+top (`PROTECT_AFTER_X`, `PROTECT_TRAIL_PCT`), and one ✂️ warning at -40% on your cost (`STOP_LOSS_PCT`).
+Every alert has a 🎯 Ping me at 2x button.
 
 A = strong and fine to hold, B = normal or scalp, C = weak (sent silently). `/stats` shows where
 each grade's coins were 6h after the alert, so you can check the grades are honest.
@@ -114,9 +125,9 @@ made entries worse in practice, so it's off.
   early) and how far below your best price you sold (too late), with a plain recommendation.
 - **Ladder nudges** (`PROFIT_LADDER`): one message at 2x, 3x, 5x, 10x on your cost — "take about a
   third, let the rest ride while the whales hold."
-- **Profit protector** (`PROTECT_AFTER_X` 2, `PROTECT_TRAIL_PCT` 35): once a coin has been 2x+,
-  one warning if it gives back 35% from its peak (confirmed twice). It never fires before 2x, so
-  early dips still don't trigger anything.
+- **Profit protector** (`PROTECT_AFTER_X` 1.5, `PROTECT_TRAIL_PCT` 35): once a coin has been 1.5x+,
+  one warning if it gives back 35% from its peak (confirmed twice).
+- **Stop warning** (`STOP_LOSS_PCT` 40): one warning if a coin you hold is 40% below your cost.
 - The dashboard's **exit coach** column shows each position's peak and what the ladder/protector says,
   and each coin's chart marks every whale and your own buy/sell on the price line.
 

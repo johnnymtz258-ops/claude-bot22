@@ -114,6 +114,8 @@ class Engine:
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=5000)
         self._inflight: set[tuple[str, str]] = set()
         self._buying: set[tuple[str, str]] = set()  # whale+coin buys being handled right now
+        self._confirming: set[tuple[str, str]] = set()  # whale+coin buys waiting for the confirm price
+        self._tasks: set = set()
         self.started_ts = int(time.time())
         self.last_event_ts = 0
         self.events = 0
@@ -224,7 +226,7 @@ class Engine:
         return out
 
     async def on_whale_buy(self, c: dict) -> None:
-        wallet, swap, mint = c["wallet"], c["swap"], c["swap"]["mint"]
+        wallet, mint = c["wallet"], c["swap"]["mint"]
         too_small = c["usd_value"] < self.cfg.get("MIN_WHALE_BUY_USD")
         if too_small or c["trade_mc"] > self.cfg.get("MAX_ENTRY_MC_USD"):
             # dust/test buy, or the coin is past the "early" range — noted so /status can explain quiet days
@@ -232,12 +234,37 @@ class Engine:
                            (int(time.time()), "SEEN", mint, wallet, c["swap_id"], c["trade_mc"],
                             "too_small" if too_small else "too_big"))
             return
+        key = (wallet, mint)
         repeat_since = int(time.time()) - int(self.cfg.get("REPEAT_ALERT_HOURS") * 3600)
-        if self.db.scalar("select 1 from alerts where wallet=? and mint=? and kind='BUY' and ts>=?",
-                          (wallet, mint, repeat_since)):
+        if key in self._confirming or self.db.scalar(
+                "select 1 from alerts where wallet=? and mint=? and kind='BUY' and ts>=?", (wallet, mint, repeat_since)):
             await self._maybe_add_alert(c)  # the whale is adding to a buy we already handled
             return
+        # Wait until CONFIRM_SECONDS after the whale's buy, then judge the coin at the price YOU could get.
+        # Copy-trade bots spike these coins in the first seconds; the alerts that lost most were the ones
+        # already far above the whale's price (or already dumping) a minute later.
+        wait = c["ts"] + self.cfg.get("CONFIRM_SECONDS") - time.time()
+        if wait > 0:
+            self._confirming.add(key)
+            task = asyncio.create_task(self._confirm_later(c, wait))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+            return
+        await self._judge_buy(c)
 
+    async def _confirm_later(self, c: dict, wait: float) -> None:
+        key = (c["wallet"], c["swap"]["mint"])
+        try:
+            await asyncio.sleep(wait)
+            c["info"] = await self.market.token(c["swap"]["mint"], max_age=0) or c["info"]
+            await self._judge_buy(c)
+        except Exception as exc:  # never lose the worker over one coin
+            self.last_error = f"{time.strftime('%H:%M:%S')} {type(exc).__name__}: {exc}"
+        finally:
+            self._confirming.discard(key)
+
+    async def _judge_buy(self, c: dict) -> None:
+        wallet, swap, mint = c["wallet"], c["swap"], c["swap"]["mint"]
         whale = self.whales.get(wallet) or {}
         stats = self.whales.stats(wallet)
         info = c["info"]
@@ -275,9 +302,16 @@ class Engine:
             status("unsafe" if grade == "SKIP" else "late")
             return  # unsafe coin, or seen too late for anyone to have acted on it
         # Every alert-worthy first buy is copied (muted whales too) so muted whales keep being scored.
+        # The copy buys at the confirmed price — what you could actually get, not the whale's fill.
         entry_price = now_price or c["price"]
         copies.open_copy(self.db, whale=wallet, mint=mint, swap_id=c["swap_id"], alert_id=alert_id,
                          price=entry_price, mc_usd=num(info.get("mc_usd")) or c["trade_mc"], whale_price=c["price"])
+        if chase is not None and chase > self.cfg.get("LATE_CHASE_PCT"):
+            status("chased")
+            return  # already ran past the whale's price: the buyers who got in first are about to sell to you
+        if chase is not None and chase < -self.cfg.get("DUMP_GATE_PCT"):
+            status("dumping")
+            return  # already falling below the whale's own price within a minute: usually a rug or a bot dump
         if not self.whales.is_alerting(whale):
             status("muted")
             return
@@ -287,24 +321,22 @@ class Engine:
         if community["label"] == "WHALE-ONLY" and self.cfg.flag("HIDE_WHALE_ONLY"):
             status("whale_only")
             return  # a few wallets hold it and hardly anyone trades it: tracked and scored, not sent
-        if scalp and not self.cfg.flag("SCALP_ALERTS"):
-            status("scalp")
-            return
-        plan = exits.hold_plan(self.db, wallet)
+        if micro is not None and not self.cfg.flag("MICRO_ALERTS"):
+            status("micro")
+            return  # micro-caps / bonding-curve coins: the alerts that rugged most — tracked and scored, not sent
         text = messages.buy_alert(
             symbol=info.get("symbol") or self.market.symbol(mint), mint=mint, whale_name=whale.get("name") or wallet[:6],
             whale_addr=wallet, stats=stats, grade=grade, reasons=reasons, usd_value=c["usd_value"],
             base_amount=swap["base_amount"], base=swap["base"], entry_mc=c["trade_mc"],
             now_mc=num(info.get("mc_usd")), chase=chase, confluence=confluence, latency_s=latency, info=info,
             late_detect=c["source"] != "stream",
-            hold_line=(messages.scalp_plan_line(num(info.get("mc_usd")) or c["trade_mc"], plan, self.cfg.get("SCALP_TRAIL_PCT"))
-                       if scalp else exits.hold_plan_line(plan)),
+            hold_line=messages.exit_plan_line(num(info.get("mc_usd")) or c["trade_mc"], self.cfg, scalp,
+                                              exits.hold_plan(self.db, wallet)),
             form=self.whales.recent_form(wallet), scalp=scalp)
         buttons = [[(label, url, None) for label, url in messages.token_links(mint, info.get("pair_address", ""))],
                    [(f"🔕 Mute {whale.get('name', '')[:12]}", None, f"mute:{wallet}"),
-                    ("🐋 Whales in coin", None, f"coin:{mint}")]]
-        if scalp:
-            buttons.append([("🎯 Ping me at 2x", None, f"x2:{mint}")])
+                    ("🐋 Whales in coin", None, f"coin:{mint}")],
+                   [("🎯 Ping me at 2x", None, f"x2:{mint}")]]
         silent = grade == "C" and self.cfg.flag("QUIET_LOW_GRADE")
         msg_id = await self.notify(text, buttons=buttons, silent=silent, mint=mint, wallet=wallet, kind="BUY")
         self.db.run("update alerts set tg_message_id=?, status=? where id=?",
