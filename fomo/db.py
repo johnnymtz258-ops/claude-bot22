@@ -146,6 +146,8 @@ class Database:
                            ("followed_up", "integer default 0"), ("low_price", "real default 0")):
             if name not in columns:
                 self.conn.execute(f"alter table alerts add column {name} {kind}")
+                if name == "followed_up":   # alerts from before report cards existed never get one
+                    self.conn.execute("update alerts set followed_up=1")
 
     # -- tiny query helpers -------------------------------------------------------------
     def run(self, sql: str, params=()) -> int:

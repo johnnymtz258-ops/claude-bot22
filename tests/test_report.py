@@ -127,3 +127,10 @@ def test_quiet_update_says_what_was_seen_and_skipped(bot):
     assert msg["kind"] == "QUIET" and msg["silent"]
     assert "skipped $CASHED from Rocket: already ran (+80% already)" in msg["text"]
     assert bot.run(bot.tracker.quiet_update(t + 17 * 60)) is False
+
+
+def test_old_alerts_never_get_a_report_card(bot):
+    t = int(time.time())
+    bot.db.run("""insert into alerts(ts,kind,mint,wallet,grade,price_usd,p1h,peak_price,status,tg_message_id)
+        values(?,?,?,?,?,?,?,?,?,?)""", (t - 3 * 86400, "BUY", MINT, "w", "A", 1.0, 2.0, 3.0, "sent", 55))
+    assert bot.run(bot.tracker._alert_reports()) == 0 and bot.notes.sent == []

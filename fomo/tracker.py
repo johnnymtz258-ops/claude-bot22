@@ -211,7 +211,7 @@ class Tracker:
             return 0
         rows = self.db.rows("""select a.*, t.symbol from alerts a left join tokens t on t.mint=a.mint
             where a.kind='BUY' and a.status in ('sent','silent') and a.tg_message_id>0 and a.followed_up=0
-            and a.p1h is not null and a.price_usd>0""")
+            and a.p1h is not null and a.price_usd>0 and a.ts>=?""", (int(time.time()) - 3 * 3600,))
         for a in rows:
             self.db.run("update alerts set followed_up=1 where id=?", (a["id"],))
             entry = num(a["price_usd"])
