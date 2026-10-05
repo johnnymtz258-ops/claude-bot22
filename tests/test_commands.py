@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 
 import pytest
 
@@ -126,3 +127,20 @@ def test_amount_parsing():
     assert _amount_and_mc(["20", "at", "850k"]) == (20, 850_000)
     assert _amount_and_mc(["$1,200", "@1.2m"]) == (1200, 1_200_000)
     assert _amount_and_mc(["30%"]) == (0, 0)
+
+
+def test_export_command_sends_the_file(chat, tmp_path):
+    path = tmp_path / "whales.db"
+    disk = sqlite3.connect(str(path))
+    chat.db.conn.backup(disk)
+    disk.close()
+    chat.cfg.db_path = path
+    sent = []
+
+    async def send_document(p, caption="", chat_id=None):
+        sent.append((p.name, p.stat().st_size, caption))
+        return True
+
+    chat.telegram.send_document = send_document
+    assert "Packing" in chat.say("/export")
+    assert sent and sent[0][0] == "FomoBot_review.zip" and "no keys" in sent[0][2]

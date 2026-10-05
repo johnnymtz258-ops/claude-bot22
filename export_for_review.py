@@ -1,48 +1,38 @@
-"""Make a small copy of the bot's database for review (alerts, copies, recent trades and prices).
+"""Make FomoBot_review.zip (a small copy of the bot's data for review) and show it in Finder.
 
-Writes FomoBot_review.zip to your Desktop. It holds only public wallet addresses and market
-data — no Telegram token, Helius key or anything from .env. Safe to run while the bot is running.
+Saved in this bot folder AND on your Desktop. Nothing from .env goes in it.
+You can also type /export in Telegram and the bot sends you the same file.
 """
-import sqlite3
+import shutil
+import subprocess
 import sys
-import time
-import zipfile
 from pathlib import Path
 
 from fomo import config
+from fomo.export import build_review_zip
 
-DAYS = 10
-FULL = ("alerts", "copies", "whales", "tokens", "my_trades", "watches", "position_notes", "whale_candidates")
+ROOT = Path(__file__).resolve().parent
 
 
 def main() -> int:
-    src = config.load().db_path
-    if not src.exists():
-        print(f"No database found at {src}")
+    try:
+        zipped = build_review_zip(config.load().db_path, ROOT / "FomoBot_review.zip")
+    except Exception as exc:
+        print(f"\n❌ Export failed: {type(exc).__name__}: {exc}\nSend a screenshot of this window.")
         return 1
-    out_dir = Path.home() / "Desktop"
-    out_dir = out_dir if out_dir.is_dir() else Path.cwd()
-    slim = out_dir / "fomo_review.db"
-    slim.unlink(missing_ok=True)
-    since = int(time.time()) - DAYS * 86400
-    con = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
-    con.execute("attach database ? as out", (str(slim),))
-    tables = {r[0] for r in con.execute("select name from sqlite_master where type='table'")}
-    for t in FULL:
-        if t in tables:
-            con.execute(f"create table out.{t} as select * from main.{t}")
-    con.execute("create table out.swaps as select * from main.swaps where ts>=?", (since,))
-    con.execute("""create table out.price_marks as select * from main.price_marks where ts>=? and
-        (mint in (select mint from main.alerts where ts>=?) or mint in (select mint from main.my_trades))""",
-                (since, since - 86400))
-    con.commit()
-    con.execute("detach database out")
-    con.close()
-    zipped = out_dir / "FomoBot_review.zip"
-    with zipfile.ZipFile(zipped, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
-        z.write(slim, "fomo_review.db")
-    slim.unlink()
-    print(f"Done: {zipped} ({zipped.stat().st_size / 1e6:.1f} MB). Send that file.")
+    places = [zipped]
+    desktop = Path.home() / "Desktop"
+    try:
+        shutil.copy2(zipped, desktop / zipped.name)
+        places.append(desktop / zipped.name)
+    except OSError:
+        pass  # no Desktop access for Terminal: the copy in the bot folder is enough
+    print(f"\n✅ Done ({zipped.stat().st_size / 1e6:.1f} MB). Send this file:")
+    for p in places:
+        print(f"   {p}")
+    if sys.platform == "darwin":
+        subprocess.run(["open", "-R", str(zipped)], check=False)  # opens Finder with the file selected
+        print("A Finder window just opened with the file selected.")
     return 0
 
 

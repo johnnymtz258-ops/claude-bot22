@@ -1,6 +1,6 @@
 #!/bin/bash
 cd "$(dirname "$0")"
-echo "Making a small review copy of your FomoBot database..."
+echo "Making a small review copy of your FomoBot data..."
 PY="./.venv/bin/python3"
 [ -x "$PY" ] || PY="python3"
 "$PY" export_for_review.py

@@ -12,3 +12,4 @@ keypair*.json
 *id.json
 exports/
 .pytest_cache/
+FomoBot_review.zip

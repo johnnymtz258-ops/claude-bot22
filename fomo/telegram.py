@@ -58,6 +58,33 @@ class Telegram:
         self._send_lock = asyncio.Lock()
         self._last_send = 0.0
 
+    async def send_document(self, path, caption: str = "", chat_id: str | None = None) -> bool:
+        """Upload a file into the chat (e.g. the /export review zip). Telegram allows up to 50 MB."""
+        if not self.ok:
+            return False
+        from pathlib import Path
+        path = Path(path)
+        for attempt in range(3):
+            form = aiohttp.FormData()
+            form.add_field("chat_id", str(chat_id or self.chat_id))
+            if caption:
+                form.add_field("caption", caption)
+                form.add_field("parse_mode", "HTML")
+            form.add_field("document", path.read_bytes(), filename=path.name, content_type="application/zip")
+            try:
+                async with self.session.post(f"{self.base}/sendDocument", data=form,
+                                             timeout=aiohttp.ClientTimeout(total=120)) as resp:
+                    data = await resp.json(content_type=None)
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+                self.last_error = f"sendDocument: {type(exc).__name__}"
+                await asyncio.sleep(1 + attempt)
+                continue
+            if data.get("ok"):
+                return True
+            self.last_error = f"sendDocument: {data.get('description', 'error')}"
+            return False
+        return False
+
     async def api(self, method: str, http_timeout: float = 20, **params):
         if not self.ok:
             return None

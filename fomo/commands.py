@@ -34,9 +34,10 @@ HELP = f"""<b>🐋 FomoBot Whale Copy {VERSION}</b>
 <b>Bot</b>
 /stats — what copying has actually returned · /status — health
 /settings · /set NAME VALUE · /pause · /resume
+/export — sends you a review file (your data, no keys) to share for tuning
 
-The bot never tells you to sell on an early dip. Exit signals: the whale selling,
-the 2x/3x/5x ladder, and the 🛡 protector once a coin has doubled."""
+Every alert carries the exit plan: half at 2x, the rest if it falls 35% from its top or 40% below
+your entry. On coins you hold the bot backs it up: 2x/3x/5x ladder, 🛡 protector after 1.5x, ✂️ at -40%."""
 
 
 class Commands:
@@ -501,6 +502,21 @@ class Commands:
             raise ValueError("usage: /set NAME VALUE — /settings lists names")
         value = self.app.set_setting(args[0], args[1])
         await self.say(f"✅ {esc(args[0].upper())} = {value:,.10g}")
+
+    async def cmd_export(self, args, reply_mint):
+        """Send the review file (alerts, copies, whales, your trades, recent prices) into this chat."""
+        from .export import build_review_zip
+        out = self.app.cfg.db_path.parent / "FomoBot_review.zip"
+        await self.say("📦 Packing your review file…")
+        try:
+            zipped = await asyncio.to_thread(build_review_zip, self.app.cfg.db_path, out)
+        except Exception as exc:
+            raise ValueError(f"export failed: {type(exc).__name__}: {exc}")
+        ok = await self.app.telegram.send_document(
+            zipped, caption=f"FomoBot_review.zip · {zipped.stat().st_size / 1e6:.1f} MB · no keys or tokens inside")
+        if not ok:
+            await self.say(f"⚠️ Couldn't upload it to Telegram ({esc(self.app.telegram.last_error)}). "
+                           f"It's saved on your Mac at <code>{esc(zipped)}</code>")
 
     async def cmd_pause(self, args, reply_mint):
         self.app.set_setting("ALERTS_ENABLED", "0")
