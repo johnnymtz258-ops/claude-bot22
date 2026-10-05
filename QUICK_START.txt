@@ -3,46 +3,26 @@ FOMOBOT WHALE COPY — QUICK START
 
 INSTALL / UPDATE
 1. Stop the old bot (Control + C in its window).
-2. Put this folder next to the old one. Copy your .env into it (Finder: Command+Shift+. shows
-   hidden files) — or skip this and the launcher copies your Telegram settings itself.
-3. Add these lines to .env if they aren't there:
-     HELIUS_API_KEY=...        free at helius.dev (much faster alerts)
-     MY_WALLETS=...            your PUBLIC wallet address (exact profit/loss)
-4. Double-click start_mac.command.
-5. Open http://localhost:8787 — or send /help to your bot.
+2. Unzip and double-click start_mac.command in the new folder. Your .env is already inside;
+   whales and history are kept (they live in ~/Library/Application Support/FomoBot).
+3. Keep the Mac awake: lid open + charger in. If it sleeps you'll get a 💤 message saying what you missed.
 
-Your tracked whales from the old bot come across automatically.
+WHAT HAPPENS BY ITSELF
+  📌 A live card is pinned in Telegram and refreshes every minute: is it running, what got blocked and
+     why, your positions with the plan, and the paper balance. Tap its buttons instead of typing.
+  🔍 Every whale is profiled: 🟢 holder · 🔵 swing · 🟠 flipper · 🤖 bot. Flippers (sell within minutes)
+     and losing whales are tracked but never alerted — you'd be buying their exit.
+  🔎 Every 4h the scanner looks for new holders in today's runners and follows the ones whose trades
+     made money for a copier buying a minute late (you get a message, with Unfollow).
+  🤖 The paper autopilot trades $50 of a pretend $1,000 on every alert with the plan below.
 
-WHAT YOU'LL GET
-  🟢 WHALE BUY (grade A/B/C)   a whale you follow bought — entry market cap, their real record
-  🐋🐋 2ND WHALE IN            another of your whales bought the same coin
-  🔴 WHALE EXITED / 🟠 SOLD x%  a whale is selling a coin YOU hold
-  📈 COMMUNITY RUNNER          no whale, but a big spread-out crowd buying (measured separately)
-  🚨 LIQUIDITY PULLED          only for real rugs (confirmed twice)
-  No more "sell, it dropped" alarms. The exit signal is the whale leaving.
+EVERY ALERT HAS THE SAME PLAN
+  Sell half at 2x. Sell the rest if it falls 35% from its top, or 40% below your entry.
+  Use the 🎯 Ping me at 2x button. The bot also nudges you at 2x / after a 35% drop / at -40%.
 
-DAILY USE
-  Reply to an alert:   /bought 20            or   /bought 20 at 850k
-                       /sold 5  /sold 30%  /sold all
-  (Not needed if MY_WALLETS is set — your trades are read from the chain automatically.)
-  /positions   your coins, profit/loss, and which whales are still in
-  /whales      which whales are actually worth copying (measured, not guessed)
-  /hot         coins with 2+ of your whales
+USEFUL COMMANDS (optional)
+  /positions   /whales   /paper   /stats   /analyze WALLET   /find COIN   /export
+  /set NAME VALUE changes a setting (/settings lists them), e.g. /set PAPER_TRADE_USD 25
 
-FIND NEW WHALES
-  /find COIN              early buyers of a coin that already ran (e.g. CASHED)
-  /find COIN1 COIN2       wallets early in BOTH are listed first
-  /analyze WALLET         is this wallet copyable? then tap ➕ Follow
-  /suggest                finds whales in today's biggest runners (more whales = more alerts)
-  /scout now              whale picks: profitable wallets from today's runners, sent to you with Follow buttons
-
-SELLING BETTER
-  /exits                  which exit style works best on your whales + your too-early/too-late habits
-  You'll get one nudge at 2x/3x/5x/10x, and a 🛡 warning if a 2x+ coin gives back 35% from its peak.
-  /watch COIN 2x          ping me when it hits a market-cap target (/watches, /unwatch N)
-
-BROWSER EXTENSION (optional)
-  Chrome → chrome://extensions → Developer mode ON → Load unpacked → pick browser_extension.
-  DexScreener / GMGN / Axiom / Photon / pump.fun pages then show which of your whales are in.
-
-The old bot is untouched in the legacy folder.
+TO SEND ME DATA FOR TUNING
+  Type /export in Telegram — the bot sends you FomoBot_review.zip (no keys or tokens inside).

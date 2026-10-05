@@ -199,15 +199,17 @@ class Discovery:
         if not swaps:
             return {"wallet": wallet, "ok": False, "error": "no swaps in the recent history"}
         infos = await self.market.tokens({s["mint"] for s in swaps}, max_age=300)
-        trips, open_bags = [], []
+        trips, open_bags, trip_list = [], [], []
         books: dict[str, dict] = {}
         for s in swaps:
             b = books.setdefault(s["mint"], {"tokens": 0.0, "cost": 0.0, "first_ts": s["ts"], "proceeds": 0.0,
-                                             "spent": 0.0, "entry_price_sol": 0.0})
+                                             "spent": 0.0, "entry_price_sol": 0.0, "peak": 0.0,
+                                             "first_sell_ts": None, "half_ts": None})
             if s["side"] == "BUY":
                 if b["tokens"] <= 0:
-                    b.update(first_ts=s["ts"], proceeds=0.0, spent=0.0)
+                    b.update(first_ts=s["ts"], proceeds=0.0, spent=0.0, peak=0.0, first_sell_ts=None, half_ts=None)
                 b["tokens"] += s["token_amount"]
+                b["peak"] = max(b["peak"], b["tokens"])
                 b["cost"] += s["sol"]
                 b["spent"] += s["sol"]
             elif b["tokens"] > 0:
@@ -216,16 +218,25 @@ class Discovery:
                 b["proceeds"] += s["sol"] * (q / s["token_amount"])
                 b["tokens"] -= q
                 b["cost"] -= basis
+                b["first_sell_ts"] = b["first_sell_ts"] or s["ts"]
+                if b["half_ts"] is None and b["tokens"] <= 0.5 * b["peak"]:
+                    b["half_ts"] = s["ts"]
                 if b["tokens"] <= 1e-9 or s["holding_after"] <= 0:
                     trips.append({"mint": s["mint"], "roi": (b["proceeds"] / b["spent"] - 1) * 100 if b["spent"] else 0,
                                   "pnl_sol": b["proceeds"] - b["spent"], "hold_s": s["ts"] - b["first_ts"],
                                   "spent_sol": b["spent"]})
+                    trip_list.append({"mint": s["mint"], "buy_ts": b["first_ts"], "first_sell_ts": b["first_sell_ts"],
+                                      "half_out_ts": b["half_ts"] or s["ts"], "bought_usd": b["spent"] * sol_usd,
+                                      "sold_usd": b["proceeds"] * sol_usd, "closed": True})
                     b.update(tokens=0.0, cost=0.0)
         for mint, b in books.items():
             if b["tokens"] > 0 and b["cost"] > 0:
                 price = num((infos.get(mint) or {}).get("price_usd"))
                 open_bags.append({"mint": mint, "cost_sol": b["cost"],
                                   "value_sol": b["tokens"] * price / sol_usd if sol_usd and price else None})
+                trip_list.append({"mint": mint, "buy_ts": b["first_ts"], "first_sell_ts": b["first_sell_ts"],
+                                  "half_out_ts": b["half_ts"], "bought_usd": b["spent"] * sol_usd,
+                                  "sold_usd": b["proceeds"] * sol_usd, "closed": False})
         buys = [s for s in swaps if s["side"] == "BUY"]
         entry_mcs = []
         for s in buys:
@@ -244,7 +255,8 @@ class Discovery:
             "median_hold_s": statistics.median(holds) if holds else 0, "buys_per_day": len(buys) / span_days,
             "avg_buy_sol": statistics.mean(s["sol"] for s in buys) if buys else 0.0,
             "median_entry_mc": statistics.median(entry_mcs) if entry_mcs else 0.0,
-            "open_bags": len(open_bags), "span_days": span_days, "sol_usd": sol_usd,
+            "open_bags": len(open_bags), "span_days": span_days, "sol_usd": sol_usd, "trip_list": trip_list,
+            "last_trade_ts": swaps[-1]["ts"],
         }
         result["verdict"], result["why"] = verdict(result)
         return result

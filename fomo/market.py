@@ -16,6 +16,8 @@ from .util import is_address, num
 DEX = "https://api.dexscreener.com"
 RUGCHECK = "https://api.rugcheck.xyz/v1/tokens/{}/report/summary"
 COINBASE_SOL = "https://api.coinbase.com/v2/prices/SOL-USD/spot"
+GECKO = "https://api.geckoterminal.com/api/v2"
+GECKO_EVERY = 2.2   # GeckoTerminal's free API allows 30 calls a minute
 
 # Coins that are never "early whale buys": SOL itself, stables, liquid staking and majors.
 IGNORED_MINTS = {
@@ -92,6 +94,9 @@ class Market:
         self._rug_down_until = 0.0
         self.errors = 0
         self.last_error = ""
+        self._gecko_lock = asyncio.Lock()
+        self._gecko_last = 0.0
+        self.gecko_every = GECKO_EVERY
 
     async def _get(self, url: str, timeout: float = 8.0):
         try:
@@ -106,6 +111,41 @@ class Market:
             self.errors += 1
             self.last_error = f"{url.split('/')[2]} {type(exc).__name__}"
             return None
+
+    # -- price history (GeckoTerminal minute candles) -------------------------------------------
+    async def _gecko(self, path: str):
+        async with self._gecko_lock:
+            wait = self._gecko_last + self.gecko_every - time.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._gecko_last = time.time()
+            return await self._get(f"{GECKO}{path}", timeout=12)
+
+    async def token_pools(self, mint: str, limit: int = 3) -> list[str]:
+        """The coin's busiest pools (bonding curve and migrated pool are separate pools)."""
+        data = await self._gecko(f"/networks/solana/tokens/{mint}/pools?page=1")
+        out = []
+        for row in ((data or {}).get("data") or [])[:limit]:
+            address = str((row.get("attributes") or {}).get("address") or str(row.get("id", "")).split("_", 1)[-1])
+            if is_address(address):
+                out.append(address)
+        return out
+
+    async def price_path(self, mint: str, start_ts: int, end_ts: int) -> list[tuple[int, float]]:
+        """Minute closing prices (USD) of `mint` between two times, from whichever pool traded it then."""
+        best: list[tuple[int, float]] = []
+        for pool in await self.token_pools(mint):
+            data = await self._gecko(f"/networks/solana/pools/{pool}/ohlcv/minute?aggregate=1&limit=1000"
+                                     f"&before_timestamp={int(end_ts)}&token={mint}&currency=usd")
+            candles = ((((data or {}).get("data") or {}).get("attributes") or {}).get("ohlcv_list")) or []
+            path = sorted((int(num(c[0])), num(c[4])) for c in candles
+                          if isinstance(c, (list, tuple)) and len(c) >= 5 and start_ts <= num(c[0]) <= end_ts
+                          and num(c[4]) > 0)
+            if path and path[0][0] <= start_ts + 300:
+                return path
+            if len(path) > len(best):
+                best = path
+        return best
 
     # -- SOL price ------------------------------------------------------------------------
     async def sol_usd(self) -> float:

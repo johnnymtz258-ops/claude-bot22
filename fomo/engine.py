@@ -10,9 +10,11 @@ import asyncio
 import statistics
 import time
 
-from . import copies, exits, messages
+from . import copies, exits, messages, profiles
+from .coins import CoinTracker
 from .community import CommunityChecker
 from .market import IGNORED_MINTS
+from .paper import PaperTrader
 from .swaps import parse_swap
 from .util import esc, mc, num, pct, usd
 from .whales import AFTERMATH_MIN, aftermath, dumps
@@ -26,7 +28,7 @@ THIN_LIQUIDITY_USD = 5_000
 def grade_buy(*, status: str, stats: dict, confluence: int, chase: float | None, safety: dict,
               rug: dict | None, liquidity: float, usd_value: float, usual_usd: float,
               late_chase_pct: float, community: dict | None = None, after: dict | None = None,
-              micro: dict | None = None) -> tuple[str, list]:
+              micro: dict | None = None, profile: dict | None = None) -> tuple[str, list]:
     """Grade a whale buy. Returns ('A'|'B'|'C'|'SKIP', [(ok, reason), ...]).
 
     ok=True is a plus, ok=False a warning, ok=None neutral information.
@@ -43,6 +45,11 @@ def grade_buy(*, status: str, stats: dict, confluence: int, chase: float | None,
         reasons.append((None, "New whale: fewer than 5 copies measured, record still building"))
     elif status in {"WEAK", "COLD"}:
         reasons.append((False, f"{status.title()} whale: copies averaged {stats['avg']:+.0f}% over {stats['n']} buys"))
+
+    if profile and profile.get("style") in ("HOLDER", "SWING"):
+        good = profile.get("copy_n", 0) >= 5 and profile["copy_avg"] >= 1.15
+        points += 1 if good else 0
+        reasons.append((True if good else None, profiles.describe(profile)))
 
     if confluence >= 3:
         points += 2
@@ -87,7 +94,10 @@ def grade_buy(*, status: str, stats: dict, confluence: int, chase: float | None,
         reasons.append((False, f"Their coins don't last: {after['dead']} of {after['n']} were down 50%+ "
                                "six hours after they bought — scalp only"))
     if micro is not None:
-        if micro["n"] >= AFTERMATH_MIN:
+        if micro.get("curve"):
+            reasons.append((False, "Still on the pump.fun bonding curve: it either graduates and runs or dies — "
+                                   "small size, respect the -40% stop"))
+        elif micro["n"] >= AFTERMATH_MIN:
             reasons.append((False, f"Micro-cap: of your last {micro['n']} whale alerts this small, {micro['hit_2x']} "
                                    f"hit 2x but {micro['dead']} were down 50%+ six hours later — take profit into the pump"))
         else:
@@ -111,6 +121,9 @@ class Engine:
         self.notify = notify  # async (text, *, buttons=None, silent=False, mint="", wallet="", kind="") -> msg id
         self.my_wallets = set(cfg.my_wallets)
         self.community = CommunityChecker(rpc, market)
+        self.profiles = profiles.Profiler(db, cfg, market)
+        self.paper = PaperTrader(db, cfg, notify)
+        self.coins = CoinTracker(db, cfg, market, whales, portfolio, notify)
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=5000)
         self._inflight: set[tuple[str, str]] = set()
         self._buying: set[tuple[str, str]] = set()  # whale+coin buys being handled right now
@@ -280,7 +293,7 @@ class Engine:
             status=stats["status"], stats=stats, confluence=len(confluence), chase=chase, safety=safety, rug=rug,
             liquidity=num(info.get("liquidity_usd"), -1), usd_value=c["usd_value"],
             usual_usd=self.whales.usual_buy_usd(wallet), late_chase_pct=self.cfg.get("LATE_CHASE_PCT"),
-            community=community, after=after, micro=micro)
+            community=community, after=after, micro=micro, profile=self.profiles.get(wallet))
         if not swap["new_position"] and grade != "SKIP":
             reasons.append((None, "Adding to a bag they already held"))
         flip = self.whales.flip_speed(wallet)
@@ -315,6 +328,11 @@ class Engine:
         if not self.whales.is_alerting(whale):
             status("muted")
             return
+        prof = self.profiles.get(wallet)
+        send_ok, _ = profiles.verdict(prof, self.cfg.get("MIN_COPY_SCORE"))
+        if not send_ok and self.cfg.flag("BLOCK_FLIPPERS"):
+            status("flipper" if prof["style"] in ("FLIPPER", "BOT") else "weak_whale")
+            return  # pumps and dumps within minutes, or copying it at your speed loses: tracked, not sent
         if not self.cfg.flag("ALERTS_ENABLED"):
             status("paused")
             return
@@ -332,7 +350,7 @@ class Engine:
             late_detect=c["source"] != "stream",
             hold_line=messages.exit_plan_line(num(info.get("mc_usd")) or c["trade_mc"], self.cfg, scalp,
                                               exits.hold_plan(self.db, wallet)),
-            form=self.whales.recent_form(wallet), scalp=scalp)
+            form=self.whales.recent_form(wallet), scalp=scalp, profile=prof)
         buttons = [[(label, url, None) for label, url in messages.token_links(mint, info.get("pair_address", ""))],
                    [(f"🔕 Mute {whale.get('name', '')[:12]}", None, f"mute:{wallet}"),
                     ("🐋 Whales in coin", None, f"coin:{mint}")],
@@ -341,13 +359,20 @@ class Engine:
         msg_id = await self.notify(text, buttons=buttons, silent=silent, mint=mint, wallet=wallet, kind="BUY")
         self.db.run("update alerts set tg_message_id=?, status=? where id=?",
                     (msg_id or 0, "silent" if silent else "sent", alert_id))
+        self.paper.open(alert_id=alert_id, mint=mint, whale=wallet, symbol=info.get("symbol") or self.market.symbol(mint),
+                        price=entry_price, mc_usd=num(info.get("mc_usd")) or c["trade_mc"])
 
     def _micro_stats(self, trade_mc: float, info: dict) -> dict | None:
-        """Pooled outcomes of earlier micro-cap alerts when this coin is one (else None)."""
+        """Not None when the coin is still on the pump.fun bonding curve (or below MICRO_MC_USD, if set).
+
+        Your data: a good swing whale's 13 curve buys averaged 1.46x — the 7 that graduated ran (up to 5.7x), the 6 that
+        didn't died. You can't tell which at alert time, so they're sent flagged ⚡ with the stop in the plan."""
+        if info.get("dex") == "pumpfun":
+            return {"curve": True, "n": 0, "dead": 0, "hit_2x": 0, "median_x": 0.0}
         limit = self.cfg.get("MICRO_MC_USD")
-        if limit <= 0 or not (0 < trade_mc < limit or info.get("dex") == "pumpfun"):
-            return None
-        return aftermath(self.db, "a.wallet<>'runner' and a.mc_usd>0 and a.mc_usd<?", (limit,))
+        if limit > 0 and 0 < trade_mc < limit:
+            return {"curve": False, **aftermath(self.db, "a.wallet<>'runner' and a.mc_usd>0 and a.mc_usd<?", (limit,))}
+        return None
 
     def rebuy_stats(self) -> dict:
         """How your buys did when every whale in the coin had already sold, vs while one still held."""
@@ -461,7 +486,7 @@ class Engine:
 
     def _should_tell_about_sell(self, wallet: str, mint: str, full: bool) -> bool:
         """Only coins you hold — or, without wallet sync, coins you were alerted on recently."""
-        if not self.portfolio.holds(mint):
+        if not self.portfolio.holds(mint) and not self.coins.is_tracked(mint):
             if self.my_wallets:
                 return False  # wallet sync is on and you don't hold it
             if not self.db.scalar("select 1 from alerts where mint=? and kind='BUY' and tg_message_id>0 and ts>=?",

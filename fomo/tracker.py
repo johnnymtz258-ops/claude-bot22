@@ -11,7 +11,7 @@ import time
 
 from . import copies, exits, messages
 from .db import OUTCOME_POINTS
-from .util import esc, mc, num, usd
+from .util import dur, esc, mc, num, usd
 
 PRICE_EVERY = 15
 WHALE_BALANCE_CHECK_EVERY = 600
@@ -19,6 +19,8 @@ RUG_CONFIRM_SECONDS = 20
 RUG_REALERT_SECONDS = 6 * 3600
 LIQ_PEAK_WINDOW = 2 * 3600
 DEAD_PRICE_FRACTION = 0.03   # a copy whose price fell 97%+ (confirmed) is closed as rugged
+GAP_WARN_SECONDS = 600         # loop silent this long = the Mac slept or the bot was off
+PROFILE_EVERY = 1800         # re-profile followed whales (style, copy score) every 30 minutes
 OUTCOME_EVERY = 300          # alerts older than 3h are re-priced every 5 minutes until their 24h reading
 OUTCOME_WINDOW = 30 * 3600
 
@@ -39,6 +41,7 @@ class Tracker:
         self._protect_pending: dict[str, int] = {}
         self._lab_cache: tuple[float, dict] = (0.0, {})
         self._last_outcome = 0
+        self._last_profile = 0
         self._peak_pending: dict[int, tuple[float, int]] = {}
         self.loops = 0
         self.last_error = ""
@@ -47,10 +50,27 @@ class Tracker:
     async def run_prices(self) -> None:
         while True:
             try:
+                await self.check_gap()
                 await self.tick()
             except Exception as exc:
                 self.last_error = f"{time.strftime('%H:%M:%S')} {type(exc).__name__}: {exc}"
             await asyncio.sleep(PRICE_EVERY)
+
+    async def check_gap(self, now: float | None = None) -> float:
+        """The price loop runs every 15s. A much longer pause means the Mac slept (lid closed, battery)
+        or the bot was stopped — whale trades in that window can't be alerted in time, so say so."""
+        now = now or time.time()
+        last = float(self.db.get_meta("loop_heartbeat", "0") or 0)
+        self.db.set_meta("loop_heartbeat", int(now))
+        gap = now - last if last else 0.0
+        if gap >= GAP_WARN_SECONDS:
+            self.db.set_meta("last_gap", f"{int(last)}-{int(now)}")
+            await self.notify(
+                f"💤 <b>The bot was paused for {dur(gap)}</b> ({time.strftime('%H:%M', time.localtime(last))}"
+                f" → {time.strftime('%H:%M', time.localtime(now))}).\nYour Mac slept or the bot was stopped, so whale "
+                "buys in that window were missed. Keep the lid open and the charger in while it runs.",
+                silent=True, kind="GAP")
+        return gap
 
     async def tick(self, now: int | None = None) -> None:
         now = int(now or time.time())
@@ -66,8 +86,10 @@ class Tracker:
         if now - self._last_outcome >= OUTCOME_EVERY:
             self._last_outcome = now
             older = {a["mint"] for a in outcomes}
+        paper = self.engine.paper.open_trades()
+        tracked = self.engine.coins.active()
         mints = ({c["mint"] for c in open_copies} | {p["mint"] for p in positions} | set(recent) | set(closed)
-                 | {w["mint"] for w in watches} | older)
+                 | {w["mint"] for w in watches} | older | {t["mint"] for t in paper} | {c["mint"] for c in tracked})
         infos = await self.market.tokens(sorted(mints), max_age=PRICE_EVERY - 2) if mints else {}
         for mint, info in infos.items():
             self.marks.record(mint, num(info.get("price_usd")), now)
@@ -77,12 +99,18 @@ class Tracker:
             await self._watch_position(p, infos.get(p["mint"]), now)
         await self._check_watches(watches, infos, now)
         self._update_outcomes(outcomes, infos, now)
+        await self.engine.paper.tick(infos, now)
+        if tracked:
+            await self.engine.coins.tick(infos, now)
         if now - self._last_balance_check >= WHALE_BALANCE_CHECK_EVERY:
             self._last_balance_check = now
             await self._check_whale_balances(now)
         if now - self._last_mute_check >= 600:
             self._last_mute_check = now
             await self._auto_mutes()
+        if now - self._last_profile >= PROFILE_EVERY:
+            self._last_profile = now
+            self.engine.profiles.refresh_tracked()
         self.loops += 1
 
     def _update_copy(self, c: dict, info: dict | None, now: int) -> None:

@@ -17,6 +17,7 @@
   <button data-tab="live" class="on">Live</button>
   <button data-tab="hot">Hot coins</button>
   <button data-tab="whales">Whales</button>
+  <button data-tab="paper">Autopilot</button>
   <button data-tab="trades">My trades</button>
   <button data-tab="exits">Exit lab</button>
   <button data-tab="stats">Copy results</button>
@@ -65,9 +66,25 @@
     </div>
     <div class="card">
       <div class="card-head"><h2>Your whales</h2><span class="muted">copy results, last 30 days</span></div>
-      <p class="hint"><b>Copy</b> = what you'd have made buying when the alert arrived and selling when the whale sold (fees included, no stop-loss).
+      <p class="hint"><b>Style</b> = how fast the whale starts selling (🟠 flippers and losing whales are blocked from alerts). <b>Copy score</b> = what you'd have made buying a minute after them with the exit plan, fees included. <b>Copies</b> = results of the bot's own alerts.
         HOT = made money · NEW = under 5 copies · COLD = losing, auto-muted.</p>
       <div class="table-wrap"><table id="whales"></table></div>
+    </div>
+  </section>
+
+  <section id="tab-paper" class="tab">
+    <div class="tiles" id="paper-tiles"></div>
+    <div class="card">
+      <div class="card-head"><h2>Paper balance</h2><span class="muted" id="paper-note"></span></div>
+      <div class="chart" id="paper-curve"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Open paper trades</h2><span class="muted" id="paper-rules"></span></div>
+      <div class="table-wrap"><table id="paper-open"></table></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Closed paper trades</h2></div>
+      <div class="table-wrap"><table id="paper-closed"></table></div>
     </div>
   </section>
 

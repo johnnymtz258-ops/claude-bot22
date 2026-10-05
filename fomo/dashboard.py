@@ -13,7 +13,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from . import VERSION, exits, reports
+from . import VERSION, exits, profiles, reports
 from .commands import format_analysis
 from .copies import return_pct
 from .config import TUNABLES
@@ -85,9 +85,22 @@ class Dashboard:
 
     async def whales(self, request):
         board = self.app.whales.leaderboard(int(num(request.query.get("days"), 30) or 30))
+        prof = self.app.engine.profiles
         for w in board:
             w.pop("stats", None)
+            w["profile"] = prof.get(w["address"])
+            ok, why = profiles.verdict(w["profile"], self.app.cfg.get("MIN_COPY_SCORE"))
+            w["blocked"], w["blocked_why"] = not ok, why
         return _json(board)
+
+    async def paper(self, request):
+        a = self.app
+        s = a.engine.paper.summary()
+        curve = [[r["ts"], r["equity"]] for r in a.db.rows("select ts, equity from paper_equity order by ts")]
+        closed = a.db.rows("select * from paper_trades where status='closed' order by close_ts desc limit 60")
+        return _json({"summary": s, "curve": curve, "closed": closed, "enabled": a.cfg.flag("PAPER_TRADING"),
+                      "rules": {"size": a.cfg.get("PAPER_TRADE_USD"), "slippage": a.cfg.get("PAPER_SLIPPAGE_PCT"),
+                                "trail": a.cfg.get("PROTECT_TRAIL_PCT"), "stop": a.cfg.get("STOP_LOSS_PCT")}})
 
     async def whale(self, request):
         a = self.app
@@ -200,10 +213,11 @@ class Dashboard:
 
     async def add_whale(self, request):
         body = await self._body(request)
-        ok, text = self.app.whales.add(find_address(body.get("address")) or str(body.get("address") or ""),
-                                       str(body.get("name") or ""), source=str(body.get("source") or "dashboard"))
+        address = find_address(body.get("address")) or str(body.get("address") or "")
+        ok, text = self.app.whales.add(address, str(body.get("name") or ""), source=str(body.get("source") or "dashboard"))
         if ok:
             self.app.refresh_wallets()
+            getattr(self.app, "on_followed", lambda a: None)(address)
         return _json({"ok": ok, "message": text}, 200 if ok else 400)
 
     async def whale_action(self, request):
@@ -277,6 +291,7 @@ class Dashboard:
         r.add_get("/api/feed", self.feed)
         r.add_get("/api/hot", self.hot)
         r.add_get("/api/whales", self.whales)
+        r.add_get("/api/paper", self.paper)
         r.add_get("/api/whale/{addr}", self.whale)
         r.add_get("/api/coin/{addr}", self.coin)
         r.add_get("/api/lookup/{addr}", self.lookup)

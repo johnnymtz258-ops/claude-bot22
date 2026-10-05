@@ -86,6 +86,27 @@ create table if not exists whale_candidates(
 create table if not exists position_notes(
     mint text, kind text, level real, ts integer, primary key(mint, kind, level));
 
+create table if not exists coins(
+    mint text primary key, symbol text, added_ts integer, base_price real, base_mc real,
+    entry_price real default 0, active integer default 1, source text default 'manual');
+
+create table if not exists live_trades(
+    id integer primary key autoincrement, paper_id integer, mint text, symbol text, open_ts integer,
+    sol_in real default 0, sol_out real default 0, tokens_raw integer default 0, buy_sig text, sell_sigs text,
+    status text, close_ts integer, close_reason text, dry integer default 0);
+
+create table if not exists paper_trades(
+    id integer primary key autoincrement, alert_id integer, mint text, whale text, symbol text, open_ts integer,
+    entry_price real, entry_mc real, size_usd real, tokens real, remaining real, proceeds_usd real default 0,
+    peak_x real default 1, last_price real default 0, half_taken integer default 0, status text,
+    close_ts integer, close_reason text);
+create index if not exists idx_paper_status on paper_trades(status);
+
+create table if not exists paper_equity(ts integer primary key, equity real);
+
+create table if not exists whale_profiles(
+    address text primary key, data text, updated_ts integer default 0);
+
 create table if not exists watches(
     id integer primary key autoincrement, mint text, target_mc real, base_mc real, direction text,
     created_ts integer, hit_ts integer default 0);
@@ -201,6 +222,13 @@ def backfill_alert_outcomes(db: Database, now: int | None = None) -> int:
             db.run(f"update alerts set {', '.join(k + '=?' for k in updates)} where id=?", (*updates.values(), a["id"]))
             filled += 1
     return filled
+
+
+def coin_addresses_in_whales(db: Database) -> list[str]:
+    """'Whales' that are really coin addresses — the app moves them to tracked coins (nothing is lost)."""
+    from .whales import looks_like_coin
+    return [w["address"] for w in db.rows("select address from whales where active=1")
+            if looks_like_coin(db, w["address"])]
 
 
 def drop_autopilot_whales(db: Database) -> int:

@@ -13,7 +13,7 @@ def test_alert_shows_the_whales_last_calls(bot):
         copies.sell(bot.db, bot.db.row("select * from copies where id=?", (cid,)), 1.0, x, 0.0, "whale exited", now - 100 + i)
     bot.market.set_pair(mint=MINT, price=0.000075, mc=75_000)
     bot.feed(WHALE, pump_buy())
-    assert "Last 3 calls: 🟩+50% · 🟥-40% · 🟩+100%" in bot.notes.sent[0]["text"]
+    assert "Last 3 calls: 🟩+50% 🟥-40% 🟩+100%" in bot.notes.sent[0]["text"]
 
 
 def test_whale_adding_more_alerts_only_if_you_hold(bot_with_wallet):

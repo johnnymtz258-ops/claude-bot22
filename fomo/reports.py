@@ -52,7 +52,9 @@ FUNNEL_LABELS = {
     "scalp": "hidden: scalp setup (older version)",
     "chased": "not sent: already ran past the whale's price",
     "dumping": "not sent: already dumping below the whale's price",
-    "micro": "not sent: micro-cap (MICRO_ALERTS off)",
+    "micro": "not sent: still on the bonding curve (MICRO_ALERTS off)",
+    "flipper": "not sent: flipper whale (sells within minutes)",
+    "weak_whale": "not sent: copying this whale at your speed loses",
 }
 
 

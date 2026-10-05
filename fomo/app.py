@@ -9,11 +9,13 @@ from datetime import datetime
 
 import aiohttp
 
-from . import VERSION, config
+from . import VERSION, config, profiles
+from .card import LiveCard
 from .commands import Commands, format_stats
-from .db import Database, backfill_alert_outcomes, drop_autopilot_whales, import_legacy_whales
+from .db import Database, backfill_alert_outcomes, coin_addresses_in_whales, drop_autopilot_whales, import_legacy_whales
 from .discovery import Discovery
 from .engine import Engine
+from .live import LiveTrader
 from .market import Market
 from .portfolio import Portfolio
 from .rpc import SolanaRPC, WalletStream
@@ -21,6 +23,7 @@ from .runners import RunnerScanner
 from .scout import WhaleScout
 from .telegram import Notifier, Telegram
 from .tracker import Tracker
+from .util import esc
 from .whales import Whales
 
 
@@ -47,11 +50,44 @@ class App:
         self.stream: WalletStream | None = None
         self.find_task: asyncio.Task | None = None
         self.last_find: dict | None = None
+        self._jobs: set = set()
 
     def set_setting(self, name: str, value) -> float:
         parsed = self.cfg.set(name, value)
         self.db.set_meta(f"setting:{name.strip().upper()}", parsed)
         return parsed
+
+    async def move_coin_whales(self) -> list[str]:
+        """Coin addresses followed as whales become tracked coins (they can't trade, so they'd never alert)."""
+        moved = []
+        for address in coin_addresses_in_whales(self.db):
+            ok, _ = await self.engine.coins.add(address, source="from whales")
+            if ok:
+                self.db.run("update whales set active=0 where address=?", (address,))
+                moved.append(self.db.scalar("select symbol from coins where mint=?", (address,)) or address[:6])
+        if moved:
+            self.refresh_wallets()
+        return moved
+
+    def on_followed(self, address: str) -> None:
+        """Profile a newly followed whale from its on-chain history right away (style + copy score)."""
+        async def job():
+            try:
+                prof = await self.engine.profiles.profile_history(address)
+                if not prof or prof["trips"] <= (self.engine.profiles.get(address) or {}).get("trips", 0):
+                    return
+                self.engine.profiles.save(address, prof)
+                ok, why = profiles.verdict(prof, self.cfg.get("MIN_COPY_SCORE"))
+                text = (f"🔍 <b>{esc(self.whales.name(address))}</b> — last {prof['trips']} trades: "
+                        f"{esc(profiles.describe(prof))}")
+                if not ok:
+                    text += f"\n🚫 Entry alerts off for this whale: {esc(why)}."
+                await self.notify(text, silent=True, kind="INFO")
+            except Exception as exc:
+                self.engine.last_error = f"profile {address[:6]}: {type(exc).__name__}: {exc}"
+        task = asyncio.create_task(job())
+        self._jobs.add(task)
+        task.add_done_callback(self._jobs.discard)
 
     def refresh_wallets(self) -> None:
         if self.stream:
@@ -129,8 +165,9 @@ class App:
                                    self.notify)
             self.discovery = Discovery(self.rpc, self.market, self.db, cfg)
             self.runners = RunnerScanner(cfg, self.db, self.market, self.engine, self.whales, self.notify)
+            self.engine.profiles.discovery = self.discovery
             self.scout = WhaleScout(cfg, self.db, self.rpc, self.market, self.whales, self.runners, self.notify,
-                                    self.refresh_wallets)
+                                    self.refresh_wallets, self.engine.profiles)
             self.commands = Commands(self)
             self.stream = WalletStream(cfg.rpc_wss, self.engine.enqueue)
 
@@ -139,15 +176,20 @@ class App:
                                              config.ROOT / "legacy" / "tracked_wallets.json"])
             drop_autopilot_whales(self.db)
             backfill_alert_outcomes(self.db)
+            self.engine.profiles.refresh_tracked()
             self.refresh_wallets()
+            self.live = LiveTrader(cfg, self.db, self.rpc, session, self.notify)
+            self.engine.paper.live = self.live
+            self.card = LiveCard(self)
             tasks = [self.stream.run(), self.tracker.run_prices(), self.tracker.run_poller(),
                      self.telegram_loop(), self.daily_loop(), self.runners.run(),
-                     self.scout.run()]
+                     self.scout.run(), self.card.run()]
             tasks += [self.engine.worker() for _ in range(3)]
             if cfg.dashboard_enabled:
                 from .dashboard import start_dashboard
                 tasks.append(start_dashboard(self))
             await self.market.sol_usd()
+            self.coins_moved = await self.move_coin_whales()
             await self.notify(self.startup_text(imported), silent=True, kind="INFO")
             await asyncio.gather(*tasks)
 
@@ -162,6 +204,23 @@ class App:
             lines.append("⚠️ No HELIUS_API_KEY: public RPC is slower and can miss the first seconds.")
         if self.cfg.dashboard_enabled:
             lines.append(f"Dashboard: http://localhost:{self.cfg.dashboard_port}")
+        for symbol in getattr(self, "coins_moved", []):
+            lines.append(f"📍 ${esc(symbol)} was in your whales but it's a coin — it's now a tracked coin with "
+                         "take-profit messages (/coins).")
+        styles = {}
+        for w in self.whales.active():
+            prof = self.engine.profiles.get(w["address"])
+            ok = profiles.verdict(prof, self.cfg.get("MIN_COPY_SCORE"))[0]
+            label = profiles.STYLE_LABEL.get((prof or {}).get("style", "NEW"), "🆕 New")
+            styles.setdefault(label + ("" if ok else " (blocked)"), []).append(esc(w["name"]))
+        for label, names in styles.items():
+            lines.append(f"{label}: {', '.join(names)}")
+        live = getattr(self, "live", None)
+        if live and self.cfg.flag("LIVE_TRADING"):
+            ok, why = live.ready()
+            lines.append(("🧪 Live autopilot: DRY RUN (nothing is sent)" if live.dry_run else "🔴 Live autopilot: ON — trading real SOL")
+                         if ok else f"⚠️ Live autopilot is on but can't trade: {esc(why)}")
+        lines.append("📌 The pinned live card keeps you up to date — no commands needed.")
         if not n:
             lines.append("\nStart with /add WALLET name, or /find COIN on a coin that already ran.")
         lines.append("/help for commands")

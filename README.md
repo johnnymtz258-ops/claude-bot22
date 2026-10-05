@@ -1,26 +1,39 @@
 # 🐋 FomoBot Whale Copy
 
-A rebuild of FomoBot around the one thing that has actually made you money: **following whales
-into coins early**. It watches the wallets you choose around the clock and tells you, within
-seconds, when one of them buys, how that whale's picks have really performed, and when the
-whale sells.
+Copy-trading whales into coins early — but only the whales you can actually copy at human speed.
 
-The old scanner (400+ settings, 15 alert types, sell alarms on every dip) is in `legacy/` and no
-longer runs. Its own two-month review found it had no edge. Your manual whale copying did.
+## What v10 changed (from your data, Sep 25 – Oct 5)
+
+- **Whale profiles.** Every whale is labelled by how fast it starts selling: 🟢 holder, 🔵 swing, 🟠 flipper,
+  🤖 bot. Its trades are also replayed as if you bought a minute after it, which gives its **copy score**.
+  7yuq made itself +$40K but its coins were at 0.27x an hour after it bought, so it's a 🟠 flipper. EC2f
+  holds for ~11h and its coins were at 1.28x after an hour, so it's a 🟢 holder.
+  **Flippers and whales that lose money themselves are tracked but never alerted.**
+- **Scanner finds copyable whales by itself** (`AUTO_WHALES` on): early buyers of today's runners, replayed
+  with GeckoTerminal minute candles; only holders/swing traders whose copies made money are followed.
+- **Paper autopilot** trades a pretend $1,000 on every alert with the exit plan, so you see whether the
+  system makes money before risking any (Telegram `/paper`, dashboard **Autopilot** tab).
+- **📌 Live card**: one pinned Telegram message updated every minute: health, what was blocked and why,
+  your positions with the plan, and the paper balance. Buttons for positions, whales, stats and pause.
+- **💤 Sleep warning**: if the Mac sleeps (lid closed, battery), the bot tells you how long it missed.
+- Slimmer alerts; coin addresses can't be followed as whales by mistake.
+
+Replaying your last 10 days with these rules ($50 a trade, 3% slippage each way): the 18 alerts v10 would
+have sent averaged 1.42x, 50% won (≈ +$381). The 43 it blocks (flippers / losing whales) averaged 0.96x,
+26% won. It's a small sample from two good whales, which is why the scanner keeps looking for more.
 
 ## What you get
 
 | Message | When |
 |---|---|
-| 🟢/🟡/⚪️ **WHALE BUY** (grade A/B/C) | A whale you follow buys a coin: entry market cap, how far price has moved since, the whale's measured record, safety checks |
-| 🐋🐋 **2ND WHALE IN** | Another of your whales buys the same coin within 6h — the strongest signal |
-| 📈 **COMMUNITY RUNNER** (off by default) | No whale, but 2,000+ trades a day, heavy buying, 2+ social links and the top-10 wallets hold under 30%. Measured separately (scored as sold after 24h) |
-| 🟠 **WHALE SOLD x%** / 🔴 **WHALE EXITED** | A whale sells a coin **you hold**. Partial trims are labeled as trims |
-| 🚨 **LIQUIDITY PULLED** | Only when liquidity really disappears (confirmed twice, and far more than a dip explains) |
-| 🌙 Daily summary | Once a day, silent |
-
-**There are no "price dropped, sell now" messages.** Meme coins often dip -30% before the real
-run; the exit signal is the whale leaving, not a red candle.
+| 🟢/🟡/⚪️ **WHALE BUY** (grade A/B/C) | A copyable whale bought, and 45s later the price is still within −20%…+50% of its price |
+| 🐋🐋 **2ND WHALE IN** | Another of your whales buys the same coin within 6h |
+| ⚡ **SCALP** | Still on the pump.fun bonding curve, or a whale whose coins usually die — sell into the pump |
+| 🟠 **WHALE SOLD x%** / 🔴 **WHALE EXITED** | A whale sells a coin **you hold** |
+| 📈 / 🛡 / ✂️ | Your coin hit 2x/3x/5x/10x · gave back 35% after 1.5x · is 40% below your cost (once each) |
+| 🚨 **LIQUIDITY PULLED** | Only when liquidity really disappears (confirmed twice) |
+| 🤖 **Paper** | The paper autopilot sold (silent) |
+| 📌 Live card | Pinned, refreshed every minute |
 
 ### How an alert is graded
 
@@ -43,16 +56,17 @@ run; the exit signal is the whale leaving, not a red candle.
 
 ### What is never sent (tracked and scored, shown in /status)
 
-Backtested on real alerts at the price you could actually get a minute later (1% fee each way,
-exit plan below), the alerts that passed these checks averaged 1.15x (48% won); the ones they block
-averaged 0.77x (12% won):
-
+- **Whale profile** (`BLOCK_FLIPPERS`): buys from 🟠 flippers / 🤖 bots, whales that lose money themselves
+  (under 35% won over 6+ trades), and whales whose copies averaged under `MIN_COPY_SCORE` (0.95x over 5+
+  coins) at your speed are not sent. You get one message per whale explaining why, with a Remove button.
 - **Confirm price** (`CONFIRM_SECONDS` 45): the bot waits until 45s after the whale's buy and re-checks
   the price. Copy-trade bots spike these coins in the first seconds.
   - already more than `LATE_CHASE_PCT` (50%) above the whale's price → not sent (you'd be their exit);
   - already more than `DUMP_GATE_PCT` (20%) below it → not sent (usually a rug or a bot dump).
-- **Micro-caps** (`MICRO_MC_USD` $30K, or still on the pump.fun curve) → not sent unless
-  `/set MICRO_ALERTS on`. These were the rug pulls.
+- **Bonding curve** coins are *sent*, flagged ⚡ (`/set MICRO_ALERTS off` to skip them). A good whale's 13
+  curve buys averaged 1.46x: the ones that graduated ran (up to 5.7x), the rest died — you can't tell which
+  at alert time, so small size and the -40% stop do the work. Earlier "micro-caps rug" results came almost
+  entirely from 7yuq, which is now blocked as a flipper.
 
 ### The exit plan on every alert
 
@@ -94,14 +108,17 @@ Whales you tracked in the old bot are imported automatically on first start.
   quickest way to grow your whale list — more good whales means more alerts.
 - Tap **➕ Follow** under either result, or use the dashboard's *Find whales* tab.
 
-## Whale picks (the bot finds whales, you choose)
+## Whale scanner (finds whales by itself)
 
-Every few hours (`AUTO_SCOUT_HOURS`, default 6) the bot researches today's biggest runners and
-coins your alerts caught that went 3x+, reads their early buyers' recent trading, and **sends you
-up to 3 wallets that are profitable right now** (6+ closed trades, +1 SOL or more, 45%+ won,
-active in the last 2 days, no snipers or bots) with ➕ Follow buttons. `/scout now` runs it on
-demand. It does not follow anyone by itself unless you `/set AUTO_WHALES on` — auto-following
-made entries worse in practice, so it's off.
+Every `AUTO_SCOUT_HOURS` (4) the bot takes today's biggest runners and coins your alerts caught that
+went 3x+, finds their early buyers (no snipers, creators or bots), and **replays each candidate's recent
+trades as a copier who buys a minute late** (GeckoTerminal minute candles, exit plan, fees). It follows
+(`AUTO_WHALES` on, up to `AUTO_WHALE_LIMIT`) only 🟢 holders / 🔵 swing traders that are profitable
+themselves and whose copies averaged 1.10x+ with 35%+ won over 4+ coins; ones without enough price
+history are sent to you as picks with ➕ Follow. Earlier auto-follow picked wallets by their *own*
+profit, which happily picked flippers — that's what made it worse, and it's what the replay fixes.
+Every day it drops auto-followed whales that turned into flippers, stopped being copyable, went COLD or
+went quiet. Whales you added yourself are never dropped. `/scout now` runs it on demand.
 
 ## Extra signals around your entries
 
@@ -162,6 +179,8 @@ Install: Chrome → `chrome://extensions` → turn on *Developer mode* → *Load
 /recent · /hot · /coin COIN latest whale buys · coins with 2+ whales · who's in a coin
 /bought 20 (at 850k)        /sold 5 | 30% | all (at 1.2m) · /positions · /undo
 /stats · /status            what copying returned · health
+/paper                      paper autopilot trades and balance
+/card · /export             re-pin the live card · send a review file (no keys inside)
 /settings · /set NAME VALUE · /pause · /resume
 ```
 
@@ -179,6 +198,9 @@ All in `.env` with defaults; change live with `/set` or on the dashboard. The us
 - Copying a whale can still lose: you enter after them, they may size differently, hedge
   elsewhere, or change style. That's why every whale's *copy* result is measured instead of
   trusted, and cold whales are muted.
+- The v10 numbers come from 10 days and mostly two whales (EC2f, 6qRT). Watch the paper autopilot
+  for a few days before sizing up; it uses the same rules and is honest about slippage.
+- The bot can't trade while your Mac sleeps. Lid open + charger in, or run it on an always-on machine.
 - The public Solana RPC is slow and rate-limited; a free Helius key makes alerts arrive in a few
   seconds and makes `/find` practical.
 - `/find` samples a coin's history within a request budget. For coins with millions of trades it

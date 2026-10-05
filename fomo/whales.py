@@ -29,6 +29,8 @@ class Whales:
             return False, "That doesn't look like a Solana wallet address."
         if address in self.my_wallets:
             return False, "That's your own wallet — it's already synced for your positions."
+        if looks_like_coin(self.db, address):
+            return False, "That's a coin address, not a wallet. Use /coin or /find for coins; whales are wallets."
         given = str(name or "").strip()[:32]
         existing = self.db.row("select * from whales where address=?", (address,))
         if existing:
@@ -256,3 +258,10 @@ def aftermath(db, where: str, params: tuple, days: int = 30) -> dict:
 def dumps(after: dict | None) -> bool:
     """True when enough of these coins were dead hours later that holding them is a losing game."""
     return bool(after) and after["n"] >= AFTERMATH_MIN and after["dead"] >= DUMP_SHARE * after["n"]
+
+
+def looks_like_coin(db, address: str) -> bool:
+    """Token mints (pump.fun ones end in 'pump') that were followed by mistake never trade, so never alert."""
+    if db.scalar("select 1 from tokens where mint=?", (address,)):
+        return True
+    return address.endswith("pump") and not db.scalar("select 1 from swaps where wallet=? limit 1", (address,))

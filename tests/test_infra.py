@@ -56,9 +56,12 @@ def test_wallet_stream_subscribes_and_reports_signatures():
     got = []
     seen_methods = []
 
+    sockets = []
+
     async def ws_handler(request):
         ws = web.WebSocketResponse()
         await ws.prepare(request)
+        sockets.append(ws)
         sub = 100
         async for msg in ws:
             data = json.loads(msg.data)
@@ -100,7 +103,9 @@ def test_wallet_stream_subscribes_and_reports_signatures():
                 break
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        await srv.close()
+        for ws in sockets:  # close server-side sockets first, or the test server can wait on them forever
+            await ws.close()
+        await asyncio.wait_for(srv.close(), timeout=5)
         return stream
 
     stream = asyncio.run(run())

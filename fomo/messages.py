@@ -44,14 +44,19 @@ def whale_record(stats: dict) -> str:
 def form_line(form: list[float]) -> str:
     if not form:
         return ""
-    return f"Last {len(form)} calls: " + " · ".join(("🟩" if r > 0 else "🟥") + pct(r) for r in form)
+    return f"Last {len(form)} calls: " + " ".join(("🟩" if r > 0 else "🟥") + pct(r) for r in form)
+
+
+ROUTINE = ("Mint & freeze authority revoked", "Community OK", "New whale: fewer than 5 copies")
 
 
 def buy_alert(*, symbol: str, mint: str, whale_name: str, whale_addr: str, stats: dict, grade: str,
               reasons: list, usd_value: float, base_amount: float, base: str, entry_mc: float,
               now_mc: float, chase: float | None, confluence: list[dict], latency_s: int,
               info: dict, late_detect: bool, hold_line: str = "", form: list | None = None,
-              scalp: bool = False) -> str:
+              scalp: bool = False, profile: dict | None = None) -> str:
+    """Compact: what to buy, who bought it and how they trade, what's good/bad about it, and the plan."""
+    from .profiles import describe
     n = len(confluence)
     if n >= 2:
         head = f"🐋🐋 {'2ND' if n == 2 else f'{n}TH' if n > 3 else '3RD'} WHALE IN · ${esc(symbol)}"
@@ -59,16 +64,17 @@ def buy_alert(*, symbol: str, mint: str, whale_name: str, whale_addr: str, stats
         head = f"{GRADE_ICON.get(grade, '🟢')} WHALE BUY · ${esc(symbol)}"
     if scalp:
         head = "⚡ SCALP · " + head
-    lines = [f"<b>{head}</b>  <i>grade {grade}</i>",
-             f"🐋 <a href=\"{whale_link(whale_addr)}\">{esc(whale_name)}</a> — {whale_record(stats)}"]
+    profile_text = describe(profile)
+    who = f"🐋 <a href=\"{whale_link(whale_addr)}\">{esc(whale_name)}</a> — " + (esc(profile_text) or whale_record(stats))
+    lines = [f"<b>{head}</b>  <i>grade {grade}</i>", who]
     if form:
         lines.append(form_line(form))
     paid = f"{base_amount:,.2f} {base}" if base == "SOL" else usd(base_amount)
-    timing = dur(latency_s) + " ago"
-    lines.append(f"Bought {usd(usd_value)} ({paid}) at <b>{mc(entry_mc)}</b> MC · {timing}"
-                 + (" · <i>seen late</i>" if late_detect else ""))
+    line = (f"Bought {usd(usd_value)} ({paid}) at <b>{mc(entry_mc)}</b> MC · {dur(latency_s)} ago"
+            + (" · <i>seen late</i>" if late_detect else ""))
     if now_mc > 0 and chase is not None:
-        lines.append(f"Now {mc(now_mc)} MC ({pct(chase)} since whale)")
+        line += f"\nNow <b>{mc(now_mc)}</b> MC ({pct(chase)} since whale)"
+    lines.append(line)
     if n >= 2:
         lines.append("Whales in: " + ", ".join(f"{esc(c['name'])} @ {mc(c['entry_mc'])}" for c in confluence[:5]))
     facts = []
@@ -82,6 +88,8 @@ def buy_alert(*, symbol: str, mint: str, whale_name: str, whale_addr: str, stats
     if facts:
         lines.append(" · ".join(facts))
     for ok, text in reasons:
+        if text == profile_text or (ok is not False and text.startswith(ROUTINE)):
+            continue  # shown on the whale line / routine checks that passed
         lines.append(("✅ " if ok else "⚠️ " if ok is False else "• ") + esc(text))
     if hold_line:
         lines.append(esc(hold_line))
@@ -92,13 +100,12 @@ def buy_alert(*, symbol: str, mint: str, whale_name: str, whale_addr: str, stats
 def exit_plan_line(now_mc: float, cfg, scalp: bool, plan: dict | None = None) -> str:
     """The exit plan that backtested best on your alerts: half at 2x, trail the rest, cut a big loss."""
     trail, stop = cfg.get("PROTECT_TRAIL_PCT"), cfg.get("STOP_LOSS_PCT")
-    line = "📋 Plan: sell half at 2x" + (f" (~{mc(now_mc * 2)} MC)" if now_mc > 0 else "")
-    line += f". Sell the rest if it falls {trail:.0f}% from its top"
-    line += f" or {stop:.0f}% below your entry." if stop > 0 else "."
-    if scalp:
-        line += " ⚡ This whale's coins usually die within hours — don't hold overnight."
+    line = "📋 Plan: half at 2x" + (f" (~{mc(now_mc * 2)} MC)" if now_mc > 0 else "")
+    line += f" · rest out at -{trail:.0f}% from its top" + (f" or -{stop:.0f}% from entry" if stop > 0 else "")
     if plan and plan.get("time_to_peak_s"):
-        line += f" Winners peaked ~{dur(plan['time_to_peak_s'])} after the buy."
+        line += f" · winners peaked ~{dur(plan['time_to_peak_s'])} in"
+    if scalp:
+        line += "\n⚡ This whale's coins usually die within hours — don't hold overnight."
     return line
 
 
@@ -195,9 +202,12 @@ def whale_line(w: dict, i: int) -> str:
     s = w["stats"]
     muted = " 🔕 muted" if w.get("muted") else " · auto-muted" if w.get("auto_muted") == 1 else ""
     last = f" · last trade {ago(w['last_trade_ts'])} ago" if w.get("last_trade_ts") else ""
-    body = (f"{i}. <b>{esc(w['name'])}</b> {STATUS_TEXT[s['status']]}{muted}\n"
-            f"   {s['n']} copies · {s['win_rate'] * 100:.0f}% won · median {pct(s['median'])} · avg {pct(s['avg'])} · "
-            f"2x rate {s['hit_2x'] * 100:.0f}%{last}")
+    from .profiles import describe
+    body = f"{i}. <b>{esc(w['name'])}</b> {STATUS_TEXT[s['status']]}{muted}" + (" · 🚫 entries blocked" if w.get("blocked") else "")
+    if w.get("profile"):
+        body += f"\n   {esc(describe(w['profile']))}"
+    body += (f"\n   {s['n']} alert copies · {s['win_rate'] * 100:.0f}% won · median {pct(s['median'])} · "
+             f"2x rate {s['hit_2x'] * 100:.0f}%{last}")
     after = w.get("after") or {}
     if after.get("n", 0) >= 3:
         body += (f"\n   Their coins 6h later: {after['dead']}/{after['n']} down 50%+"

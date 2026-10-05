@@ -149,40 +149,82 @@ def test_qualifies_rules():
     assert not qualifies({**good, "verdict": "🤖 Too fast to copy"}, now)[0]
 
 
-def test_scout_follows_profitable_early_buyers(bot, monkeypatch):
+THIRD = "GjJyeC1rB1p4d6k1Mzw5Y6vYGZyLr8N8zQJ7XU4yzF1G"
+
+
+def trips_for(bot, wallet, now, first_sell_after, prices):
+    """Five past trades; each coin's minute prices after the buy follow `prices`."""
+    out = []
+    for k in range(5):
+        mint = f"{wallet[:6]}Coin{k}" + "1" * 30
+        buy = now - (k + 1) * 20000
+        bot.market.paths[mint] = [(buy + 60 * i, p) for i, p in enumerate(prices)]
+        out.append({"mint": mint, "buy_ts": buy, "first_sell_ts": buy + first_sell_after,
+                    "half_out_ts": buy + first_sell_after, "bought_usd": 500, "sold_usd": 900, "closed": True})
+    return out
+
+
+def test_scanner_follows_copyable_holders_and_skips_flippers(bot, monkeypatch):
     now = int(time.time())
     coin = {"ok": True, "symbol": "RUN", "candidates": [
         {"wallet": WHALE, "tracked": False, "flags": [], "entry_mc": 90_000, "to_peak": 12},
         {"wallet": WHALE2, "tracked": False, "flags": [], "entry_mc": 95_000, "to_peak": 11},
-        {"wallet": "GjJyeC1rB1p4d6k1Mzw5Y6vYGZyLr8N8zQJ7XU4yzF1G", "tracked": False, "flags": ["launch sniper"],
-         "entry_mc": 5_000, "to_peak": 200}]}
+        {"wallet": THIRD, "tracked": False, "flags": [], "entry_mc": 99_000, "to_peak": 10}]}
+    runner = [1.0, 1.05, 1.3, 1.7, 2.2, 2.6, 3.0, 3.2, 3.1]     # holds and runs: half at 2x, rest still up
+    pumped = [1.0, 1.9, 1.2, 0.8, 0.5]                          # spiked before you could buy, then dumped
+    trips = {WHALE: trips_for(bot, WHALE, now, 4 * 3600, runner),
+             WHALE2: trips_for(bot, WHALE2, now, 120, pumped),   # sells two minutes after buying
+             THIRD: [dict(t, mint="NoHistory" + str(i)) for i, t in enumerate(trips_for(bot, THIRD, now, 4 * 3600, runner))]}
 
     async def research(mint, progress=None):
         return coin
 
     async def analyze(wallet, progress=None):
-        return {**GOOD, "pnl_sol": 4.2 if wallet == WHALE else -2.0}
-
-    async def last_trade(wallet):
-        return now - 600
+        return {**GOOD, "trip_list": trips[wallet], "last_trade_ts": now - 600}
 
     monkeypatch.setattr(bot.scout.discovery, "research_coin", research)
     monkeypatch.setattr(bot.scout.discovery, "analyze_wallet", analyze)
-    monkeypatch.setattr(bot.scout, "_last_trade_ts", last_trade)
     monkeypatch.setattr(bot.scout, "pick_coins", lambda limit=3: [MINT])
     s = bot.run(bot.scout.scout(now))
-    # default: suggest only — you decide who to follow
-    assert s == {"ts": now, "coins": [MINT], "checked": 2, "followed": 0, "picked": 1}
-    assert bot.whales.get(WHALE) is None
-    assert bot.notes.kinds() == ["PICKS"] and WHALE in bot.notes.sent[0]["text"]
-    assert bot.notes.sent[0]["buttons"][0][0] == ("➕ Follow #1", None, f"track:{WHALE}")
-    assert bot.db.row("select status from whale_candidates where address=?", (WHALE2,))["status"] == "rejected"
-    # opt-in auto-follow still works
-    bot.cfg.set("AUTO_WHALES", "on")
-    bot.db.run("delete from whale_candidates")
-    bot.run(bot.scout.scout(now))
+    assert s == {"ts": now, "coins": [MINT], "checked": 3, "followed": 1, "picked": 1}
     w = bot.whales.get(WHALE)
-    assert w["source"] == "auto" and w["active"] == 1 and bot.notes.kinds()[-1] == "AUTO"
+    assert w["source"] == "auto" and w["active"] == 1
+    assert bot.engine.profiles.get(WHALE)["style"] == "HOLDER"
+    assert bot.whales.get(WHALE2) is None
+    cand = bot.db.row("select status, reason from whale_candidates where address=?", (WHALE2,))
+    assert cand["status"] == "rejected" and "Flipper" in cand["reason"]
+    assert bot.notes.kinds() == ["AUTO", "PICKS"]                 # unscored (no candles) → suggested, not followed
+    assert THIRD in bot.notes.sent[1]["text"] and bot.notes.sent[1]["buttons"][0][0] == ("➕ Follow #1", None, f"track:{THIRD}")
+
+
+def test_scanner_only_suggests_when_auto_follow_is_off(bot, monkeypatch):
+    now = int(time.time())
+    bot.cfg.set("AUTO_WHALES", "off")
+    coin = {"ok": True, "symbol": "RUN", "candidates": [
+        {"wallet": WHALE, "tracked": False, "flags": [], "entry_mc": 90_000, "to_peak": 12}]}
+    trips = trips_for(bot, WHALE, now, 4 * 3600, [1.0, 1.05, 1.3, 1.7, 2.2, 2.6, 3.0, 3.2, 3.1])
+
+    async def research(mint, progress=None):
+        return coin
+
+    async def analyze(wallet, progress=None):
+        return {**GOOD, "trip_list": trips, "last_trade_ts": now - 600}
+
+    monkeypatch.setattr(bot.scout.discovery, "research_coin", research)
+    monkeypatch.setattr(bot.scout.discovery, "analyze_wallet", analyze)
+    monkeypatch.setattr(bot.scout, "pick_coins", lambda limit=3: [MINT])
+    assert bot.run(bot.scout.scout(now))["picked"] == 1
+    assert bot.whales.get(WHALE) is None and bot.notes.kinds() == ["PICKS"]
+
+
+def test_followed_flipper_is_flagged_once(bot):
+    bot.whales.add(WHALE, "Pumper")
+    bot.engine.profiles.save(WHALE, {"style": "FLIPPER", "trips": 40, "median_hold_s": 240, "within5m": 0.53,
+                                     "copy_n": 30, "copy_avg": 1.0, "copy_med": 0.9, "copy_win": 0.33,
+                                     "closed": 30, "own_pnl_usd": 40000, "own_win": 0.55, "source": "recorded"})
+    assert bot.run(bot.scout.flag_followed()) == [WHALE]
+    assert bot.notes.kinds() == ["AUTO"] and "entry alerts stopped" in bot.notes.sent[0]["text"]
+    assert bot.run(bot.scout.flag_followed()) == []
 
 
 def test_prune_drops_idle_or_cold_auto_whales_but_never_yours(bot):
@@ -238,7 +280,8 @@ def test_buy_alert_includes_exit_plan_and_funnel_counts_outcomes(bot):
     bot.market.set_pair(mint=MINT, price=0.000075, mc=75_000)
     bot.feed(WHALE, pump_buy())
     text = bot.notes.sent[0]["text"]
-    assert "📋 Plan: sell half at 2x (~$150K MC)" in text and "Winners peaked ~1h20m after the buy" in text
+    assert "📋 Plan: half at 2x (~$150K MC) · rest out at -35% from its top or -40% from entry" in text
+    assert "winners peaked ~1h20m in" in text
     bot.feed(WHALE, pump_buy(mint="MoiNmemeTokenMint22222222222222222222222pump"[:44], sol=0.2, tokens=100_000))
     f = alert_funnel(bot.db)
     assert f["counts"] == {"sent": 1, "too_small": 1}

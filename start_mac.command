@@ -30,6 +30,9 @@ if [ ! -f ".env" ]; then
   fi
 fi
 
+# Live-autopilot support (signing swaps). Optional: if it can't install, everything else still runs.
+"$PY" -m pip install -q -r requirements-live.txt >/dev/null 2>&1 || echo "(Live-trading support not installed — only needed if you turn on LIVE_TRADING.)"
+
 # Add any new settings to .env without touching your existing values.
 "$PY" migrate_env.py
 

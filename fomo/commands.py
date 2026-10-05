@@ -4,40 +4,36 @@ from __future__ import annotations
 import asyncio
 import time
 
-from . import VERSION, messages, reports
+from . import VERSION, messages, profiles, reports
 from .config import TUNABLES
 from .util import ago, dur, esc, find_address, is_address, mc, mult, num, parse_amount, pct, short, usd
 
-HELP = f"""<b>🐋 FomoBot Whale Copy {VERSION}</b>
+HELP = f"""<b>🐋 FomoBot {VERSION}</b>
+The 📌 pinned live card shows health, blocked buys, your positions and the paper balance — no commands needed.
+
+<b>How alerts work</b>
+Only whales you can copy at your speed: 🟢 holders and 🔵 swing traders. 🟠 Flippers (sell within minutes)
+and losing whales are tracked but never alerted. Each buy is re-checked ~45s later and skipped if it already
+ran 50%+, is dumping, or is a micro-cap. Every alert has the plan: half at 2x, rest out at -35% from the top
+or -40% from entry.
 
 <b>Whales</b>
-/whales — who you follow + how copying them has gone
-/add WALLET name — follow a whale
-/whale name — one whale's record · /analyze WALLET — check before following
-/find COIN [COIN2 …] — early buyers of coins that ran (new whales)
-/suggest — find new whales from today's biggest runners (more alerts)
-/mute name · /unmute name · /remove name
-/scout — whale picks: profitable wallets from today's runners, sent to you to follow · /scout now
+/whales — who you follow, style and copy score · /whale name — one whale
+/add WALLET name — follow (profiled right away) · /remove name · /mute · /unmute
+/analyze WALLET — holder or flipper? replays its trades at your speed
+/find COIN — early buyers of a coin that ran · /scout — run the whale scanner now
 
-<b>Coins</b>
-/recent — latest whale buys · /hot — coins with 2+ whales
-/runners — community coins with no whale (high activity, spread-out holders)
-/coin COIN — which whales are in, entries, who's still holding
-
-<b>Your trades</b> (reply to an alert, or add the coin)
-/bought 20 · /bought 20 at 850k — you bought $20 (at that market cap)
-/sold 5 · /sold 30% · /sold all — you sold (add "at 1.2m" if you like)
-/positions — your coins + whales still in · /undo — undo last entry
-/watch COIN 2x · /watch COIN 1.5m — ping me at a market-cap target · /watches · /unwatch N
-/exits — which exit style works best + your sell-too-early / too-late habits
+<b>Coins & your trades</b>
+/positions · /coin COIN · /recent · /hot
+/add COIN (at 850k) — track a coin you hold: take-profit messages · /coins · /drop COIN
+/watch COIN 2x — ping at a target · /exits — your sell-too-early/late habits
+/bought 20 · /sold 30% — only if wallet sync (MY_WALLETS) is off
 
 <b>Bot</b>
-/stats — what copying has actually returned · /status — health
-/settings · /set NAME VALUE · /pause · /resume
-/export — sends you a review file (your data, no keys) to share for tuning
-
-Every alert carries the exit plan: half at 2x, the rest if it falls 35% from its top or 40% below
-your entry. On coins you hold the bot backs it up: 2x/3x/5x ladder, 🛡 protector after 1.5x, ✂️ at -40%."""
+/paper — paper autopilot trades and balance · /stats — what alerts returned · /status
+/card — re-pin the live card · /export — send me a review file
+/live — real-money autopilot (off by default, dry run first) · /sellall
+/settings · /set NAME VALUE · /pause · /resume"""
 
 
 class Commands:
@@ -105,7 +101,20 @@ class Commands:
         elif action == "track":
             ok, text = whales.add(arg, source="find")
             self.app.refresh_wallets()
+            if ok:
+                getattr(self.app, "on_followed", lambda a: None)(arg)
             await tg.answer(cq["id"], text)
+        elif action == "cmd":
+            await tg.answer(cq["id"])
+            if arg == "card" and getattr(self.app, "card", None):
+                await self.app.card.update(force=True)
+            elif arg in {"positions", "whales", "stats", "pause", "resume"}:
+                await getattr(self, f"cmd_{arg}")([], "")
+        elif action == "livesell":
+            live = getattr(self.app, "live", None)
+            await tg.answer(cq["id"], "Selling…")
+            if live:
+                await live.sell(arg, 1.0, "you tapped Sell now")
         elif action == "x2":
             await tg.answer(cq["id"], "Setting a 2x target…")
             try:
@@ -153,9 +162,14 @@ class Commands:
         if not board:
             await self.say("You're not following any whales yet.\n/add WALLET name — or /find COIN to discover some.")
             return
-        lines = [f"<b>🐋 Your whales ({len(board)})</b> — copy results, last 30 days"]
+        prof = self.app.engine.profiles
+        for w in board:
+            w["profile"] = prof.get(w["address"])
+            w["blocked"] = not profiles.verdict(w["profile"], self.app.cfg.get("MIN_COPY_SCORE"))[0]
+        board.sort(key=lambda w: (w["blocked"], -(w["profile"] or {}).get("copy_avg", 0)))
+        lines = [f"<b>🐋 Your whales ({len(board)})</b> — style and what copying them at your speed returned"]
         lines += [messages.whale_line(w, i + 1) for i, w in enumerate(board)]
-        lines.append("\nHOT = copying made money · NEW = under 5 copies · COLD = auto-muted")
+        lines.append("\n🟢 holder · 🔵 swing · 🟠 flipper (blocked) · 🤖 bot (blocked) · 🆕 not enough trades yet")
         await self.say("\n".join(lines))
 
     async def cmd_add(self, args, reply_mint):
@@ -164,11 +178,18 @@ class Commands:
         address = next((find_address(a) for a in args if find_address(a)), "")
         if not address:
             raise ValueError("that doesn't include a Solana wallet address. usage: /add WALLET name")
+        if await self._is_coin(address):
+            _, at_mc = _amount_and_mc([a for a in args if find_address(a) != address])
+            ok, text = await self.app.engine.coins.add(address, at_mc)
+            await self.say(("" if ok else "⚠️ ") + esc(text) + ("\n/coins lists your tracked coins · /drop COIN stops"
+                                                                  if ok else ""))
+            return
         name = " ".join(a for a in args if find_address(a) != address)
         ok, text = self.app.whales.add(address, name)
         if ok:
             self.app.refresh_wallets()
-            text += "\nYou'll get an alert the moment they buy something. /analyze to check their history."
+            getattr(self.app, "on_followed", lambda a: None)(address)
+            text += "\nProfiling their last trades now (holder or flipper?) — you'll get the result in a minute."
         await self.say(("✅ " if ok else "⚠️ ") + esc(text))
 
     def _whale(self, args) -> dict:
@@ -177,7 +198,39 @@ class Commands:
             raise ValueError("no whale by that name or address. /whales lists them.")
         return whale
 
+    async def _is_coin(self, address: str) -> bool:
+        """A coin (token mint), not a wallet: known coin, pump.fun-style address, or DexScreener has a price for it."""
+        from .whales import looks_like_coin
+        if looks_like_coin(self.app.db, address):
+            return True
+        if self.app.whales.get(address):
+            return False
+        info = await self.app.market.token(address, max_age=60)
+        return num(info.get("price_usd")) > 0
+
+    async def cmd_coins(self, args, reply_mint):
+        coins = self.app.engine.coins
+        if not coins.active():
+            await self.say("No tracked coins. /add COIN (or /add COIN at 850k with your entry) to get take-profit "
+                           "messages for a coin you hold or are watching.")
+            return
+        lines = ["<b>📍 Tracked coins</b> — plan: half at 2x, rest out at -35% from the top or -40% from entry"]
+        lines += coins.card_lines(limit=30)
+        lines.append("\n/drop COIN stops tracking one")
+        await self.say("\n".join(lines))
+
+    async def cmd_drop(self, args, reply_mint):
+        coin = self.app.engine.coins.find(" ".join(args) or reply_mint)
+        if not coin:
+            raise ValueError("not a tracked coin. /coins lists them.")
+        self.app.engine.coins.remove(coin["mint"])
+        await self.say(f"Stopped tracking ${esc(coin['symbol'])}.")
+
     async def cmd_remove(self, args, reply_mint):
+        coin = self.app.engine.coins.find(" ".join(args))
+        if coin and not self.app.whales.find(" ".join(args)):
+            await self.cmd_drop(args, reply_mint)
+            return
         w = self._whale(args)
         self.app.whales.remove(w["address"])
         self.app.refresh_wallets()
@@ -235,6 +288,9 @@ class Commands:
             await self.app.telegram.edit(msg_id, f"🔎 {esc(text)}…")
 
         r = await self.app.discovery.analyze_wallet(address, progress)
+        if r.get("ok") and r.get("trip_list"):
+            await progress("replaying their trades as a copier who buys a minute late")
+            r["profile"] = await self.app.engine.profiles.profile_history(address, r)
         await self.app.telegram.edit(msg_id, format_analysis(r), buttons=None if not r.get("ok") else [[
             ("➕ Follow", None, f"track:{address}"), ("GMGN", messages.whale_link(address), None)]])
 
@@ -290,8 +346,9 @@ class Commands:
         s = st["last_summary"]
         mode = "auto-follows them" if st["auto_follow"] else "sends them to you to follow"
         lines = [f"<b>🔎 Whale picks</b> — {'ON' if st['enabled'] else 'OFF (/set WHALE_PICKS on)'}, {mode}",
-                 f"Every {self.app.cfg.get('AUTO_SCOUT_HOURS'):g}h it researches today's biggest runners and picks wallets "
-                 "profitable right now (6+ trades, +1 SOL, 45%+ won, active in 2 days, no snipers/bots).",
+                 f"Every {self.app.cfg.get('AUTO_SCOUT_HOURS'):g}h it finds the early buyers of today's runners and replays "
+                 "their recent trades as a copier who buys a minute late. Only 🟢 holders / 🔵 swing traders whose copies "
+                 "made money (1.10x+ avg, 35%+ won over 4+ coins) are followed; 🟠 flippers are skipped.",
                  f"Last run: {ago(st['last_run']) + ' ago' if st['last_run'] else 'not yet'}"
                  + (f" · researched {len(s.get('coins', []))} coins, checked {s.get('checked', 0)} wallets, "
                     f"picked {s.get('picked', s.get('followed', 0))}" if s else ""),
@@ -518,6 +575,41 @@ class Commands:
             await self.say(f"⚠️ Couldn't upload it to Telegram ({esc(self.app.telegram.last_error)}). "
                            f"It's saved on your Mac at <code>{esc(zipped)}</code>")
 
+    async def cmd_card(self, args, reply_mint):
+        """Re-send the live card at the bottom of the chat (and pin it)."""
+        card = getattr(self.app, "card", None)
+        if not card:
+            raise ValueError("the live card isn't running")
+        self.app.db.set_meta("live_card_id", 0)
+        await card.update(force=True)
+
+    async def cmd_paper(self, args, reply_mint):
+        await self.say(format_paper(self.app))
+
+    async def cmd_live(self, args, reply_mint):
+        """/live — status · /live on|off · /live dry on|off (dry run: quotes + signing, nothing sent)."""
+        live = getattr(self.app, "live", None)
+        if not live:
+            raise ValueError("live trading isn't available in this build")
+        words = [a.lower() for a in args]
+        if words[:1] == ["dry"] and len(words) > 1:
+            self.app.set_setting("LIVE_DRY_RUN", words[1])
+        elif words and words[0] in {"on", "off"}:
+            if words[0] == "on" and not live.keypair:
+                raise ValueError(f"can't turn on: {live.key_problem}. Add TRADING_PRIVATE_KEY (a separate wallet!) to .env "
+                                 "and restart.")
+            self.app.set_setting("LIVE_TRADING", words[0])
+        await self.say(format_live(self.app))
+
+    async def cmd_sellall(self, args, reply_mint):
+        live = getattr(self.app, "live", None)
+        if not live or not live.open_trades():
+            await self.say("The live autopilot holds nothing.")
+            return
+        await self.say(f"Selling {len(live.open_trades())} live position(s)…")
+        n = await live.sell_all()
+        await self.say(f"Sold {n}. /live off stops new buys.")
+
     async def cmd_pause(self, args, reply_mint):
         self.app.set_setting("ALERTS_ENABLED", "0")
         await self.say("⏸ Alerts paused. Whales are still tracked and scored. /resume to turn them back on.")
@@ -556,6 +648,48 @@ def _amount_and_mc(args: list[str]) -> tuple[float, float]:
 
 # -- formatting shared by commands and the daily summary -----------------------------------------
 
+def format_live(app) -> str:
+    live = app.live
+    s = live.summary()
+    if not s["enabled"]:
+        state = "⚪️ OFF"
+    elif s["problem"]:
+        state = f"⚠️ ON but can't trade: {esc(s['problem'])}"
+    else:
+        state = "🧪 DRY RUN — quotes and signing only, nothing is sent" if s["dry_run"] else "🔴 ON — trading real SOL"
+    cfg = app.cfg
+    lines = [f"<b>🤖 Live autopilot</b> · {state}",
+             f"Wallet: <code>{s['wallet'] or 'none (TRADING_PRIVATE_KEY not set)'}</code>",
+             f"Rules: {cfg.get('LIVE_TRADE_SOL'):g} SOL per buy · max {cfg.get('LIVE_MAX_OPEN'):g} open · stops for the day "
+             f"at -{cfg.get('LIVE_DAILY_LOSS_SOL'):g} SOL · {cfg.get('LIVE_SLIPPAGE_BPS') / 100:g}% max slippage · same exit plan "
+             "as the paper autopilot",
+             f"{'Dry-run' if s['dry_run'] else 'Real'} trades: {s['closed']} closed, {s['won']} won, "
+             f"{s['realized_sol']:+.3f} SOL · today {s['today_sol']:+.3f} SOL"]
+    for t in s["open"]:
+        lines.append(f"• ${esc(t['symbol'])} open · {t['sol_in']:.3f} SOL in")
+    if s["error"]:
+        lines.append(f"Last problem: {esc(s['error'])}")
+    lines.append("\n/live on · /live off · /live dry off (trade for real) · /sellall")
+    return "\n".join(lines)
+
+
+def format_paper(app) -> str:
+    p = app.engine.paper
+    s = p.summary()
+    lines = [f"<b>🤖 Paper autopilot</b> · {usd(s['equity'])} ({pct(s['return_pct'], 1)}) from {usd(s['start'])}",
+             f"{s['closed']} closed · {s['won']} won · realized {usd(s['realized'], signed=True)} · "
+             f"best {usd(s['best'], signed=True)} · worst {usd(s['worst'], signed=True)}",
+             f"Rules: {usd(app.cfg.get('PAPER_TRADE_USD'))} per alert, {app.cfg.get('PAPER_SLIPPAGE_PCT'):g}% slippage each "
+             "way, half at 2x, trail 35% after 1.5x, stop -40%, out when the whale sells half."]
+    for t in s["open"]:
+        lines.append(f"• ${esc(t['symbol'])} {mult(t['multiple'])} · {usd(t['value'])} left"
+                     + (" · half sold" if t["half_taken"] else ""))
+    for t in app.db.rows("select * from paper_trades where status='closed' order by close_ts desc limit 8"):
+        pnl = t["proceeds_usd"] - t["size_usd"]
+        lines.append(f"{'🟩' if pnl >= 0 else '🟥'} ${esc(t['symbol'])} {usd(pnl, signed=True)} · {esc(t['close_reason'])}")
+    return "\n".join(lines)
+
+
 def format_analysis(r: dict) -> str:
     if not r.get("ok"):
         return f"⚠️ {esc(r.get('error', 'analysis failed'))}"
@@ -568,6 +702,12 @@ def format_analysis(r: dict) -> str:
              f"Median hold {dur(r['median_hold_s'])}"
              + (f" · typical entry {mc(r['median_entry_mc'])} MC" if r["median_entry_mc"] else "")]
     lines += [f"• {esc(w)}" for w in r["why"]]
+    prof = r.get("profile")
+    if prof:
+        ok, why = profiles.verdict(prof)
+        lines.append(f"<b>{esc(profiles.describe(prof))}</b>")
+        lines.append("✅ Copyable at your speed" if ok and prof.get("copy_n", 0) >= 4
+                     else f"🚫 {esc(why)}" if not ok else "• Not enough price history to replay their trades yet")
     return "\n".join(lines)
 
 

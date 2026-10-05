@@ -135,10 +135,17 @@ class Telegram:
                     self.sent += 1
         return msg_id
 
-    async def edit(self, message_id: int, text: str, buttons=None) -> None:
-        if message_id:
-            await self.api("editMessageText", chat_id=self.chat_id, message_id=message_id, text=text[:MAX_LEN],
-                           parse_mode="HTML", disable_web_page_preview=True, reply_markup=keyboard(buttons))
+    async def edit(self, message_id: int, text: str, buttons=None) -> bool:
+        """True if the message now shows `text` (including "not modified": it already did)."""
+        if not message_id:
+            return False
+        result = await self.api("editMessageText", chat_id=self.chat_id, message_id=message_id, text=text[:MAX_LEN],
+                                parse_mode="HTML", disable_web_page_preview=True, reply_markup=keyboard(buttons))
+        return bool(result) or "not modified" in self.last_error
+
+    async def pin(self, message_id: int) -> bool:
+        return bool(await self.api("pinChatMessage", chat_id=self.chat_id, message_id=message_id,
+                                   disable_notification=True))
 
     async def answer(self, callback_id: str, text: str = "") -> None:
         await self.api("answerCallbackQuery", callback_query_id=callback_id, text=text[:180] or None)

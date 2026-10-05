@@ -1,0 +1,2 @@
+# Only needed for the live autopilot (LIVE_TRADING): signs Jupiter swap transactions locally.
+solders>=0.21

@@ -125,6 +125,8 @@ def pair(mint=MINT, symbol="CASHED", price=0.00085, mc=850_000.0, liq=90_000.0, 
             p["txns"]["h24"] = {"buys": value // 2, "sells": value - value // 2}
         elif key == "change_h1":
             p["priceChange"]["h1"] = value
+        elif key == "dex":
+            p["dexId"] = value
         elif key == "socials":
             p["info"]["socials"], p["info"]["websites"] = [{"type": "twitter"}] * value, []
     return p
@@ -198,6 +200,11 @@ class FakeMarket(Market):
         self.sol = sol
         self.rug: dict | None = {"score": 5, "danger": [], "warn": []}
         self.watchlist: list[str] = []
+        self.gecko_every = 0.0
+        self.paths: dict[str, list] = {}   # mint -> [(ts, price)] served as GeckoTerminal candles
+
+    async def price_path(self, mint, start_ts, end_ts):
+        return [(t, p) for t, p in self.paths.get(mint, []) if start_ts <= t <= end_ts]
 
     def set_pair(self, **kw):
         p = pair(**kw)

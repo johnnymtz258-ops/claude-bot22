@@ -1,10 +1,7 @@
-import asyncio
 import sqlite3
 
-import pytest
-
-from fomo.commands import Commands, _amount_and_mc
-from tests.demo_app import COINS, WHALES, DemoApp
+from fomo.commands import _amount_and_mc
+from tests.demo_app import COINS, WHALES
 
 CHAT = "12345"
 
@@ -24,37 +21,14 @@ class FakeTelegram:
 
     async def edit(self, message_id, text, buttons=None):
         self.edits.append(text)
+        return message_id in {m["id"] for m in self.out}
+
+    async def pin(self, message_id):
+        self.pinned = message_id
+        return True
 
     async def answer(self, callback_id, text=""):
         self.answers.append(text)
-
-
-@pytest.fixture
-def chat():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    app = DemoApp()
-    loop.run_until_complete(app.seed())
-    app.telegram = FakeTelegram()
-    app.commands = Commands(app)
-    app.last_find = None
-
-    def say(text, reply_to=None, chat_id=CHAT):
-        msg = {"message": {"chat": {"id": int(chat_id)}, "text": text}}
-        if reply_to:
-            msg["message"]["reply_to_message"] = {"message_id": reply_to, "text": ""}
-        before = len(app.telegram.out)
-        loop.run_until_complete(app.commands.handle_update(msg))
-        return "\n".join(m["text"] for m in app.telegram.out[before:])
-
-    def press(data):
-        loop.run_until_complete(app.commands.handle_update(
-            {"callback_query": {"id": "cb", "data": data, "message": {"chat": {"id": int(CHAT)}}}}))
-        return app.telegram.answers[-1] if app.telegram.answers else ""
-
-    app.say, app.press, app.loop = say, press, loop
-    yield app
-    loop.close()
 
 
 def test_every_read_command_answers(chat):
@@ -144,3 +118,32 @@ def test_export_command_sends_the_file(chat, tmp_path):
     chat.telegram.send_document = send_document
     assert "Packing" in chat.say("/export")
     assert sent and sent[0][0] == "FomoBot_review.zip" and "no keys" in sent[0][2]
+
+
+def test_live_card_is_sent_pinned_then_edited(chat):
+    from fomo.card import CARD_BUTTONS, LiveCard
+    card = LiveCard(chat)
+    msg_id = chat.loop.run_until_complete(card.update())
+    assert msg_id and chat.telegram.pinned == msg_id
+    text = chat.telegram.out[-1]["text"]
+    assert "FomoBot" in text and "whales" in text and "🤖 Paper" in text and "You hold" in text
+    assert chat.telegram.out[-1]["buttons"] == CARD_BUTTONS
+    sent = len(chat.telegram.out)
+    chat.loop.run_until_complete(card.update())             # nothing changed: no edit, no new message
+    assert len(chat.telegram.out) == sent and chat.telegram.edits == []
+    chat.loop.run_until_complete(card.update(force=True))   # forced: edited in place
+    assert len(chat.telegram.out) == sent and len(chat.telegram.edits) == 1
+
+
+def test_card_buttons_run_commands(chat):
+    chat.card = None
+    chat.press("cmd:positions")
+    assert "Your positions" in chat.telegram.out[-1]["text"]
+    chat.press("cmd:pause")
+    assert chat.cfg.flag("ALERTS_ENABLED") is False
+    chat.press("cmd:resume")
+    assert chat.cfg.flag("ALERTS_ENABLED") is True
+
+
+def test_paper_command(chat):
+    assert "Paper autopilot" in chat.say("/paper")

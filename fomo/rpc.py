@@ -140,6 +140,26 @@ class SolanaRPC:
                 continue
         return total
 
+    async def token_balance_raw(self, owner: str, mint: str) -> int | None:
+        """Balance of `mint` held by `owner` in the token's smallest unit (what swaps are priced in)."""
+        result = await self.call("getTokenAccountsByOwner", [owner, {"mint": mint},
+                                                            {"encoding": "jsonParsed", "commitment": "confirmed"}])
+        if not isinstance(result, dict):
+            return None
+        total = 0
+        for item in result.get("value") or []:
+            try:
+                total += int(item["account"]["data"]["parsed"]["info"]["tokenAmount"]["amount"])
+            except (KeyError, TypeError, ValueError):
+                continue
+        return total
+
+    async def sol_balance(self, owner: str) -> float | None:
+        result = await self.call("getBalance", [owner, {"commitment": "confirmed"}])
+        if isinstance(result, dict) and "value" in result:
+            return int(result["value"]) / 1e9
+        return None
+
     def health(self) -> dict:
         return {"calls": self.calls, "errors": self.errors, "rate_limited": self.rate_limited,
                 "last_error": self.last_error, "last_ok_ts": int(self.last_ok_ts)}

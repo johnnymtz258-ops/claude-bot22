@@ -1,21 +1,17 @@
-"""Whale picks: finds wallets that are profitable right now in today's runners and sends them to you.
-
-By default it only *suggests* (you tap ➕ Follow) — following picks automatically (AUTO_WHALES) made
-entries worse in practice, so it's off unless you turn it on.
+"""Whale scanner: finds wallets that were early in today's runners and keeps the ones YOU can copy.
 
 Every AUTO_SCOUT_HOURS:
-  1. Pick up to 3 coins that just ran: today's biggest community runners (2x+ in 24h with real
-     liquidity) and coins your own alerts caught that went 3x+.
+  1. Pick up to 3 coins that just ran (today's biggest runners, and coins your alerts caught that went 3x+).
   2. Find each coin's early buyers (same method as /find), skipping snipers, creators and bots.
-  3. Read each candidate's recent swaps (same as /analyze) and auto-follow only wallets that are
-     profitable *right now*: 6+ closed round trips, +1 SOL or more, 45%+ won, traded in the last
-     2 days, not a sub-minute bot.
-Every day it re-checks the whales it added (never the ones you added) and drops any that:
-  - turned COLD (copying them lost money), or
-  - haven't traded for 4 days, or
-  - after 3 days still have too few copies to judge and their own recent trading is no longer
-    profitable.
-Every follow and drop is reported in Telegram (silently) with the reason.
+  3. Read each candidate's recent trades and replay them as a copier who buys COPY_DELAY_SECONDS late
+     (GeckoTerminal minute candles), with the exit plan. A wallet qualifies only if it is a 🟢 holder or
+     🔵 swing trader (not a 🟠 flipper that dumps within minutes), is profitable itself, and copying it at
+     your speed made money: avg ≥ 1.10x over 4+ coins, 35%+ won.
+  4. AUTO_WHALES on: strong ones are followed automatically (you're told, with an Unfollow button).
+     Off, or no candle data: they're sent to you as picks with ➕ Follow buttons.
+Every day it re-checks the whales it added (never the ones you added) and drops any that turned into a
+flipper, stopped being copyable, went COLD, or stopped trading. Whales you added that turn out to be
+flippers or losers are muted for entries automatically, and you get one message saying why.
 """
 from __future__ import annotations
 
@@ -23,6 +19,7 @@ import asyncio
 import json
 import time
 
+from . import profiles
 from .discovery import Discovery
 from .util import esc, mc, pct, short
 
@@ -33,6 +30,24 @@ MAX_IDLE_DAYS = 4
 RECHECK_AFTER_DAYS = 3
 CANDIDATE_RETRY_DAYS = 3
 SMALL_BUDGET = {"pages": 40, "samples": 60, "dense": 300, "holders": 12, "wallet_txs": 150}
+
+
+COPY_MIN_COINS = 4
+COPY_MIN_AVG = 1.10
+COPY_MIN_WIN = 0.35
+
+
+def copyable(prof: dict | None) -> tuple[str, str]:
+    """('strong'|'unscored'|'no', reason) for a candidate's profile."""
+    if not prof:
+        return "unscored", "no price history to replay"
+    if prof["style"] in ("FLIPPER", "BOT"):
+        return "no", profiles.verdict(prof)[1]
+    if prof.get("copy_n", 0) < COPY_MIN_COINS:
+        return "unscored", f"{profiles.STYLE_LABEL[prof['style']]}, only {prof.get('copy_n', 0)} coins with price history"
+    if prof["copy_avg"] < COPY_MIN_AVG or prof["copy_win"] < COPY_MIN_WIN:
+        return "no", f"copying at your speed: {prof['copy_avg']:.2f}x avg, {prof['copy_win'] * 100:.0f}% won"
+    return "strong", profiles.describe(prof)
 
 
 def qualifies(r: dict, now: float | None = None) -> tuple[bool, str]:
@@ -54,7 +69,7 @@ def qualifies(r: dict, now: float | None = None) -> tuple[bool, str]:
 
 
 class WhaleScout:
-    def __init__(self, cfg, db, rpc, market, whales, runners, notify, refresh_wallets):
+    def __init__(self, cfg, db, rpc, market, whales, runners, notify, refresh_wallets, profiler=None):
         self.cfg = cfg
         self.db = db
         self.whales = whales
@@ -64,6 +79,9 @@ class WhaleScout:
         self.discovery = Discovery(rpc, market, db, cfg)
         self.discovery.budget = dict(SMALL_BUDGET if cfg.uses_helius else
                                      {"pages": 10, "samples": 30, "dense": 120, "holders": 6, "wallet_txs": 80})
+        self.profiler = profiler or profiles.Profiler(db, cfg, market, self.discovery)
+        if self.profiler.discovery is None:
+            self.profiler.discovery = self.discovery
         self.last_run = int(db.get_meta("scout_last_run", "0") or 0)
         self.last_error = ""
         self.running = False
@@ -77,6 +95,7 @@ class WhaleScout:
                     await self.scout()
                 if self.cfg.flag("AUTO_WHALES"):
                     await self.prune()
+                await self.flag_followed()
             except Exception as exc:
                 self.last_error = f"{time.strftime('%H:%M:%S')} {type(exc).__name__}: {exc}"
             finally:
@@ -119,19 +138,27 @@ class WhaleScout:
                 if seen and now - int(seen["analyzed_ts"] or 0) < CANDIDATE_RETRY_DAYS * 86400:
                     continue
                 result = await self.discovery.analyze_wallet(cand["wallet"])
-                result["last_trade_ts"] = await self._last_trade_ts(cand["wallet"])
+                result["last_trade_ts"] = result.get("last_trade_ts") or await self._last_trade_ts(cand["wallet"])
                 checked += 1
                 ok, reason = qualifies(result, now)
-                self._remember(cand, coin, result, ("followed" if auto else "picked") if ok else "rejected", reason, now)
-                if ok and not auto:
-                    room -= 1
-                    picks.append((cand, coin, result, reason))
-                elif ok:
+                level, why = ("no", reason)
+                prof = None
+                if ok:
+                    prof = await self.profiler.profile_history(cand["wallet"], result) if result.get("trip_list") else None
+                    level, why = copyable(prof)
+                    reason = why if level != "unscored" else f"{reason} · {why}"
+                if level == "strong" and auto:
                     name = f"auto-{short(cand['wallet'])[:4]}"
                     added, _ = self.whales.add(cand["wallet"], name, source="auto")
                     if added:
                         room -= 1
+                        self.profiler.save(cand["wallet"], prof)
                         followed.append((cand, coin, result, reason))
+                elif level in ("strong", "unscored"):
+                    room -= 1
+                    picks.append((cand, coin, result, reason))
+                status = "followed" if (level == "strong" and auto) else "picked" if level != "no" else "rejected"
+                self._remember(cand, coin, result, status, reason, now)
         if followed:
             self.refresh_wallets()
             for cand, coin, result, reason in followed:
@@ -144,7 +171,7 @@ class WhaleScout:
                               ("GMGN", f"https://gmgn.ai/sol/address/{cand['wallet']}", None)]],
                     silent=True, kind="AUTO")
         if picks:
-            lines = ["🔎 <b>Whale picks</b> — profitable right now and early in today's runners. Tap to follow:"]
+            lines = ["🔎 <b>Whale picks</b> — early in today's runners and not flippers. Tap to follow:"]
             buttons = []
             for i, (cand, coin, result, reason) in enumerate(picks, 1):
                 lines.append(f"{i}. <code>{cand['wallet']}</code>\n   early in ${esc(coin['symbol'])} at "
@@ -184,7 +211,10 @@ class WhaleScout:
             age_days = (now - int(w["added_ts"] or now)) / 86400
             last = int(w["last_trade_ts"] or 0) or int(w["added_ts"] or now)
             reason = ""
-            if stats["status"] == "COLD":
+            send_ok, why = profiles.verdict(self.profiler.profile_local(w["address"]), self.cfg.get("MIN_COPY_SCORE"))
+            if not send_ok:
+                reason = why
+            elif stats["status"] == "COLD":
                 reason = f"copying them lost money ({pct(stats['avg'])} over {stats['n']} buys)"
             elif (now - last) / 86400 >= MAX_IDLE_DAYS:
                 reason = f"no trades for {int((now - last) / 86400)} days"
@@ -204,6 +234,26 @@ class WhaleScout:
             await self.notify("🤖 <b>Autopilot dropped " + str(len(dropped)) + " whale(s)</b>\n" + "\n".join(
                 f"• {esc(w['name'])}: {esc(r)}" for w, r in dropped), silent=True, kind="AUTO")
         return dropped
+
+    async def flag_followed(self) -> list[str]:
+        """Tell you once about each whale you follow that turned out to be a flipper or a losing copy."""
+        flagged = []
+        for w in self.db.rows("select * from whales where active=1 and source<>'auto'"):
+            prof = self.profiler.get(w["address"])
+            ok, why = profiles.verdict(prof, self.cfg.get("MIN_COPY_SCORE"))
+            key = f"flagged:{w['address']}"
+            if ok or self.db.get_meta(key) == prof.get("style", "?"):
+                continue
+            self.db.set_meta(key, prof.get("style", "?"))
+            flagged.append(w["address"])
+            await self.notify(
+                f"🚫 <b>{esc(w['name'])}: entry alerts stopped</b>\n{esc(why)}.\n"
+                "Still tracked and scored — its buys show in /status as blocked. Remove it to make room for "
+                "whales you can actually copy, or /set BLOCK_FLIPPERS off to hear every buy again.",
+                buttons=[[("Remove", None, f"untrack:{w['address']}"),
+                          ("GMGN", f"https://gmgn.ai/sol/address/{w['address']}", None)]],
+                silent=True, kind="AUTO")
+        return flagged
 
     def status(self) -> dict:
         try:

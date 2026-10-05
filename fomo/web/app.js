@@ -122,19 +122,21 @@
   }
 
   // Single series line (value over time) with a zero baseline, area wash, end label and crosshair.
-  function lineChart(node, points, fmt) {
+  // opts.base: reference value drawn as the baseline (0 for profit; the starting balance for the paper balance)
+  function lineChart(node, points, fmt, opts = {}) {
     node.replaceChildren();
-    if (points.length < 2) { node.append(el("div", { class: "empty" }, "The curve appears after your first two sells.")); return; }
+    const base = opts.base || 0;
+    if (points.length < 2) { node.append(el("div", { class: "empty" }, opts.empty || "The curve appears after your first two sells.")); return; }
     const W = Math.max(node.clientWidth, 320), H = 240, L = 56, R = 64, T = 24, B = 26;
     const xs = points.map((p) => p[0]), ys = points.map((p) => p[1]);
     const x0 = Math.min(...xs), x1 = Math.max(...xs);
-    const ticks = niceTicks(Math.min(0, ...ys), Math.max(0, ...ys));
+    const ticks = niceTicks(Math.min(base, ...ys), Math.max(base, ...ys));
     const y0 = ticks[0], y1 = ticks[ticks.length - 1];
     const sx = (x) => L + ((x - x0) / Math.max(1, x1 - x0)) * (W - L - R);
     const sy = (y) => T + (1 - (y - y0) / Math.max(1e-9, y1 - y0)) * (H - T - B);
-    const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Realized profit over time" });
+    const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": opts.label || "Realized profit over time" });
     ticks.forEach((t) => {
-      svg.append(svgEl("line", { x1: L, x2: W - R, y1: sy(t), y2: sy(t), class: t === 0 ? "base-line" : "grid-line" }));
+      svg.append(svgEl("line", { x1: L, x2: W - R, y1: sy(t), y2: sy(t), class: t === 0 && !base ? "base-line" : "grid-line" }));
       const lab = svgEl("text", { x: L - 8, y: sy(t) + 4, "text-anchor": "end", class: "axis-text" });
       lab.textContent = fmt(t);
       svg.append(lab);
@@ -149,7 +151,8 @@
     });
     const color = cssVar("--series-pos");
     const path = points.map((p, i) => `${i ? "L" : "M"}${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join("");
-    svg.append(svgEl("path", { d: `${path}L${sx(x1)},${sy(0)}L${sx(x0)},${sy(0)}Z`, fill: color, "fill-opacity": 0.1 }));
+    if (base) svg.append(svgEl("line", { x1: L, x2: W - R, y1: sy(base), y2: sy(base), class: "base-line" }));
+    svg.append(svgEl("path", { d: `${path}L${sx(x1)},${sy(base)}L${sx(x0)},${sy(base)}Z`, fill: color, "fill-opacity": 0.1 }));
     svg.append(svgEl("path", { d: path, fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
     const last = points[points.length - 1];
     svg.append(svgEl("circle", { cx: sx(last[0]), cy: sy(last[1]), r: 4, fill: color, stroke: cssVar("--surface-1"), "stroke-width": 2 }));
@@ -339,14 +342,25 @@
     const scalp = a.n >= 5 && a.dead >= 0.6 * a.n;
     return `${scalp ? "⚡ " : ""}${a.dead}/${a.n}`;
   }
+  const STYLE = { HOLDER: "🟢 Holder", SWING: "🔵 Swing", FLIPPER: "🟠 Flipper", BOT: "🤖 Bot", NEW: "🆕 New" };
+  function styleCell(w) {
+    const p = w.profile;
+    if (!p) return "—";
+    if (p.style === "NEW") return el("span", {}, el("b", {}, STYLE.NEW), el("br"), el("span", { class: "muted" }, `${p.trips} trades so far — profiling`));
+    const copy = p.copy_n >= 3 ? `${p.copy_avg.toFixed(2)}x avg · ${Math.round(p.copy_win * 100)}% won (${p.copy_n})` : "not enough coins yet";
+    return el("span", { title: w.blocked_why || "" }, el("b", {}, STYLE[p.style] || p.style), w.blocked ? " · 🚫 blocked" : "",
+      el("br"), el("span", { class: "muted" }, `sells ~${dur(p.median_hold_s)} in · copy ${copy}`));
+  }
   async function renderWhales() {
     renderScout().catch(() => {});
     const rows = await api("/api/whales");
-    table($("whales"), ["Whale", "Status", { label: "Copies", num: 1 }, { label: "Won", num: 1 }, { label: "Avg", num: 1 },
+    rows.sort((a, b) => (a.blocked - b.blocked) || (((b.profile || {}).copy_avg || 0) - ((a.profile || {}).copy_avg || 0)));
+    table($("whales"), ["Whale", "Style & copy score", "Status", { label: "Copies", num: 1 }, { label: "Won", num: 1 }, { label: "Avg", num: 1 },
       { label: "Median", num: 1 }, { label: "Hit 2x", num: 1 }, { label: "Dip before run", num: 1 },
       { label: "Coins dead 6h later", num: 1 }, "Last trade", ""],
       rows.map((w) => el("tr", { class: "click", onclick: () => openWhale(w.address) },
         td(el("span", {}, el("b", {}, w.name), " ", el("span", { class: "muted mono" }, short(w.address)))),
+        td(styleCell(w), "wrap"),
         td(el("span", { class: "status-badge" }, STATUS[w.status], w.muted ? " · 🔕 muted" : w.auto_muted === 1 ? " · auto-muted" : "")),
         td(String(w.n), "num"), td(w.n ? `${Math.round(w.win_rate * 100)}%` : "—", "num"),
         td(w.n ? pct(w.avg) : "—", `num ${signClass(w.avg)}`), td(w.n ? pct(w.median) : "—", `num ${signClass(w.median)}`),
@@ -387,6 +401,29 @@
         td(coinCell(p.symbol, "", p.mint)), td(usd(p.bought), "num"), td(usd(p.sold), "num"),
         td(usd(p.realized, true), `num ${signClass(p.realized)}`), td(pct(p.pnl_pct), `num ${signClass(p.pnl_pct)}`), td(ago(p.last_ts)))),
       "No closed coins yet.");
+  }
+
+  async function renderPaper() {
+    const d = await api("/api/paper");
+    const s = d.summary;
+    $("paper-tiles").replaceChildren(
+      tile("Paper balance", usd(s.equity), `${pct(s.return_pct)} from ${usd(s.start)}`, signClass(s.equity - s.start), true),
+      tile("Closed trades", String(s.closed), s.closed ? `${s.won} won · ${Math.round((s.won / s.closed) * 100)}%` : "none yet"),
+      tile("Realized", usd(s.realized, true), s.closed ? `best ${usd(s.best, true)} · worst ${usd(s.worst, true)}` : "", signClass(s.realized)),
+      tile("Open now", String(s.open.length), d.enabled ? "trading every alert" : "paper trading is off (Settings)"));
+    lineChart($("paper-curve"), d.curve, (v) => usd(v), { base: s.start, label: "Paper balance over time",
+      empty: "The balance line starts once the autopilot has traded for a few minutes." });
+    $("paper-note").textContent = d.curve.length ? "every 5 minutes, open trades at market" : "";
+    $("paper-rules").textContent = `${usd(d.rules.size)} a trade · ${d.rules.slippage}% slippage each way · half at 2x · out at -${d.rules.trail}% from top or -${d.rules.stop}%`;
+    table($("paper-open"), ["Coin", { label: "Now", num: 1 }, { label: "Value left", num: 1 }, { label: "Top", num: 1 }, "Half sold", "Opened"],
+      s.open.map((t) => el("tr", { class: "click", onclick: () => openCoin(t.mint) },
+        td(coinCell(t.symbol, "", t.mint)), td(mult(t.multiple), `num ${signClass(t.multiple - 1)}`), td(usd(t.value), "num"),
+        td(mult(t.peak_x), "num"), td(t.half_taken ? "yes" : "—"), td(ago(t.open_ts)))), "No open paper trades.");
+    table($("paper-closed"), ["Coin", { label: "In", num: 1 }, { label: "Out", num: 1 }, { label: "P/L", num: 1 }, "Why it sold", "Closed"],
+      d.closed.map((t) => el("tr", { class: "click", onclick: () => openCoin(t.mint) },
+        td(coinCell(t.symbol, "", t.mint)), td(usd(t.size_usd), "num"), td(usd(t.proceeds_usd), "num"),
+        td(usd(t.proceeds_usd - t.size_usd, true), `num ${signClass(t.proceeds_usd - t.size_usd)}`),
+        td(t.close_reason, "wrap"), td(ago(t.close_ts)))), "No closed paper trades yet.");
   }
 
   async function renderStats() {
@@ -440,7 +477,7 @@
     const sum = s.last_summary || {};
     $("scout-summary").textContent = `${s.enabled ? "On" : "Off (Settings: WHALE_PICKS)"} · ${s.auto_follow ? "auto-follows picks" : "suggests, you follow"} · last run ${s.last_run ? ago(s.last_run) : "not yet"}`
       + (sum.coins ? ` — researched ${plural(sum.coins.length, "coin")}, checked ${plural(sum.checked || 0, "wallet")}, picked ${(sum.picked || 0) + (sum.followed || 0)}` : "")
-      + ". Wallets profitable right now and early in today's runners. Tap Follow on the ones you like.";
+      + ". Early buyers of today's runners, replayed as a copier who buys a minute late: holders whose copies made money are followed, flippers are skipped.";
     $("scout-run").disabled = s.running;
     table($("scout"), ["Wallet", "Found in", "Status", { label: "Profit", num: 1 }, { label: "Won", num: 1 }, { label: "Trades", num: 1 }, "Why", ""],
       s.candidates.map((c) => el("tr", {}, td(el("span", { class: "mono" }, short(c.address))), td(c.coins.split(",").filter(Boolean).map((x) => `$${x}`).join(", ")),
@@ -597,7 +634,7 @@
   }
 
   // ---------- wiring --------------------------------------------------------------------
-  const renderers = { live: renderLive, hot: renderHot, whales: renderWhales, trades: renderTrades, exits: renderExits, stats: renderStats, find: renderStatus, settings: renderSettings };
+  const renderers = { live: renderLive, hot: renderHot, whales: renderWhales, paper: renderPaper, trades: renderTrades, exits: renderExits, stats: renderStats, find: renderStatus, settings: renderSettings };
   async function refresh() {
     try { await renderers[activeTab](); }
     catch (err) { $("status").replaceChildren(el("span", { class: "pill bad" }, el("span", { class: "dot" }), `Bot not reachable: ${err.message}`)); }
