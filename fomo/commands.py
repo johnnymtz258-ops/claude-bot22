@@ -199,14 +199,7 @@ class Commands:
         return whale
 
     async def _is_coin(self, address: str) -> bool:
-        """A coin (token mint), not a wallet: known coin, pump.fun-style address, or DexScreener has a price for it."""
-        from .whales import looks_like_coin
-        if looks_like_coin(self.app.db, address):
-            return True
-        if self.app.whales.get(address):
-            return False
-        info = await self.app.market.token(address, max_age=60)
-        return num(info.get("price_usd")) > 0
+        return await self.app.engine.coins.is_coin(address)
 
     async def cmd_coins(self, args, reply_mint):
         coins = self.app.engine.coins
@@ -772,6 +765,15 @@ def format_stats(app, days: int = 30) -> str:
     lines.append(f"\n<b>Your trades</b>: realized {usd(s['realized'], signed=True)} · open "
                  f"{usd(s['unrealized'], signed=True)} · {s['closed']} closed coin{'' if s['closed'] == 1 else 's'} · "
                  f"{s['win_rate'] * 100:.0f}% won")
+    if app.cfg.flag("PAPER_TRADING"):
+        ps = app.engine.paper.summary()
+        lines.append(f"<b>🤖 Paper autopilot</b>: {usd(ps['equity'])} ({pct(ps['return_pct'], 1)} since start) · "
+                     f"{ps['closed']} closed, {ps['won']} won")
+    live = getattr(app, "live", None)
+    if live and app.cfg.flag("LIVE_TRADING"):
+        ls = live.summary()
+        lines.append(f"<b>🔴 Live autopilot</b>{' (dry run)' if ls['dry_run'] else ''}: {ls['realized_sol']:+.3f} SOL · "
+                     f"{ls['closed']} closed, {ls['won']} won · today {ls['today_sol']:+.3f} SOL")
     top = [w for w in app.whales.leaderboard(days) if w["n"]][:5]
     if top:
         lines.append("<b>Whales</b>: " + " · ".join(

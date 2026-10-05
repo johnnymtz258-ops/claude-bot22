@@ -70,6 +70,11 @@ class Dashboard:
             "alerts_24h": a.db.scalar("select count(*) from alerts where kind='BUY' and grade<>'SKIP' and ts>=?",
                                       (int(time.time()) - 86400,), default=0),
             "me": s, "copies": rep["all"], "funnel": reports.alert_funnel(a.db),
+            "paper": {k: v for k, v in a.engine.paper.summary().items() if k != "open"},
+            "live": ({"enabled": a.live.cfg.flag("LIVE_TRADING"), "dry_run": a.live.dry_run,
+                      "problem": a.live.ready()[1], "realized_sol": a.live.summary()["realized_sol"]}
+                     if getattr(a, "live", None) else None),
+            "tracked_coins": len(a.engine.coins.active()),
             "funnel_labels": reports.FUNNEL_LABELS, "errors": [e for e in (a.engine.last_error, a.tracker.last_error,
                                                                   a.rpc.health()["last_error"]) if e][:3],
         })
@@ -191,8 +196,56 @@ class Dashboard:
 
     async def settings(self, request):
         cfg = self.app.cfg
-        return _json([{"name": n, "value": cfg.get(n), "help": t.help, "min": t.lo, "max": t.hi, "bool": t.is_bool}
-                      for n, t in TUNABLES.items()])
+        rows = [{"name": n, "value": cfg.get(n), "help": t.help, "min": t.lo, "max": t.hi, "bool": t.is_bool,
+                 "group": setting_group(n)} for n, t in TUNABLES.items()]
+        rows.sort(key=lambda r: GROUP_ORDER.index(r["group"]))
+        return _json(rows)
+
+    # -- tracked coins & live autopilot ------------------------------------------------------------
+    async def coins(self, request):
+        tracker = self.app.engine.coins
+        out = []
+        for coin in tracker.active():
+            st = tracker.status(coin)
+            st.pop("coach", None)
+            out.append(st)
+        return _json(out)
+
+    async def add_coin(self, request):
+        body = await self._body(request)
+        mint = await self.app.market.resolve_mint(find_address(body.get("mint")) or str(body.get("mint") or ""))
+        if not is_address(mint):
+            raise ValueError("coin address needed")
+        ok, text = await self.app.engine.coins.add(mint, parse_amount(body.get("entry_mc")))
+        return _json({"ok": ok, "message": text}, 200 if ok else 400)
+
+    async def remove_coin(self, request):
+        self.app.engine.coins.remove(request.match_info["mint"])
+        return _json({"ok": True})
+
+    async def live_view(self, request):
+        live = getattr(self.app, "live", None)
+        if not live:
+            return _json({"available": False})
+        return _json({"available": True, **live.summary(), "size": self.app.cfg.get("LIVE_TRADE_SOL"),
+                      "max_open": self.app.cfg.get("LIVE_MAX_OPEN"), "daily_loss": self.app.cfg.get("LIVE_DAILY_LOSS_SOL")})
+
+    async def live_action(self, request):
+        live = getattr(self.app, "live", None)
+        action = request.match_info["action"]
+        if not live:
+            return _json({"error": "live trading unavailable"}, 400)
+        if action in ("on", "off"):
+            if action == "on" and not live.keypair:
+                return _json({"error": f"can't turn on: {live.key_problem}"}, 400)
+            self.app.set_setting("LIVE_TRADING", action)
+        elif action in ("dry-on", "dry-off"):
+            self.app.set_setting("LIVE_DRY_RUN", action[4:])
+        elif action == "sellall":
+            await live.sell_all()
+        else:
+            return _json({"error": "unknown action"}, 400)
+        return _json({"ok": True})
 
     async def find_status(self, request):
         job = request.match_info.get("id")
@@ -214,6 +267,9 @@ class Dashboard:
     async def add_whale(self, request):
         body = await self._body(request)
         address = find_address(body.get("address")) or str(body.get("address") or "")
+        if is_address(address) and await self.app.engine.coins.is_coin(address):
+            ok, text = await self.app.engine.coins.add(address)   # a coin, not a wallet: track it instead
+            return _json({"ok": ok, "message": text}, 200 if ok else 400)
         ok, text = self.app.whales.add(address, str(body.get("name") or ""), source=str(body.get("source") or "dashboard"))
         if ok:
             self.app.refresh_wallets()
@@ -292,6 +348,11 @@ class Dashboard:
         r.add_get("/api/hot", self.hot)
         r.add_get("/api/whales", self.whales)
         r.add_get("/api/paper", self.paper)
+        r.add_get("/api/coins", self.coins)
+        r.add_post("/api/coins", self.add_coin)
+        r.add_post("/api/coins/{mint}/remove", self.remove_coin)
+        r.add_get("/api/live", self.live_view)
+        r.add_post("/api/live/{action}", self.live_action)
         r.add_get("/api/whale/{addr}", self.whale)
         r.add_get("/api/coin/{addr}", self.coin)
         r.add_get("/api/lookup/{addr}", self.lookup)
@@ -331,3 +392,23 @@ async def start_dashboard(app) -> None:
         return
     while True:
         await asyncio.sleep(3600)
+
+
+GROUP_ORDER = ["Automation", "Live trading (real money)", "Which buys get sent", "Selling", "Scoring", "Other"]
+_GROUPS = {
+    "Automation": ("AUTO_", "WHALE_PICKS", "PAPER_", "LIVE_CARD", "RUNNER_ALERTS"),
+    "Live trading (real money)": ("LIVE_TRADING", "LIVE_DRY_RUN", "LIVE_TRADE", "LIVE_MAX", "LIVE_DAILY", "LIVE_SLIP",
+                                  "LIVE_PRIO"),
+    "Which buys get sent": ("MIN_WHALE", "MAX_ENTRY", "CONFIRM_", "LATE_CHASE", "DUMP_GATE", "BLOCK_FLIPPERS",
+                            "MIN_COPY", "MICRO_", "HIDE_", "QUIET_", "ALERTS_ENABLED", "REPEAT_", "CONFLUENCE",
+                            "MIN_SELL", "REBUY", "RUNNER_"),
+    "Selling": ("PROTECT_", "STOP_LOSS", "PROFIT_LADDER", "TAKE_INITIAL", "SCALP_", "RUG_"),
+    "Scoring": ("COPY_", "AUTO_MUTE", "MANUAL_FEE"),
+}
+
+
+def setting_group(name: str) -> str:
+    for group in GROUP_ORDER[:-1]:
+        if name.startswith(_GROUPS[group]):
+            return group
+    return "Other"

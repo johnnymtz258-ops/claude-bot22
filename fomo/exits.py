@@ -226,8 +226,10 @@ def coach(db, cfg, position: dict, holders: list[dict], now: int | None = None) 
         hint = f"Down {100 - multiple * 100:.0f}% but {whales_in} whale{'s' if whales_in > 1 else ''} still in — dips are normal"
     elif holders and not whales_in:
         hint = "All tracked whales are out"
-    else:
+    elif whales_in:
         hint = "Hold while the whales hold"
+    else:
+        hint = f"Plan: half at 2x, rest out at -{trail:.0f}% from the top"
     return {"multiple": multiple, "peak_multiple": peak_multiple, "from_peak_pct": from_peak,
             "whales_in": whales_in, "hint": hint, "entry_price": entry, "peak_price": peak,
             "scalp": scalp, "protect_after": protect_after, "trail": trail}

@@ -12,16 +12,21 @@ WHAT HAPPENS BY ITSELF
      why, your positions with the plan, and the paper balance. Tap its buttons instead of typing.
   🔍 Every whale is profiled: 🟢 holder · 🔵 swing · 🟠 flipper · 🤖 bot. Flippers (sell within minutes)
      and losing whales are tracked but never alerted — you'd be buying their exit.
-  🔎 Every 4h the scanner looks for new holders in today's runners and follows the ones whose trades
+  🔎 Every 2h the scanner looks for new holders in today's runners and follows the ones whose trades
      made money for a copier buying a minute late (you get a message, with Unfollow).
   🤖 The paper autopilot trades $50 of a pretend $1,000 on every alert with the plan below.
+
+TRACK A COIN YOU HOLD
+  /add COIN  (or /add COIN at 850k with your entry) — or paste it in the dashboard's My trades tab.
+  You get told at 2x / 3x / 5x / 10x, if it gives back 35% after 1.5x, at -40%, and when whales sell it.
+  /coins lists them · /drop COIN stops one.
 
 EVERY ALERT HAS THE SAME PLAN
   Sell half at 2x. Sell the rest if it falls 35% from its top, or 40% below your entry.
   Use the 🎯 Ping me at 2x button. The bot also nudges you at 2x / after a 35% drop / at -40%.
 
 USEFUL COMMANDS (optional)
-  /positions   /whales   /paper   /stats   /analyze WALLET   /find COIN   /export
+  /positions   /whales   /paper   /coins   /stats   /analyze WALLET   /find COIN   /export
   /set NAME VALUE changes a setting (/settings lists them), e.g. /set PAPER_TRADE_USD 25
 
 TO SEND ME DATA FOR TUNING

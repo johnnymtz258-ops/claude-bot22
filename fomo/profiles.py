@@ -194,7 +194,7 @@ class Profiler:
             n += 1
         return n
 
-    async def profile_history(self, address: str, analysis: dict | None = None, max_coins: int = 15) -> dict | None:
+    async def profile_history(self, address: str, analysis: dict | None = None, max_coins: int = 12) -> dict | None:
         """Profile any wallet from its recent on-chain trades + minute candles (used by the scanner)."""
         if not (self.discovery and self.market):
             return None

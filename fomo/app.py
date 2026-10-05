@@ -227,8 +227,28 @@ class App:
         return "\n".join(lines)
 
 
+def single_instance(state_dir) -> object | None:
+    """Hold a lock so two copies of the bot never run at once (double alerts, double trades)."""
+    try:
+        import fcntl
+    except ImportError:
+        return object()
+    state_dir.mkdir(parents=True, exist_ok=True)
+    handle = open(state_dir / "bot.lock", "w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
 def main() -> None:
     cfg = config.load()
+    lock = single_instance(cfg.state_dir)
+    if lock is None:
+        print("FomoBot is already running in another window. Close that one first — this one stops.")
+        return
     print(f"FomoBot Whale Copy {VERSION} — database {cfg.db_path}")
     if not cfg.telegram_token:
         print("⚠️  TELEGRAM_BOT_TOKEN is missing in .env — alerts will only print here.")

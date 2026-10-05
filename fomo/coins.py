@@ -42,6 +42,15 @@ class CoinTracker:
             return self.db.row("select * from coins where mint=? and active=1", (address,))
         return self.db.row("select * from coins where lower(symbol)=lower(?) and active=1", (t,))
 
+    async def is_coin(self, address: str) -> bool:
+        """A coin (token mint), not a wallet: known coin, pump.fun-style address, or DexScreener prices it."""
+        from .whales import looks_like_coin
+        if looks_like_coin(self.db, address):
+            return True
+        if self.whales.get(address):
+            return False
+        return num((await self.market.token(address, max_age=60)).get("price_usd")) > 0
+
     async def add(self, mint: str, entry_mc: float = 0.0, source: str = "manual") -> tuple[bool, str]:
         info = await self.market.token(mint, max_age=15)
         price, mcap = num(info.get("price_usd")), num(info.get("mc_usd"))
@@ -80,7 +89,12 @@ class CoinTracker:
                   "episode_ts": coin["added_ts"], "first_ts": coin["added_ts"]}
         holders = self.whales.holders_of(coin["mint"])
         c = exits.coach(self.db, self.cfg, pseudo, holders, now)
-        return {**coin, "price": price, "mc_now": num(info.get("mc_usd")), "ref_price": ref, "ref_label": label,
+        hint = c.get("hint", "")
+        mc_now = num(info.get("mc_usd"))
+        if hint.startswith("Plan:") and c.get("multiple", 0) > 0 and mc_now > 0:
+            hint = f"Plan: half at 2x ({mc(mc_now / c['multiple'] * 2)} MC), rest out at -{c['trail']:.0f}% from the top"
+        c["hint"] = hint
+        return {**coin, "price": price, "mc_now": mc_now, "ref_price": ref, "ref_label": label,
                 "multiple": c.get("multiple", 0.0), "peak_multiple": c.get("peak_multiple", 0.0),
                 "from_peak_pct": c.get("from_peak_pct", 0.0), "hint": c.get("hint", ""),
                 "whales_in": c.get("whales_in", 0), "coach": c,

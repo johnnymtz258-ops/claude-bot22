@@ -300,11 +300,17 @@
   async function renderLive() {
     const [o, f] = await Promise.all([renderStatus(), api("/api/feed")]);
     const me = o.me, c = o.copies;
+    const fn0 = (o.funnel || { counts: {} }).counts;
+    const sent = (fn0.sent || 0) + (fn0.silent || 0);
+    const blocked = ["flipper", "weak_whale", "chased", "dumping", "micro", "whale_only"].reduce((n, k) => n + (fn0[k] || 0), 0);
+    const p = o.paper || {}, lv = o.live;
+    const liveText = !lv ? "—" : !lv.enabled ? "Off" : lv.problem ? "Can't trade" : lv.dry_run ? "Dry run" : "ON";
     $("live-tiles").replaceChildren(
-      tile("Your total P/L", usd(me.total, true), `${usd(me.realized, true)} realized · ${usd(me.unrealized, true)} open`, signClass(me.total), true),
-      tile("Whale buys (24h)", String(o.alerts_24h), "graded alerts"),
-      tile("Copy result (30d)", c.n ? pct(c.avg) : "—", c.n ? `avg per copy · ${c.n} copies · ${Math.round(c.win_rate * 100)}% won` : "builds as whales trade", signClass(c.avg)),
-      tile("$100 on every alert", c.n ? usd(c.per_100, true) : "—", "30 days, fees included", signClass(c.per_100)));
+      tile("Paper autopilot", usd(p.equity), `${pct(p.return_pct, 1)} · ${p.closed || 0} closed, ${p.won || 0} won`, signClass((p.equity || 0) - (p.start || 0)), true),
+      tile("Your total P/L", usd(me.total, true), `${usd(me.realized, true)} realized · ${usd(me.unrealized, true)} open`, signClass(me.total)),
+      tile("Whale buys (24h)", `${sent} sent`, `${blocked} blocked (flippers, already ran, dumping)`),
+      tile("Live autopilot", liveText, lv && lv.enabled && !lv.problem ? `${lv.realized_sol >= 0 ? "+" : ""}${(lv.realized_sol || 0).toFixed(3)} SOL realized` : (lv && lv.problem) || "Autopilot tab to set up"));
+    void c;
     const rows = f.buys.map((b) => el("tr", { class: "click", onclick: () => openCoin(b.mint) },
       td(ago(b.trade_ts || b.ts)), td(el("span", { class: "grade", title: b.scalp ? "Scalp: take profit into the pump, don't hold" : "" }, b.scalp ? `⚡${b.grade}` : b.grade)), td(b.whale), td(coinCell(b.symbol, b.image, b.mint)),
       td(mc(b.entry_mc), "num"), td(mc(b.now_mc), "num"),
@@ -374,7 +380,19 @@
       "You're not following anyone yet. Paste a wallet above, or use Find whales.");
   }
 
+  async function renderCoins() {
+    const rows = await api("/api/coins");
+    table($("coins"), ["Coin", { label: "Progress", num: 1 }, { label: "Top", num: 1 }, { label: "Now", num: 1 }, "Whales in", "What the plan says", ""],
+      rows.map((c) => el("tr", { class: "click", onclick: () => openCoin(c.mint) },
+        td(coinCell(c.symbol, "", c.mint)), td(`${mult(c.multiple)} (${c.ref_label})`, `num ${signClass(c.multiple - 1)}`),
+        td(mult(c.peak_multiple), "num"), td(mc(c.mc_now), "num"), td(String(c.whales_in)),
+        td(el("span", { class: "coach" }, c.hint || ""), "wrap"),
+        td(el("button", { class: "ghost small", onclick: async (e) => { e.stopPropagation(); await post(`/api/coins/${c.mint}/remove`, {}); renderCoins(); } }, "Stop")))),
+      "No tracked coins. Paste a coin address above (add your entry market cap if you know it).");
+  }
+
   async function renderTrades() {
+    renderCoins().catch(() => {});
     const d = await api("/api/positions");
     const s = d.summary;
     $("trade-tiles").replaceChildren(
@@ -403,7 +421,35 @@
       "No closed coins yet.");
   }
 
+  async function renderLiveTrading() {
+    const l = await api("/api/live");
+    if (!l.available) { $("live-card").hidden = true; return; }
+    const state = !l.enabled ? "⚪️ Off" : l.problem ? `⚠️ On but can't trade: ${l.problem}` : l.dry_run ? "🧪 Dry run — nothing is sent" : "🔴 On — trading real SOL";
+    $("live-state").textContent = state;
+    $("live-hint").textContent = l.wallet
+      ? `Wallet ${short(l.wallet)} · ${l.size} SOL per buy · max ${l.max_open} open · stops for the day at −${l.daily_loss} SOL. It copies the paper autopilot's trades below. ${l.dry_run ? "Dry run: real quotes and signed transactions, nothing sent." : ""}`
+      : "Add TRADING_PRIVATE_KEY (a separate wallet, funded only with what you can lose) to .env and restart to enable. Start in dry run.";
+    const act = (label, action, cls) => el("button", { class: cls || "ghost small", onclick: async () => {
+      if (action === "dry-off" && !confirm("Trade REAL SOL from the trading wallet?")) return;
+      if (action === "sellall" && !confirm("Sell every live position now?")) return;
+      try { await post(`/api/live/${action}`, {}); } catch (err) { alert(err.message); }
+      renderLiveTrading();
+    } }, label);
+    $("live-actions").replaceChildren(
+      l.enabled ? act("Turn off", "off") : act("Turn on", "on", "small"),
+      l.dry_run ? act("Trade for real", "dry-off") : act("Back to dry run", "dry-on"),
+      act("Sell everything", "sellall"),
+      el("span", { class: "muted" }, ` ${l.closed} closed · ${l.won} won · ${l.realized_sol >= 0 ? "+" : ""}${l.realized_sol.toFixed(3)} SOL · today ${l.today_sol >= 0 ? "+" : ""}${l.today_sol.toFixed(3)} SOL`));
+    table($("live-trades"), ["Coin", { label: "SOL in", num: 1 }, { label: "SOL out", num: 1 }, { label: "P/L", num: 1 }, "Status", "Opened"],
+      l.recent.map((t) => el("tr", { class: "click", onclick: () => openCoin(t.mint) },
+        td(coinCell(t.symbol, "", t.mint)), td(t.sol_in.toFixed(3), "num"), td(t.sol_out.toFixed(3), "num"),
+        td(t.status === "closed" ? `${(t.sol_out - t.sol_in >= 0 ? "+" : "")}${(t.sol_out - t.sol_in).toFixed(3)}` : "—", `num ${signClass(t.sol_out - t.sol_in)}`),
+        td(t.status === "closed" ? t.close_reason : (t.dry ? "open (dry run)" : "open"), "wrap"), td(ago(t.open_ts)))),
+      "No live trades yet.");
+  }
+
   async function renderPaper() {
+    renderLiveTrading().catch(() => {});
     const d = await api("/api/paper");
     const s = d.summary;
     $("paper-tiles").replaceChildren(
@@ -492,7 +538,9 @@
 
   async function renderSettings() {
     const [settings, o] = await Promise.all([api("/api/settings"), renderStatus()]);
-    $("settings").replaceChildren(...settings.map((s) => {
+    let lastGroup = "";
+    $("settings").replaceChildren(...settings.flatMap((s) => {
+      const head = s.group !== lastGroup ? [el("h3", { class: "settings-group" }, (lastGroup = s.group))] : [];
       const input = s.bool
         ? el("select", {}, el("option", { value: "1", selected: s.value >= 0.5 }, "on"), el("option", { value: "0", selected: s.value < 0.5 }, "off"))
         : el("input", { type: "number", value: s.value, min: s.min, max: s.max, step: "any" });
@@ -501,7 +549,7 @@
         try { await post("/api/settings", { name: s.name, value: input.value }); msg.textContent = "saved"; }
         catch (err) { msg.textContent = err.message; }
       });
-      return el("div", { class: "settings-row" }, el("div", {}, el("div", { class: "name" }, s.name), el("div", { class: "help" }, s.help), msg), input);
+      return [...head, el("div", { class: "settings-row" }, el("div", {}, el("div", { class: "name" }, s.name), el("div", { class: "help" }, s.help), msg), input)];
     }));
     const h = [["Version", o.version], ["Up for", dur(o.uptime)], ["Wallet stream", o.stream.connected ? `connected (${o.stream.subs} subscriptions)` : `reconnecting ${o.stream.error || ""}`],
       ["RPC", `${o.helius ? "Helius" : "public"} · ${o.rpc.calls.toLocaleString()} calls · ${o.rpc.errors} errors · ${o.rpc.rate_limited} rate-limited`],
@@ -647,6 +695,14 @@
     refresh();
   }
   $("tabs").addEventListener("click", (e) => { if (e.target.dataset.tab) showTab(e.target.dataset.tab); });
+  $("coin-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      const r = await post("/api/coins", { mint: f.get("mint"), entry_mc: f.get("entry_mc") });
+      $("coin-msg").textContent = r.message; e.target.reset(); renderCoins();
+    } catch (err) { $("coin-msg").textContent = err.message; }
+  });
   $("hot-hours").addEventListener("change", renderHot);
   $("stats-days").addEventListener("change", renderStats);
 

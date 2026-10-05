@@ -29,6 +29,7 @@ MIN_WIN_RATE = 0.45
 MAX_IDLE_DAYS = 4
 RECHECK_AFTER_DAYS = 3
 CANDIDATE_RETRY_DAYS = 3
+MAX_CHECKS_PER_RUN = 15      # each wallet replay costs ~30 GeckoTerminal calls (free limit: 30 a minute)
 SMALL_BUDGET = {"pages": 40, "samples": 60, "dense": 300, "holders": 12, "wallet_txs": 150}
 
 
@@ -105,11 +106,17 @@ class WhaleScout:
     def auto_count(self) -> int:
         return int(self.db.scalar("select count(*) from whales where active=1 and source='auto'", default=0))
 
-    def pick_coins(self, limit: int = 3) -> list[str]:
+    def pick_coins(self, limit: int = 5) -> list[str]:
+        """Coins whose early buyers are worth checking: today's runners, coins your alerts caught that went 3x+,
+        coins 2+ of your whales bought, and coins you made money on yourself."""
         now = int(time.time())
         mints = [c["mint"] for c in self.runners.suggest_coins(limit)]
         mints += [r["mint"] for r in self.db.rows("""select mint, max(peak_price/entry_price) x from copies
             where open_ts>=? and entry_price>0 group by mint having x>=3 order by x desc limit 5""", (now - 2 * 86400,))]
+        mints += [r["mint"] for r in self.db.rows("""select mint, count(distinct wallet) n from swaps
+            where side='BUY' and is_me=0 and ts>=? group by mint having n>=2 order by n desc limit 5""", (now - 86400,))]
+        mints += [r["mint"] for r in self.db.rows("""select mint, sum(case when side='SELL' then usd else -usd end) pnl
+            from my_trades where ts>=? group by mint having pnl>0 order by pnl desc limit 5""", (now - 3 * 86400,))]
         fresh = []
         for m in dict.fromkeys(mints):
             if now - int(self.db.get_meta(f"scouted:{m}", "0") or 0) > 86400:
@@ -125,14 +132,14 @@ class WhaleScout:
         coins = self.pick_coins()
         followed, picks, checked = [], [], 0
         auto = self.cfg.flag("AUTO_WHALES")
-        room = int(self.cfg.get("AUTO_WHALE_LIMIT")) - self.auto_count() if auto else 3
+        room = int(self.cfg.get("AUTO_WHALE_LIMIT")) - self.auto_count() if auto else 5
         for mint in coins:
             self.db.set_meta(f"scouted:{mint}", now)
             coin = await self.discovery.research_coin(mint)
             if not coin.get("ok"):
                 continue
-            for cand in coin["candidates"][:4]:
-                if cand["tracked"] or cand["flags"] or room <= 0:
+            for cand in coin["candidates"][:6]:
+                if cand["tracked"] or cand["flags"] or room <= 0 or checked >= MAX_CHECKS_PER_RUN:
                     continue
                 seen = self.db.row("select * from whale_candidates where address=?", (cand["wallet"],))
                 if seen and now - int(seen["analyzed_ts"] or 0) < CANDIDATE_RETRY_DAYS * 86400:

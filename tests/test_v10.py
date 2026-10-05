@@ -256,3 +256,12 @@ def test_add_command_tracks_coins_and_follows_wallets(chat):
     assert not chat.engine.coins.is_tracked(COIN)
     reply = chat.say("/add GjJyeC1rB1p4d6k1Mzw5Y6vYGZyLr8N8zQJ7XU4yzF1G Newbie")
     assert "Following Newbie" in reply and not chat.engine.coins.is_tracked("GjJyeC1rB1p4d6k1Mzw5Y6vYGZyLr8N8zQJ7XU4yzF1G")
+
+
+def test_only_one_copy_of_the_bot_runs(tmp_path):
+    from fomo.app import single_instance
+    first = single_instance(tmp_path)
+    assert first is not None
+    assert single_instance(tmp_path) is None          # a second window stops instead of double-alerting
+    first.close()
+    assert single_instance(tmp_path) is not None

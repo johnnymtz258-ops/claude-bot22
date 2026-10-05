@@ -220,3 +220,5 @@ button:disabled { opacity: 0.5; cursor: default; }
   .tile.hero .value { font-size: 28px; }
   .settings-row { grid-template-columns: 1fr; }
 }
+.settings-group { margin: 18px 0 6px; font-size: 13px; letter-spacing: .04em; text-transform: uppercase; color: var(--text-secondary); }
+.settings-group:first-child { margin-top: 0; }

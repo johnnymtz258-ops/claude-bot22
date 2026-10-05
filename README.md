@@ -15,8 +15,14 @@ Copy-trading whales into coins early — but only the whales you can actually co
   system makes money before risking any (Telegram `/paper`, dashboard **Autopilot** tab).
 - **📌 Live card**: one pinned Telegram message updated every minute: health, what was blocked and why,
   your positions with the plan, and the paper balance. Buttons for positions, whales, stats and pause.
+- **📍 Tracked coins**: `/add COIN` (a coin address instead of a wallet, optionally `at 850k` for your entry)
+  or the dashboard's My trades tab. You get take-profit messages for it: 2x/3x/5x/10x, gave back 35% after
+  1.5x, -40%, and when your whales sell it. Coin addresses that were in your whale list are moved here.
 - **💤 Sleep warning**: if the Mac sleeps (lid closed, battery), the bot tells you how long it missed.
-- Slimmer alerts; coin addresses can't be followed as whales by mistake.
+- **Dashboard**: overview tiles (paper balance, buys sent vs blocked), Autopilot tab with the balance chart,
+  tracked coins, whale style + copy score, settings grouped by purpose.
+- The scanner runs every 2h over more coins (runners, your alerts that went 3x, coins 2+ whales bought,
+  coins you made money on). Only one copy of the bot can run at once. Slimmer alerts.
 
 Replaying your last 10 days with these rules ($50 a trade, 3% slippage each way): the 18 alerts v10 would
 have sent averaged 1.42x, 50% won (≈ +$381). The 43 it blocks (flippers / losing whales) averaged 0.96x,

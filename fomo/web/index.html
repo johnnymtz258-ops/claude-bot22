@@ -73,6 +73,12 @@
   </section>
 
   <section id="tab-paper" class="tab">
+    <div class="card" id="live-card">
+      <div class="card-head"><h2>Live autopilot · real money</h2><span class="muted" id="live-state"></span></div>
+      <p class="hint" id="live-hint"></p>
+      <div class="row" id="live-actions"></div>
+      <div class="table-wrap"><table id="live-trades"></table></div>
+    </div>
     <div class="tiles" id="paper-tiles"></div>
     <div class="card">
       <div class="card-head"><h2>Paper balance</h2><span class="muted" id="paper-note"></span></div>
@@ -90,6 +96,16 @@
 
   <section id="tab-trades" class="tab">
     <div class="tiles" id="trade-tiles"></div>
+    <div class="card">
+      <div class="card-head"><h2>📍 Tracked coins</h2><span class="muted">take-profit messages for coins you hold or watch</span></div>
+      <form class="row" id="coin-form">
+        <input name="mint" placeholder="Coin address" required spellcheck="false" autocomplete="off">
+        <input name="entry_mc" placeholder="your entry MC, e.g. 850k (optional)">
+        <button type="submit">Track</button>
+        <span class="form-msg" id="coin-msg"></span>
+      </form>
+      <div class="table-wrap"><table id="coins"></table></div>
+    </div>
     <div class="card">
       <div class="card-head"><h2>Realized profit over time</h2><span class="muted" id="curve-note"></span></div>
       <div class="chart" id="curve"></div>
