@@ -186,15 +186,15 @@ def test_scanner_follows_copyable_holders_and_skips_flippers(bot, monkeypatch):
     monkeypatch.setattr(bot.scout.discovery, "analyze_wallet", analyze)
     monkeypatch.setattr(bot.scout, "pick_coins", lambda limit=3: [MINT])
     s = bot.run(bot.scout.scout(now))
-    assert s == {"ts": now, "coins": [MINT], "checked": 3, "followed": 1, "picked": 1}
+    assert s == {"ts": now, "coins": [MINT], "checked": 3, "followed": 2, "picked": 0}
     w = bot.whales.get(WHALE)
     assert w["source"] == "auto" and w["active"] == 1
     assert bot.engine.profiles.get(WHALE)["style"] == "HOLDER"
     assert bot.whales.get(WHALE2) is None
     cand = bot.db.row("select status, reason from whale_candidates where address=?", (WHALE2,))
     assert cand["status"] == "rejected" and "Flipper" in cand["reason"]
-    assert bot.notes.kinds() == ["AUTO", "PICKS"]                 # unscored (no candles) → suggested, not followed
-    assert THIRD in bot.notes.sent[1]["text"] and bot.notes.sent[1]["buttons"][0][0] == ("➕ Follow #1", None, f"track:{THIRD}")
+    assert bot.notes.kinds() == ["AUTO", "AUTO"]                  # no candles to replay → followed on trial
+    assert bot.whales.get(THIRD)["source"] == "auto" and "on trial" in bot.notes.sent[1]["text"]
 
 
 def test_scanner_only_suggests_when_auto_follow_is_off(bot, monkeypatch):
@@ -285,3 +285,13 @@ def test_buy_alert_includes_exit_plan_and_funnel_counts_outcomes(bot):
     bot.feed(WHALE, pump_buy(mint="MoiNmemeTokenMint22222222222222222222222pump"[:44], sol=0.2, tokens=100_000))
     f = alert_funnel(bot.db)
     assert f["counts"] == {"sent": 1, "too_small": 1}
+
+
+def test_conviction_holders_qualify_with_few_trades():
+    now = time.time()
+    holder = {**GOOD, "verdict": "🆕 Not enough closed trades to judge", "trips": 2, "pnl_sol": 9.4, "win_rate": 0.5,
+              "last_trade_ts": now - 3600}
+    ok, why = qualifies(holder, now)
+    assert ok and why.startswith("conviction holder")
+    assert not qualifies({**holder, "pnl_sol": 0.8}, now)[0]
+    assert not qualifies({**holder, "verdict": "🤖 Too fast to copy"}, now)[0]

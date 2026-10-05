@@ -200,6 +200,14 @@ class Tracker:
             found = self.db.scalar("select count(*) from whales where active=1 and source='auto'", default=0)
             lines.append(f"Whale scanner: last run {dur(now - last_scan)} ago, next in {dur(max(0, nxt))} · "
                          f"{found} whales found so far.")
+            checked = self.db.rows("select status, reason from whale_candidates where analyzed_ts>=?", (last_scan - 60,))
+            if checked:
+                rejected = [r["reason"] or "" for r in checked if r["status"] == "rejected"]
+                kinds = {"flipper": sum("Flipper" in r or "Too fast" in r for r in rejected),
+                         "losing": sum("Losing" in r or "lost" in r for r in rejected)}
+                kinds["other"] = len(rejected) - kinds["flipper"] - kinds["losing"]
+                lines.append(f"Last scan checked {len(checked)} wallets: {len(checked) - len(rejected)} kept · "
+                             + " · ".join(f"{n} {k}" for k, n in kinds.items() if n) + " rejected")
         else:
             lines.append("Whale scanner: first run starts a few minutes after launch.")
         await self.notify("\n".join(lines), silent=True, kind="QUIET")

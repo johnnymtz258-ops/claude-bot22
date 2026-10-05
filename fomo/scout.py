@@ -23,14 +23,14 @@ from . import profiles
 from .discovery import Discovery
 from .util import esc, mc, pct, short
 
-MIN_TRIPS = 6
-MIN_PNL_SOL = 1.0
-MIN_WIN_RATE = 0.45
+MIN_TRIPS = 5
+MIN_PNL_SOL = 0.5
+MIN_WIN_RATE = 0.40
 MAX_IDLE_DAYS = 4
 RECHECK_AFTER_DAYS = 3
 CANDIDATE_RETRY_DAYS = 3
-MAX_CHECKS_PER_RUN = 15      # each wallet replay costs ~30 GeckoTerminal calls (free limit: 30 a minute)
-SMALL_BUDGET = {"pages": 40, "samples": 60, "dense": 300, "holders": 12, "wallet_txs": 150}
+MAX_CHECKS_PER_RUN = 25      # each wallet replay costs ~30 GeckoTerminal calls (free limit: 30 a minute)
+SMALL_BUDGET = {"pages": 40, "samples": 60, "dense": 300, "holders": 12, "wallet_txs": 400}
 
 
 COPY_MIN_COINS = 4
@@ -52,21 +52,23 @@ def copyable(prof: dict | None) -> tuple[str, str]:
 
 
 def qualifies(r: dict, now: float | None = None) -> tuple[bool, str]:
-    """Is this wallet profitable right now? Returns (yes, reason)."""
+    """Is this wallet profitable right now? Two ways in:
+      an active trader — 5+ closed trades, +0.5 SOL or more, 40%+ won; or
+      a conviction holder — few trades but big wins: 2+ closed, +2 SOL or more, half or more won
+      (the most profitable wallets your scanner found were exactly these, and the old rules threw them out)."""
     now = now or time.time()
     if not r.get("ok"):
         return False, r.get("error", "couldn't read history")
-    if not r["verdict"].startswith("✅"):
+    if r["verdict"].startswith(("🤖", "❌")):
         return False, r["verdict"]
-    if r["trips"] < MIN_TRIPS:
-        return False, f"only {r['trips']} closed trades"
-    if r["pnl_sol"] < MIN_PNL_SOL:
-        return False, f"only {r['pnl_sol']:+.2f} SOL profit"
-    if r["win_rate"] < MIN_WIN_RATE:
-        return False, f"{r['win_rate'] * 100:.0f}% won"
-    if now - r.get("last_trade_ts", 0) > 2 * 86400:
-        return False, "no trades in the last 2 days"
-    return True, f"{r['pnl_sol']:+.1f} SOL over {r['trips']} trades, {r['win_rate'] * 100:.0f}% won"
+    if now - r.get("last_trade_ts", 0) > 3 * 86400:
+        return False, "no trades in the last 3 days"
+    trader = r["trips"] >= MIN_TRIPS and r["pnl_sol"] >= MIN_PNL_SOL and r["win_rate"] >= MIN_WIN_RATE
+    holder = r["trips"] >= 2 and r["pnl_sol"] >= 2.0 and r["win_rate"] >= 0.5
+    if not (trader or holder):
+        return False, f"{r['pnl_sol']:+.2f} SOL over {r['trips']} closed trades, {r['win_rate'] * 100:.0f}% won"
+    kind = "conviction holder" if holder and not trader else "trader"
+    return True, f"{kind}: {r['pnl_sol']:+.1f} SOL over {r['trips']} trades, {r['win_rate'] * 100:.0f}% won"
 
 
 class WhaleScout:
@@ -84,6 +86,12 @@ class WhaleScout:
         if self.profiler.discovery is None:
             self.profiler.discovery = self.discovery
         self.last_run = int(db.get_meta("scout_last_run", "0") or 0)
+        if db.get_meta("candidates_reset_v12") != "1":
+            # wallets rejected only for having few trades get another look under the conviction-holder rule
+            db.run("delete from whale_candidates where status='rejected' and (reason like '%closed trades%' "
+                   "or reason like '%Not enough%' or verdict like '%Not enough%')")
+            db.set_meta("candidates_reset_v12", "1")
+            self.last_run = 0
         self.last_error = ""
         self.running = False
 
@@ -106,7 +114,7 @@ class WhaleScout:
     def auto_count(self) -> int:
         return int(self.db.scalar("select count(*) from whales where active=1 and source='auto'", default=0))
 
-    def pick_coins(self, limit: int = 5) -> list[str]:
+    def pick_coins(self, limit: int = 8) -> list[str]:
         """Coins whose early buyers are worth checking: today's runners, coins your alerts caught that went 3x+,
         coins 2+ of your whales bought, and coins you made money on yourself."""
         now = int(time.time())
@@ -138,7 +146,7 @@ class WhaleScout:
             coin = await self.discovery.research_coin(mint)
             if not coin.get("ok"):
                 continue
-            for cand in coin["candidates"][:6]:
+            for cand in coin["candidates"][:8]:
                 if cand["tracked"] or cand["flags"] or room <= 0 or checked >= MAX_CHECKS_PER_RUN:
                     continue
                 seen = self.db.row("select * from whale_candidates where address=?", (cand["wallet"],))
@@ -154,6 +162,8 @@ class WhaleScout:
                     prof = await self.profiler.profile_history(cand["wallet"], result) if result.get("trip_list") else None
                     level, why = copyable(prof)
                     reason = why if level != "unscored" else f"{reason} · {why}"
+                if level == "unscored" and auto:
+                    level, reason = "strong", f"on trial — {reason}"   # follow now; dropped if it turns out a flipper/loser
                 if level == "strong" and auto:
                     name = f"auto-{short(cand['wallet'])[:4]}"
                     added, _ = self.whales.add(cand["wallet"], name, source="auto")
