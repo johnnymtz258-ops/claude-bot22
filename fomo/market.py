@@ -208,6 +208,51 @@ class Market:
             (info["mint"], info["symbol"], info["name"], info["price_usd"], info["mc_usd"], info["liquidity_usd"],
              info["pair_address"], info["dex"], info["pair_created_ts"], info["image"], info["url"], int(time.time())))
 
+    async def lookup_any(self, chain: str, address: str) -> dict:
+        """A coin on ANY chain DexScreener lists (Solana, Base, Robinhood, BSC, …), by token or pair address.
+        Returns its info (with 'chain' and 'pair_address') or {}."""
+        if not address:
+            return {}
+        if chain in ("", "solana") and is_address(address):
+            mint = await self.resolve_mint(address)
+            info = await self.token(mint, max_age=15)
+            if info:
+                return {**info, "chain": "solana"}
+            if chain == "solana":
+                return {}
+        pairs: list = []
+        if chain:
+            data = await self._get(f"{DEX}/latest/dex/pairs/{chain}/{address}")
+            pairs = (data or {}).get("pairs") or [] if isinstance(data, dict) else []
+            if not pairs:
+                data = await self._get(f"{DEX}/tokens/v1/{chain}/{address}")
+                pairs = data if isinstance(data, list) else []
+        else:
+            data = await self._get(f"{DEX}/latest/dex/search?q={address}")
+            pairs = (data or {}).get("pairs") or [] if isinstance(data, dict) else []
+            pairs = [p for p in pairs if address.lower() in (str((p.get("baseToken") or {}).get("address", "")).lower(),
+                                                             str(p.get("pairAddress", "")).lower())]
+        pairs = [p for p in pairs if isinstance(p, dict) and num(p.get("priceUsd")) > 0]
+        if not pairs:
+            return {}
+        best = max(pairs, key=lambda p: num((p.get("liquidity") or {}).get("usd")))
+        info = {**pair_to_info(best), "chain": str(best.get("chainId") or chain)}
+        self._cache[info["mint"]] = (time.time(), info)
+        self._save(info)
+        return info
+
+    async def pair_prices(self, chain: str, pairs: list[str]) -> dict[str, dict]:
+        """Fresh info for coins on another chain, by pair address (30 per request). Keyed by token address."""
+        out: dict[str, dict] = {}
+        for i in range(0, len(pairs), 30):
+            data = await self._get(f"{DEX}/latest/dex/pairs/{chain}/{','.join(pairs[i:i + 30])}")
+            for pair in ((data or {}).get("pairs") or []) if isinstance(data, dict) else []:
+                if isinstance(pair, dict) and num(pair.get("priceUsd")) > 0:
+                    info = {**pair_to_info(pair), "chain": chain}
+                    self._cache[info["mint"]] = (time.time(), info)
+                    out[info["mint"]] = info
+        return out
+
     def symbol(self, mint: str) -> str:
         return str(self.cached(mint).get("symbol") or "") or mint[:4]
 

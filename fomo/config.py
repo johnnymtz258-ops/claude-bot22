@@ -55,6 +55,8 @@ TUNABLES = {t.name: t for t in (
     Tunable("SCALP_PROTECT_AFTER_X", 1.5, "On SCALP coins you hold, the profit protector arms at this multiple", 0, 100),
     Tunable("SCALP_TRAIL_PCT", 25, "On SCALP coins you hold, warn when it falls this % from its peak", 10, 90),
     Tunable("STOP_LOSS_PCT", 40, "One warning when a coin you hold is this % below your cost (0 = off)", 0, 95),
+    Tunable("QUIET_UPDATE_MINUTES", 15, "If nothing was sent for this long, send a short 'what I saw and skipped' update (0 = off)", 0, 1440),
+    Tunable("ALERT_REPORTS", 1, "An hour after each alert, reply to it with how it actually went (1 = on)", 0, 1, True),
     Tunable("LIVE_CARD", 1, "Keep one pinned Telegram message updated with health, positions and the paper balance (1 = on)", 0, 1, True),
     Tunable("LIVE_CARD_SECONDS", 60, "How often the pinned live card refreshes", 20, 3600),
     Tunable("PAPER_TRADING", 1, "Paper autopilot: trade a pretend balance on every alert with the exit plan (1 = on)", 0, 1, True),

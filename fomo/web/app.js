@@ -179,7 +179,7 @@
   }
 
   // Signed columns from a zero baseline (blue = gain, red = loss), value at the tip.
-  function barChart(node, items, fmt) {
+  function barChart(node, items, fmt, unit = ["copy", "copies"]) {
     node.replaceChildren();
     const shown = items.filter((i) => i.n > 0);
     if (!shown.length) { node.append(el("div", { class: "empty" }, "No copies closed in this period yet.")); return; }
@@ -200,7 +200,7 @@
       const cat = svgEl("text", { x: cx, y: H - 20, "text-anchor": "middle", class: "label-text" });
       cat.textContent = it.label;
       const cnt = svgEl("text", { x: cx, y: H - 6, "text-anchor": "middle", class: "axis-text" });
-      cnt.textContent = plural(it.n, "copy", "copies");
+      cnt.textContent = plural(it.n, unit[0], unit[1]);
       svg.append(cat, cnt);
       if (!it.n) return;
       const color = it.value >= 0 ? cssVar("--series-pos") : cssVar("--series-neg");
@@ -214,7 +214,7 @@
       const val = svgEl("text", { x: cx, y: it.value >= 0 ? top - 6 : bottom + 14, "text-anchor": "middle", class: "label-text" });
       val.textContent = fmt(it.value);
       const hit = svgEl("rect", { x: cx - band / 2, y: T, width: band, height: H - T - B, fill: "transparent" });
-      const show = (e) => showTip(e, fmt(it.value), `${it.label}: ${it.n} copies, ${Math.round(it.win * 100)}% won`, color);
+      const show = (e) => showTip(e, fmt(it.value), `${it.label}: ${plural(it.n, unit[0], unit[1])}, ${Math.round(it.win * 100)}% won`, color);
       hit.addEventListener("pointermove", show);
       hit.addEventListener("pointerleave", hideTip);
       svg.append(bar, val, hit);
@@ -520,6 +520,29 @@
         td(t.close_reason, "wrap"), td(ago(t.close_ts)))), "No closed paper trades yet.");
   }
 
+  async function renderReport() {
+    const r = await api(`/api/report?days=${$("report-days").value}`);
+    $("lessons").replaceChildren(...r.lessons.map((t) => el("li", {}, t)));
+    $("report-tiles").replaceChildren(
+      tile("Result", usd(r.total, true), `${plural(r.n, "closed coin")} · ${r.dead} went to zero`, signClass(r.total), true),
+      tile("Won", r.n ? `${Math.round(r.won * 100)}%` : "—", "of closed coins"),
+      tile("Average win", usd(r.avg_win, true), "per winning coin", "up"),
+      tile("Average loss", usd(r.avg_loss, true), "per losing coin", "down"));
+    $("report-groups").replaceChildren(...r.groups.filter((g) => g.rows.length).map((g) => {
+      const box = el("div", { class: "chart" });
+      const card = el("div", { class: "card" }, el("div", { class: "card-head" }, el("h2", {}, g.title),
+        el("span", { class: "muted" }, "total result per group")), box);
+      setTimeout(() => barChart(box, g.rows.map((x) => ({ label: x.label, value: x.total, n: x.n, win: x.won })), (v) => usd(v, true), ["coin", "coins"]), 0);
+      return card;
+    }));
+    const rows = (list) => list.map((t) => el("tr", { class: "click", onclick: () => openCoin(t.mint) },
+      td(coinCell(t.symbol, "", t.mint)), td(usd(t.result, true), `num ${signClass(t.result)}`), td(usd(t.bought), "num"),
+      td(t.source), td(t.hold)));
+    const head = ["Coin", { label: "Result", num: 1 }, { label: "Bought", num: 1 }, "Idea", "Held"];
+    table($("report-best"), head, rows(r.best), "No closed trades yet.");
+    table($("report-worst"), head, rows(r.worst), "No closed trades yet.");
+  }
+
   async function renderStats() {
     const days = $("stats-days").value;
     const r = await api(`/api/stats?days=${days}`);
@@ -730,7 +753,7 @@
   }
 
   // ---------- wiring --------------------------------------------------------------------
-  const renderers = { live: renderLive, hot: renderHot, whales: renderWhales, paper: renderPaper, trades: renderTrades, exits: renderExits, stats: renderStats, find: renderStatus, settings: renderSettings };
+  const renderers = { live: renderLive, hot: renderHot, whales: renderWhales, paper: renderPaper, trades: renderTrades, report: renderReport, exits: renderExits, stats: renderStats, find: renderStatus, settings: renderSettings };
   async function refresh() {
     try { await renderers[activeTab](); }
     catch (err) { $("status").replaceChildren(el("span", { class: "pill bad" }, el("span", { class: "dot" }), `Bot not reachable: ${err.message}`)); }
@@ -753,6 +776,7 @@
   });
   $("hot-hours").addEventListener("change", renderHot);
   $("stats-days").addEventListener("change", renderStats);
+  $("report-days").addEventListener("change", renderReport);
 
   $("add-whale").addEventListener("submit", async (e) => {
     e.preventDefault();

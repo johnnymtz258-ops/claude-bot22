@@ -6,7 +6,7 @@ import time
 
 from . import VERSION, messages, profiles, reports
 from .config import TUNABLES
-from .util import ago, dur, esc, find_address, is_address, mc, mult, num, parse_amount, pct, short, usd
+from .util import ago, dur, esc, find_address, is_address, mc, mult, num, parse_amount, parse_coin_ref, pct, short, usd
 
 HELP = f"""<b>🐋 FomoBot {VERSION}</b>
 The 📌 pinned live card shows health, blocked buys, your positions and the paper balance — no commands needed.
@@ -30,7 +30,7 @@ or -40% from entry.
 /bought 20 · /sold 30% — only if wallet sync (MY_WALLETS) is off
 
 <b>Bot</b>
-/paper — paper autopilot trades and balance · /stats — what alerts returned · /status
+/report — where you make and lose money · /paper — paper autopilot · /stats — what alerts returned · /status
 /card — re-pin the live card · /export — send me a review file
 /live — real-money autopilot (off by default, dry run first) · /sellnow COIN 50% · /sellall
 /settings · /set NAME VALUE · /pause · /resume"""
@@ -176,6 +176,13 @@ class Commands:
     async def cmd_add(self, args, reply_mint):
         if not args:
             raise ValueError("usage: /add WALLET name")
+        chain, ref = parse_coin_ref(" ".join(args))
+        if ref and chain != "solana":     # a coin on another chain (0x… address or a DexScreener link): track it
+            link = next((a for a in args if ref in a), ref)
+            ok, text = await self.app.engine.coins.add(link, entry_mc([a for a in args if a != link]))
+            await self.say(("" if ok else "⚠️ ") + esc(text) + ("\n/coins lists your tracked coins · /drop COIN stops"
+                                                                  if ok else ""))
+            return
         address = next((find_address(a) for a in args if find_address(a)), "")
         if not address:
             raise ValueError("that doesn't include a Solana wallet address. usage: /add WALLET name")
@@ -575,6 +582,20 @@ class Commands:
             raise ValueError("the live card isn't running")
         self.app.db.set_meta("live_card_id", 0)
         await card.update(force=True)
+
+    async def cmd_report(self, args, reply_mint):
+        from . import journal
+        days = int(parse_amount(args[0])) if args and parse_amount(args[0]) else 30
+        r = journal.report(self.app.db, self.app.portfolio, days)
+        lines = [f"<b>🧾 Your trading report · {days} days</b>",
+                 f"{r['n']} closed coins · {usd(r['total'], signed=True)} · {r['won'] * 100:.0f}% won · "
+                 f"avg win {usd(r['avg_win'], signed=True)} · avg loss {usd(r['avg_loss'], signed=True)}"]
+        lines += [f"• {esc(t)}" for t in r["lessons"]]
+        for g in r["groups"]:
+            if g["rows"]:
+                lines.append(f"<b>{esc(g['title'])}</b>: " + " · ".join(
+                    f"{esc(x['label'])} {usd(x['total'], signed=True)} ({x['n']})" for x in g["rows"]))
+        await self.say("\n".join(lines))
 
     async def cmd_paper(self, args, reply_mint):
         await self.say(format_paper(self.app))

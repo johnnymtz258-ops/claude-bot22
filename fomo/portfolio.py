@@ -17,6 +17,8 @@ import time
 from .util import num
 
 DUST_USD = 0.50
+WRITE_OFF_USD = 1.50        # a holding worth less than this is dust from a dead coin: not a position any more
+DEAD_UNPRICED_DAYS = 2      # no price at all for this long after your last trade = dead coin
 
 
 class Portfolio:
@@ -92,6 +94,7 @@ class Portfolio:
         entry_mc_weight = 0.0
         first_ts = last_ts = episode_ts = 0
         unmatched = 0
+        unknown = False
         sources = set()
         for t in self.db.rows("select * from my_trades where mint=? order by ts, id", (mint,)):
             sources.add(t["source"])
@@ -104,6 +107,13 @@ class Portfolio:
                 cost += num(t["usd"])
                 bought += num(t["usd"])
                 entry_mc_weight += num(t["usd"]) * num(t["mc_usd"])
+            elif t["source"] == "unrecorded":
+                # your wallet no longer holds these but the sale wasn't seen: drop them without inventing a price
+                q = min(num(t["tokens"]), tokens) if tokens > 0 else 0.0
+                if q > 0:
+                    cost -= cost * q / tokens
+                    tokens -= q
+                unknown = True
             else:
                 if tokens <= 0:
                     unmatched += 1  # sold something bought before tracking started: no cost basis
@@ -118,7 +128,8 @@ class Portfolio:
                 sold += proceeds
         return {"mint": mint, "tokens": tokens, "cost": cost, "realized": realized, "bought": bought, "sold": sold,
                 "entry_mc": entry_mc_weight / bought if bought > 0 else 0.0, "first_ts": first_ts,
-                "last_ts": last_ts, "episode_ts": episode_ts, "unmatched_sells": unmatched, "source": "wallet" if "wallet" in sources else "manual"}
+                "last_ts": last_ts, "episode_ts": episode_ts, "unmatched_sells": unmatched,
+                "source": "wallet" if "wallet" in sources else "manual", "sale_unrecorded": unknown}
 
     def position(self, mint: str, price: float | None = None) -> dict | None:
         if not self.db.scalar("select 1 from my_trades where mint=? limit 1", (mint,)):
@@ -130,7 +141,11 @@ class Portfolio:
         led.update(price=price, value=value, symbol=str(info.get("symbol") or mint[:4]),
                    mc_now=num(info.get("mc_usd")), unrealized=value - led["cost"] if price > 0 else 0.0,
                    priced=price > 0)
-        led["open"] = led["tokens"] > 0 and (value >= DUST_USD or not led["priced"])
+        dead = led["tokens"] > 0 and (
+            (led["priced"] and value < WRITE_OFF_USD)
+            or (not led["priced"] and time.time() - led["last_ts"] > DEAD_UNPRICED_DAYS * 86400))
+        led["written_off"] = dead   # went to (almost) zero: counted as a loss, never nagged about
+        led["open"] = led["tokens"] > 0 and not dead and (value >= DUST_USD or not led["priced"])
         led["pnl"] = led["realized"] + led["unrealized"]
         led["pnl_pct"] = led["pnl"] / led["bought"] * 100 if led["bought"] > 0 else 0.0
         led["multiple"] = value / led["cost"] if led["cost"] > 0 and price > 0 else 0.0
@@ -151,6 +166,28 @@ class Portfolio:
             "select distinct mint from my_trades where side='SELL' and ts>=?", (since,))]
         return [m for m in mints if not self.holds(m)]
 
+    async def reconcile(self, rpc, wallets) -> list[str]:
+        """Check positions against what your wallet really holds. Sold-but-unseen coins get closed (no fake loss)."""
+        fixed = []
+        held_now = [p for p in (self.position(m) for m in self.mints()) if p and (p["open"] or p["written_off"])]
+        for p in held_now:
+            if p["source"] != "wallet":
+                continue
+            held = 0.0
+            for w in wallets:
+                bal = await rpc.token_balance(w, p["mint"])
+                if bal is None:
+                    held = None
+                    break
+                held += bal
+            if held is not None and held < 0.01 * p["tokens"]:
+                self.db.run("""insert into my_trades(ts,mint,side,usd,tokens,price_usd,mc_usd,source,sig,wallet,note)
+                    values(?,?,?,?,?,?,?,?,?,?,?)""", (int(time.time()), p["mint"], "SELL", 0.0, p["tokens"] - held, 0.0, 0.0,
+                                                       "unrecorded", f"reconcile-{p['mint']}-{int(time.time())}", "",
+                                                       "wallet no longer holds it; sale not seen"))
+                fixed.append(p["symbol"])
+        return fixed
+
     def holds(self, mint: str) -> bool:
         p = self.position(mint)
         return bool(p and p["open"])
@@ -163,13 +200,14 @@ class Portfolio:
             p = self.position(mint)
             if not p or (cutoff and p["last_ts"] < cutoff):
                 continue
-            realized += p["realized"]
+            result = p["realized"] + (p["value"] - p["cost"] if p["written_off"] else 0.0)
+            realized += result
             invested += p["bought"]
             if p["open"]:
                 unrealized += p["unrealized"]
-            elif p["bought"] > 0:
+            elif p["bought"] > 0 and not (p["sale_unrecorded"] and abs(p["realized"]) < 0.01):
                 closed += 1
-                wins += p["realized"] > 0
+                wins += result > 0
         return {"realized": realized, "unrealized": unrealized, "total": realized + unrealized,
                 "invested": invested, "closed": closed, "win_rate": wins / closed if closed else 0.0}
 
@@ -184,6 +222,9 @@ class Portfolio:
             elif tokens > 0 and num(t["tokens"]) > 0:
                 q = min(num(t["tokens"]), tokens)
                 basis = cost * q / tokens
+                if t["source"] == "unrecorded":   # sale not seen: drop the tokens, book no result
+                    state[t["mint"]] = [tokens - q, cost - basis]
+                    continue
                 total += num(t["usd"]) * q / num(t["tokens"]) - basis
                 state[t["mint"]] = [tokens - q, cost - basis]
                 points.append((int(t["ts"]), round(total, 2)))

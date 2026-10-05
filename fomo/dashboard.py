@@ -17,7 +17,7 @@ from . import VERSION, exits, profiles, reports
 from .commands import format_analysis
 from .copies import return_pct
 from .config import TUNABLES
-from .util import find_address, is_address, num, parse_amount
+from .util import find_address, is_address, num, parse_amount, parse_coin_ref
 
 WEB = Path(__file__).resolve().parent / "web"
 
@@ -203,6 +203,11 @@ class Dashboard:
         return _json(rows)
 
     # -- tracked coins & live autopilot ------------------------------------------------------------
+    async def report(self, request):
+        from . import journal
+        days = int(num(request.query.get("days"), 30) or 30)
+        return _json(journal.report(self.app.db, self.app.portfolio, days))
+
     async def coins(self, request):
         tracker = self.app.engine.coins
         out = []
@@ -214,8 +219,13 @@ class Dashboard:
 
     async def add_coin(self, request):
         body = await self._body(request)
-        mint = await self._coin_from(body.get("mint"))
-        ok, text = await self.app.engine.coins.add(mint, parse_amount(body.get("entry_mc")))
+        raw = str(body.get("mint") or "").strip()
+        if not raw:
+            raise ValueError("paste the coin's contract address or its DexScreener link")
+        chain, ref = parse_coin_ref(raw)
+        if not ref:   # maybe a ticker of a coin you hold
+            raw = await self._coin_from(raw)
+        ok, text = await self.app.engine.coins.add(raw, parse_amount(body.get("entry_mc")))
         return _json({"ok": ok, "message": text}, 200 if ok else 400)
 
     async def remove_coin(self, request):
@@ -381,6 +391,7 @@ class Dashboard:
         r.add_get("/api/whales", self.whales)
         r.add_get("/api/paper", self.paper)
         r.add_get("/api/coins", self.coins)
+        r.add_get("/api/report", self.report)
         r.add_post("/api/coins", self.add_coin)
         r.add_post("/api/coins/{mint}/remove", self.remove_coin)
         r.add_get("/api/live", self.live_view)

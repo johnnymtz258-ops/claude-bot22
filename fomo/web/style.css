@@ -227,3 +227,6 @@ details.card > summary { cursor: pointer; list-style: none; }
 details.card > summary::-webkit-details-marker { display: none; }
 details.card > summary h2::before { content: "▸ "; color: var(--text-muted); }
 details.card[open] > summary h2::before { content: "▾ "; }
+
+.lessons { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 6px; }
+.lessons li { color: var(--text-primary); line-height: 1.45; }

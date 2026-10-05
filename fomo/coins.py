@@ -12,7 +12,7 @@ from __future__ import annotations
 import time
 
 from . import exits
-from .util import esc, find_address, mc, mult, num, usd
+from .util import esc, mc, mult, num, parse_coin_ref, usd
 
 LADDER = exits.LADDER_LEVELS
 CONFIRM_SECONDS = 20
@@ -27,6 +27,7 @@ class CoinTracker:
         self.portfolio = portfolio
         self.notify = notify
         self._pending: dict[str, int] = {}
+        self.marks = exits.MarkRecorder(db)
 
     # -- list --------------------------------------------------------------------------------
     def active(self) -> list[dict]:
@@ -37,9 +38,10 @@ class CoinTracker:
 
     def find(self, text: str) -> dict | None:
         t = str(text or "").strip().lstrip("$")
-        address = find_address(t)
+        chain, address = parse_coin_ref(t)
         if address:
-            return self.db.row("select * from coins where mint=? and active=1", (address,))
+            return self.db.row("select * from coins where (lower(mint)=lower(?) or lower(pair)=lower(?)) and active=1",
+                               (address, address))
         return self.db.row("select * from coins where lower(symbol)=lower(?) and active=1", (t,))
 
     async def is_coin(self, address: str) -> bool:
@@ -51,19 +53,27 @@ class CoinTracker:
             return False
         return num((await self.market.token(address, max_age=60)).get("price_usd")) > 0
 
-    async def add(self, mint: str, entry_mc: float = 0.0, source: str = "manual") -> tuple[bool, str]:
-        info = await self.market.token(mint, max_age=15)
+    async def add(self, ref: str, entry_mc: float = 0.0, source: str = "manual") -> tuple[bool, str]:
+        """Track a coin on any chain DexScreener lists: contract address, pair address, or a DexScreener/GMGN link."""
+        chain, address = parse_coin_ref(ref)
+        if not address:
+            return False, "I couldn't find a contract address or DexScreener link in that."
+        info = await self.market.lookup_any(chain, address)
         price, mcap = num(info.get("price_usd")), num(info.get("mc_usd"))
         if price <= 0:
-            return False, "No live price for that coin yet (not on DexScreener?). Try again in a minute."
+            where = f" on {chain}" if chain else ""
+            return False, f"DexScreener has no live price for {address[:10]}…{where}. Check the address, or try again in a minute."
+        mint, chain = info["mint"], info.get("chain") or "solana"
         entry_price = price * entry_mc / mcap if entry_mc > 0 and mcap > 0 else 0.0
-        self.db.run("""insert into coins(mint,symbol,added_ts,base_price,base_mc,entry_price,active,source)
-            values(?,?,?,?,?,?,1,?) on conflict(mint) do update set active=1, symbol=excluded.symbol,
+        self.db.run("""insert into coins(mint,symbol,added_ts,base_price,base_mc,entry_price,active,source,chain,pair)
+            values(?,?,?,?,?,?,1,?,?,?) on conflict(mint) do update set active=1, symbol=excluded.symbol,
             added_ts=excluded.added_ts, base_price=excluded.base_price, base_mc=excluded.base_mc,
-            entry_price=excluded.entry_price, source=excluded.source""",
-                    (mint, info.get("symbol") or mint[:4], int(time.time()), price, mcap, entry_price, source))
+            entry_price=excluded.entry_price, source=excluded.source, chain=excluded.chain, pair=excluded.pair""",
+                    (mint, info.get("symbol") or mint[:4], int(time.time()), price, mcap, entry_price, source, chain,
+                     info.get("pair_address") or ""))
         start = f"your entry {mc(entry_mc)}" if entry_price else f"{mc(mcap)} now"
-        return True, (f"📍 Tracking ${info.get('symbol') or mint[:4]} from {start}. You'll get take-profit "
+        on = "" if chain == "solana" else f" ({chain})"
+        return True, (f"📍 Tracking ${info.get('symbol') or mint[:4]}{on} from {start}. You'll get take-profit "
                       f"messages at 2x ({mc((entry_mc or mcap) * 2)} MC), 3x, 5x, 10x, if it drops 35% from its top "
                       f"after 1.5x, and at -40%.")
 
@@ -108,9 +118,24 @@ class CoinTracker:
     def _note(self, mint: str, kind: str, level: float, now: int) -> None:
         self.db.run("insert or replace into position_notes(mint,kind,level,ts) values(?,?,?,?)", (mint, kind, level, now))
 
+    async def other_chain_prices(self, now: int) -> dict[str, dict]:
+        """Prices for tracked coins that aren't on Solana (the main price loop only reads Solana)."""
+        by_chain: dict[str, list[str]] = {}
+        for coin in self.active():
+            if (coin.get("chain") or "solana") != "solana" and coin.get("pair"):
+                by_chain.setdefault(coin["chain"], []).append(coin["pair"])
+        out: dict[str, dict] = {}
+        for chain, pairs in by_chain.items():
+            got = await self.market.pair_prices(chain, pairs)
+            for mint, info in got.items():
+                self.marks.record(mint, num(info.get("price_usd")), now)
+            out.update(got)
+        return out
+
     async def tick(self, infos: dict, now: int | None = None) -> list[str]:
         now = int(now or time.time())
         sent = []
+        infos = {**infos, **await self.other_chain_prices(now)}
         for coin in self.active():
             info = infos.get(coin["mint"])
             price = num((info or {}).get("price_usd"))

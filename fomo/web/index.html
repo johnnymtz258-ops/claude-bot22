@@ -19,6 +19,7 @@
   <button data-tab="whales">Whales</button>
   <button data-tab="paper">Autopilot</button>
   <button data-tab="trades">My trades</button>
+  <button data-tab="report">Report</button>
   <button data-tab="exits">Exit lab</button>
   <button data-tab="stats">Copy results</button>
   <button data-tab="find">Find whales</button>
@@ -133,6 +134,22 @@
     <div class="card">
       <div class="card-head"><h2>Closed coins</h2></div>
       <div class="table-wrap"><table id="closed"></table></div>
+    </div>
+  </section>
+
+  <section id="tab-report" class="tab">
+    <div class="card">
+      <div class="card-head"><h2>Your trading report</h2>
+        <select id="report-days"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select>
+      </div>
+      <p class="hint">From your own closed trades (wallet sync). Dead coins count as losses; coins whose sale wasn't seen are left out.</p>
+      <ul class="lessons" id="lessons"></ul>
+    </div>
+    <div class="tiles" id="report-tiles"></div>
+    <div class="grid2" id="report-groups"></div>
+    <div class="grid2">
+      <div class="card"><div class="card-head"><h2>Best trades</h2></div><div class="table-wrap"><table id="report-best"></table></div></div>
+      <div class="card"><div class="card-head"><h2>Worst trades</h2></div><div class="table-wrap"><table id="report-worst"></table></div></div>
     </div>
   </section>
 

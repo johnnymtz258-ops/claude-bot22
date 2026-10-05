@@ -88,7 +88,8 @@ create table if not exists position_notes(
 
 create table if not exists coins(
     mint text primary key, symbol text, added_ts integer, base_price real, base_mc real,
-    entry_price real default 0, active integer default 1, source text default 'manual');
+    entry_price real default 0, active integer default 1, source text default 'manual',
+    chain text default 'solana', pair text default '');
 
 create table if not exists live_trades(
     id integer primary key autoincrement, paper_id integer, mint text, symbol text, open_ts integer,
@@ -135,9 +136,14 @@ class Database:
         columns = {r[1] for r in self.conn.execute("pragma table_info(alerts)")}
         if "status" not in columns:
             self.conn.execute("alter table alerts add column status text default ''")
+        coin_cols = {r[1] for r in self.conn.execute("pragma table_info(coins)")}
+        for name, kind in (("chain", "text default 'solana'"), ("pair", "text default ''")):
+            if name not in coin_cols:
+                self.conn.execute(f"alter table coins add column {name} {kind}")
         # what the coin did after the alert (peak and price 1h / 6h / 24h later), and whether it was a scalp
         for name, kind in (("scalp", "integer default 0"), ("peak_price", "real default 0"), ("peak_ts", "integer default 0"),
-                           ("p1h", "real"), ("p6h", "real"), ("p24h", "real")):
+                           ("p1h", "real"), ("p6h", "real"), ("p24h", "real"),
+                           ("followed_up", "integer default 0"), ("low_price", "real default 0")):
             if name not in columns:
                 self.conn.execute(f"alter table alerts add column {name} {kind}")
 

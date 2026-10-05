@@ -11,7 +11,7 @@ import time
 
 from . import copies, exits, messages
 from .db import OUTCOME_POINTS
-from .util import dur, esc, mc, num, usd
+from .util import dur, esc, mc, mult, num, usd
 
 PRICE_EVERY = 15
 WHALE_BALANCE_CHECK_EVERY = 600
@@ -20,6 +20,7 @@ RUG_REALERT_SECONDS = 6 * 3600
 LIQ_PEAK_WINDOW = 2 * 3600
 DEAD_PRICE_FRACTION = 0.03   # a copy whose price fell 97%+ (confirmed) is closed as rugged
 GAP_WARN_SECONDS = 600         # loop silent this long = the Mac slept or the bot was off
+RECONCILE_EVERY = 900          # compare positions with the wallet's real balances every 15 minutes
 PROFILE_EVERY = 1800         # re-profile followed whales (style, copy score) every 30 minutes
 OUTCOME_EVERY = 300          # alerts older than 3h are re-priced every 5 minutes until their 24h reading
 OUTCOME_WINDOW = 30 * 3600
@@ -42,6 +43,7 @@ class Tracker:
         self._lab_cache: tuple[float, dict] = (0.0, {})
         self._last_outcome = 0
         self._last_profile = 0
+        self._last_reconcile = 0
         self._peak_pending: dict[int, tuple[float, int]] = {}
         self.loops = 0
         self.last_error = ""
@@ -80,7 +82,7 @@ class Tracker:
             "select distinct mint from alerts where kind='BUY' and ts>=?", (now - 3 * 3600,))]
         closed = self.portfolio.recently_closed()
         watches = self.db.rows("select * from watches where hit_ts=0")
-        outcomes = self.db.rows("""select id,ts,mint,price_usd,peak_price,p1h,p6h,p24h from alerts
+        outcomes = self.db.rows("""select id,ts,mint,price_usd,peak_price,low_price,p1h,p6h,p24h from alerts
             where kind='BUY' and price_usd>0 and ts>=? and p24h is null""", (now - OUTCOME_WINDOW,))
         older = set()
         if now - self._last_outcome >= OUTCOME_EVERY:
@@ -99,6 +101,8 @@ class Tracker:
             await self._watch_position(p, infos.get(p["mint"]), now)
         await self._check_watches(watches, infos, now)
         self._update_outcomes(outcomes, infos, now)
+        await self._alert_reports()
+        await self.quiet_update(now)
         await self.engine.paper.tick(infos, now)
         if tracked:
             await self.engine.coins.tick(infos, now)
@@ -108,6 +112,12 @@ class Tracker:
         if now - self._last_mute_check >= 600:
             self._last_mute_check = now
             await self._auto_mutes()
+        if self.cfg.my_wallets and now - self._last_reconcile >= RECONCILE_EVERY:
+            self._last_reconcile = now
+            fixed = await self.portfolio.reconcile(self.rpc, self.cfg.my_wallets)
+            if fixed:
+                await self.notify("🧹 Closed " + ", ".join(f"${esc(s)}" for s in fixed) + " — your wallet no longer holds "
+                                  "them (the sale wasn't seen, so no profit/loss is booked for it).", silent=True, kind="INFO")
         if now - self._last_profile >= PROFILE_EVERY:
             self._last_profile = now
             self.engine.profiles.refresh_tracked()
@@ -135,6 +145,8 @@ class Tracker:
             for col, after, grace in OUTCOME_POINTS:
                 if a[col] is None and a["ts"] + after <= now <= a["ts"] + after + grace:
                     updates[col] = price
+            if now - a["ts"] <= 3600 and (not num(a.get("low_price")) or price < num(a["low_price"])):
+                updates["low_price"] = price   # lowest in the first hour: did the stop get hit?
             peak = max(num(a["peak_price"]), num(a["price_usd"]))
             if price > peak and now - a["ts"] <= 86400:
                 if price < peak * copies.GLITCH_JUMP:
@@ -149,6 +161,77 @@ class Tracker:
             if updates:
                 self.db.run(f"update alerts set {', '.join(k + '=?' for k in updates)} where id=?",
                             (*updates.values(), a["id"]))
+
+    async def quiet_update(self, now: int | None = None) -> bool:
+        """When nothing has been sent for QUIET_UPDATE_MINUTES, say what the bot saw and did instead of staying silent."""
+        now = int(now or time.time())
+        minutes = self.cfg.get("QUIET_UPDATE_MINUTES")
+        if minutes <= 0:
+            return False
+        window = int(minutes * 60)
+        last = max(int(num(self.db.get_meta("quiet_update_ts", "0"))),
+                   int(num(self.db.scalar("""select max(ts) from alerts where kind='BUY' and status in ('sent','silent')"""))))
+        if not last:
+            self.db.set_meta("quiet_update_ts", now)
+            return False
+        if now - last < window:
+            return False
+        since = last
+        self.db.set_meta("quiet_update_ts", now)
+        trades = self.db.row("select count(*) n, sum(side='BUY') buys, count(distinct wallet) w from swaps "
+                             "where is_me=0 and seen_ts>=?", (since,)) or {}
+        judged = self.db.rows("""select a.status, a.chase_pct, t.symbol, w.name from alerts a left join tokens t on t.mint=a.mint
+            left join whales w on w.address=a.wallet where a.kind='BUY' and a.ts>=? order by a.ts desc""", (since,))
+        why = {"flipper": "flipper whale", "weak_whale": "losing whale", "chased": "already ran", "dumping": "dumping",
+               "micro": "bonding curve", "whale_only": "no real holders", "muted": "muted whale", "late": "seen too late",
+               "unsafe": "unsafe token", "paused": "alerts paused"}
+        lines = [f"🔍 <b>Last {minutes:g} min</b> — no entry worth sending yet"]
+        if trades.get("n"):
+            lines.append(f"Saw {trades['n']} trades from {trades['w']} of your whales ({int(num(trades['buys']))} buys).")
+        else:
+            lines.append(f"Your {self.whales.count()} whales didn't trade.")
+        blocked = [j for j in judged if j["status"] in why]
+        for j in blocked[:4]:
+            extra = f" ({j['chase_pct']:+.0f}% already)" if j["status"] == "chased" else ""
+            lines.append(f"• skipped ${esc(j['symbol'] or '?')} from {esc(j['name'] or '?')}: {why[j['status']]}{extra}")
+        last_scan = int(num(self.db.get_meta("scout_last_run", "0")))
+        if last_scan:
+            nxt = last_scan + int(self.cfg.get("AUTO_SCOUT_HOURS") * 3600) - now
+            found = self.db.scalar("select count(*) from whales where active=1 and source='auto'", default=0)
+            lines.append(f"Whale scanner: last run {dur(now - last_scan)} ago, next in {dur(max(0, nxt))} · "
+                         f"{found} whales found so far.")
+        else:
+            lines.append("Whale scanner: first run starts a few minutes after launch.")
+        await self.notify("\n".join(lines), silent=True, kind="QUIET")
+        return True
+
+    async def _alert_reports(self) -> int:
+        """An hour after each alert, reply to it with what actually happened — the bot grades its own calls."""
+        if not self.cfg.flag("ALERT_REPORTS"):
+            return 0
+        rows = self.db.rows("""select a.*, t.symbol from alerts a left join tokens t on t.mint=a.mint
+            where a.kind='BUY' and a.status in ('sent','silent') and a.tg_message_id>0 and a.followed_up=0
+            and a.p1h is not null and a.price_usd>0""")
+        for a in rows:
+            self.db.run("update alerts set followed_up=1 where id=?", (a["id"],))
+            entry = num(a["price_usd"])
+            now_x, top_x = num(a["p1h"]) / entry, max(num(a["peak_price"]), num(a["p1h"])) / entry
+            low_x = num(a["low_price"]) / entry if num(a["low_price"]) else now_x
+            stop = 1 - self.cfg.get("STOP_LOSS_PCT") / 100
+            if top_x >= 2:
+                verdict, icon = "the plan sold half at 2x — a winner", "🟩"
+            elif top_x >= 1.3 and now_x >= 1:
+                verdict, icon = "up, still running", "🟩"
+            elif low_x <= stop:
+                verdict, icon = f"hit the -{self.cfg.get('STOP_LOSS_PCT'):.0f}% stop — the plan cut it", "🟥"
+            elif now_x < 1:
+                verdict, icon = "below the alert price", "🟥"
+            else:
+                verdict, icon = "flat so far", "⬜️"
+            await self.notify(f"{icon} <b>1h report · ${esc(a['symbol'] or a['mint'][:4])}</b>: {mult(now_x)} from the alert "
+                              f"(top {mult(top_x)}) — {verdict}.", silent=True, mint=a["mint"], kind="REPORT",
+                              reply_to=a["tg_message_id"])
+        return len(rows)
 
     async def _check_whale_balances(self, now: int) -> None:
         """Catch whale exits the stream missed (e.g. tokens moved to another wallet)."""

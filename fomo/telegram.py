@@ -166,10 +166,10 @@ class Notifier:
         self.feed: deque = deque(maxlen=200)
 
     async def __call__(self, text: str, *, buttons=None, silent: bool = False, mint: str = "", wallet: str = "",
-                       kind: str = "") -> int:
+                       kind: str = "", reply_to: int | None = None) -> int:
         plain = html.unescape(re.sub(r"<[^>]+>", "", text))
         self.feed.appendleft({"ts": int(time.time()), "kind": kind, "mint": mint, "wallet": wallet, "text": plain})
-        msg_id = await self.telegram.send(text, buttons=buttons, silent=silent) if self.telegram else 0
+        msg_id = await self.telegram.send(text, buttons=buttons, silent=silent, reply_to=reply_to) if self.telegram else 0
         if not msg_id:
             print(plain + "\n")
         if msg_id and (mint or wallet):

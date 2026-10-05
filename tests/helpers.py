@@ -201,6 +201,7 @@ class FakeMarket(Market):
         self.rug: dict | None = {"score": 5, "danger": [], "warn": []}
         self.watchlist: list[str] = []
         self.gecko_every = 0.0
+        self.other_pairs: dict[str, list] = {}   # chain -> DexScreener pairs on chains other than Solana
         self.paths: dict[str, list] = {}   # mint -> [(ts, price)] served as GeckoTerminal candles
 
     async def price_path(self, mint, start_ts, end_ts):
@@ -219,6 +220,10 @@ class FakeMarket(Market):
                 return [{"chainId": "solana", "baseToken": {"address": WSOL}, "quoteToken": {"address": USDC},
                          "priceUsd": str(self.sol), "liquidity": {"usd": 5e7}}]
             return [self.pairs[m] for m in wanted if m in self.pairs]
+        if "/latest/dex/pairs/" in url and "/solana/" not in url:
+            chain, ids = url.split("/latest/dex/pairs/")[1].split("/", 1)
+            found = [p for p in self.other_pairs.get(chain, []) if p["pairAddress"] in ids.split(",")]
+            return {"pairs": found} if found else {"pairs": None}
         if "rugcheck" in url:
             return None
         return None
@@ -238,10 +243,10 @@ class Notes:
         self.sent: list[dict] = []
         self._id = 100
 
-    async def __call__(self, text, *, buttons=None, silent=False, mint="", wallet="", kind=""):
+    async def __call__(self, text, *, buttons=None, silent=False, mint="", wallet="", kind="", reply_to=None):
         self._id += 1
         self.sent.append({"id": self._id, "text": text, "buttons": buttons, "silent": silent, "mint": mint,
-                          "wallet": wallet, "kind": kind})
+                          "wallet": wallet, "kind": kind, "reply_to": reply_to})
         return self._id
 
     def kinds(self):

@@ -123,3 +123,28 @@ def parse_amount(text) -> float:
         return max(0.0, float(s) * scale)
     except ValueError:
         return 0.0
+
+
+_DEX_URL = re.compile(r"dexscreener\.com/([a-z0-9_-]+)/([A-Za-z0-9]{20,})", re.I)
+_GMGN_URL = re.compile(r"gmgn\.ai/([a-z]+)/(?:token|address)/([A-Za-z0-9]{20,})", re.I)
+_EVM = re.compile(r"0x[0-9a-fA-F]{64}|0x[0-9a-fA-F]{40}")
+_GMGN_CHAINS = {"sol": "solana", "eth": "ethereum", "bsc": "bsc", "base": "base", "tron": "tron", "blast": "blast"}
+
+
+def parse_coin_ref(text) -> tuple[str, str]:
+    """(chain, address) from a contract address or a DexScreener / GMGN / pump.fun link.
+
+    chain is '' when it can't be told from the text (a bare 0x… address could be on any EVM chain).
+    Links and 0x addresses are checked first: a hex address contains runs that look like Solana addresses."""
+    raw = str(text or "").translate(_INVISIBLE).strip()
+    m = _DEX_URL.search(raw)
+    if m:
+        return m.group(1).lower(), m.group(2)
+    m = _GMGN_URL.search(raw)
+    if m:
+        return _GMGN_CHAINS.get(m.group(1).lower(), m.group(1).lower()), m.group(2)
+    m = _EVM.search(raw)
+    if m:
+        return "", m.group(0)
+    address = find_address(raw)
+    return ("solana", address) if address else ("", "")
