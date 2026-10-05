@@ -18,9 +18,12 @@ Copy-trading whales into coins early — but only the whales you can actually co
 - **📍 Tracked coins**: `/add COIN` (a coin address instead of a wallet, optionally `at 850k` for your entry)
   or the dashboard's My trades tab. You get take-profit messages for it: 2x/3x/5x/10x, gave back 35% after
   1.5x, -40%, and when your whales sell it. Coin addresses that were in your whale list are moved here.
+- **🔴 Live autopilot (optional, off by default)**: makes the paper autopilot's trades for real from a separate
+  wallet — see "Live autopilot" below. Starts in dry run. Sell buttons on the dashboard and `/sellnow`.
 - **💤 Sleep warning**: if the Mac sleeps (lid closed, battery), the bot tells you how long it missed.
-- **Dashboard**: overview tiles (paper balance, buys sent vs blocked), Autopilot tab with the balance chart,
-  tracked coins, whale style + copy score, settings grouped by purpose.
+  `install_autostart.command` starts the bot by itself at login.
+- **Dashboard**: overview tiles (paper balance, live status, buys sent vs blocked), Autopilot tab with the
+  balance chart and live controls, tracked coins, sell/close buttons, whale style + copy score, grouped settings.
 - The scanner runs every 2h over more coins (runners, your alerts that went 3x, coins 2+ whales bought,
   coins you made money on). Only one copy of the bot can run at once. Slimmer alerts.
 
@@ -83,6 +86,33 @@ Every alert has a 🎯 Ping me at 2x button.
 
 A = strong and fine to hold, B = normal or scalp, C = weak (sent silently). `/stats` shows where
 each grade's coins were 6h after the alert, so you can check the grades are honest.
+
+## Live autopilot (real money — optional)
+
+Off unless you turn it on. When on, it makes exactly the trades the paper autopilot makes: buys
+`LIVE_TRADE_SOL` (0.05) of each alert's coin, then sells half at 2x and the rest on the 35% trail, the -40%
+stop, the whale selling half, or after 24h. Swaps go through Jupiter and are signed on your Mac.
+
+1. Make a **new wallet** just for this (e.g. Phantom → Add account). Send it only what you can lose.
+2. Export that wallet's private key and add one line to `.env`: `TRADING_PRIVATE_KEY=...`
+   From then on never share that `.env` or a zip of the folder — anyone with it can spend from that wallet.
+   (Optional: add the wallet's public address to `MY_WALLETS` so its coins show under My trades.)
+3. Restart, then `/live on` (or the Autopilot tab). It starts in **dry run**: real Jupiter quotes and signed
+   transactions, nothing sent — you get "Dry run: would buy …". When those look right: `/live dry off`.
+4. Limits: `LIVE_MAX_OPEN` 3 coins · `LIVE_DAILY_LOSS_SOL` 0.3 (no new buys for the rest of the day) ·
+   `LIVE_SLIPPAGE_BPS` 1500 · a 0.02 SOL fee reserve.
+
+Getting out by hand: every live buy has a 🔴 Sell now button; `/sellnow COIN 50%`; `/sellall`; and on the
+dashboard, Sell 50% / Sell all buttons on My trades, tracked coins and live trades, plus Close on paper trades.
+These sell from the trading wallet — coins in your Fomo wallet are still sold in Fomo.
+`/live off` stops new buys. Watch the paper autopilot for a few days first: if it isn't making money,
+the live one won't either.
+
+## Start automatically
+
+Double-click `install_autostart.command` once and the bot opens by itself every time you log in.
+`remove_autostart.command` undoes it. Only one copy can run at a time, so a double-click won't double-alert.
+It still can't run while the Mac sleeps — keep the lid open and the charger in.
 
 ## Setup (Mac)
 

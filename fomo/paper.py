@@ -163,6 +163,14 @@ class PaperTrader:
         trade = self.db.row("select * from paper_trades where id=?", (t["id"],))
         return trade, reason, got
 
+    async def close(self, trade_id: int, reason: str = "closed by you") -> dict | None:
+        """Close a paper trade now at its last price (dashboard button). Live mirrors it like any paper sell."""
+        t = self.db.row("select * from paper_trades where id=? and status='open'", (trade_id,))
+        if not t or num(t["last_price"]) <= 0:
+            return None
+        trade, what, got = self._sell(t, 1.0, num(t["last_price"]), reason, int(time.time()))
+        return trade
+
     def _record_equity(self, infos: dict, now: int) -> None:
         if now - self._last_equity < EQUITY_EVERY:
             return

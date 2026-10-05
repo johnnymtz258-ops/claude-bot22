@@ -92,7 +92,7 @@ def test_pasting_an_address_shows_the_coin(chat):
 
 
 def test_bad_input_is_explained_not_crashing(chat):
-    assert "which coin" in chat.say("/bought 20")
+    assert "couldn't find a coin" in chat.say("/bought 20")
     assert "no whale by that name" in chat.say("/whale nobody")
     assert "Unknown command" in chat.say("/wat")
 

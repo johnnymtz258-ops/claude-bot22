@@ -75,6 +75,7 @@ class Dashboard:
                       "problem": a.live.ready()[1], "realized_sol": a.live.summary()["realized_sol"]}
                      if getattr(a, "live", None) else None),
             "tracked_coins": len(a.engine.coins.active()),
+            "open_positions": len(a.portfolio.open_positions()),
             "funnel_labels": reports.FUNNEL_LABELS, "errors": [e for e in (a.engine.last_error, a.tracker.last_error,
                                                                   a.rpc.health()["last_error"]) if e][:3],
         })
@@ -213,9 +214,7 @@ class Dashboard:
 
     async def add_coin(self, request):
         body = await self._body(request)
-        mint = await self.app.market.resolve_mint(find_address(body.get("mint")) or str(body.get("mint") or ""))
-        if not is_address(mint):
-            raise ValueError("coin address needed")
+        mint = await self._coin_from(body.get("mint"))
         ok, text = await self.app.engine.coins.add(mint, parse_amount(body.get("entry_mc")))
         return _json({"ok": ok, "message": text}, 200 if ok else 400)
 
@@ -229,6 +228,24 @@ class Dashboard:
             return _json({"available": False})
         return _json({"available": True, **live.summary(), "size": self.app.cfg.get("LIVE_TRADE_SOL"),
                       "max_open": self.app.cfg.get("LIVE_MAX_OPEN"), "daily_loss": self.app.cfg.get("LIVE_DAILY_LOSS_SOL")})
+
+    async def sell(self, request):
+        """Sell part or all of a coin from the trading wallet (live autopilot's wallet)."""
+        body = await self._body(request)
+        live = getattr(self.app, "live", None)
+        if not live:
+            raise ValueError("selling from the dashboard needs the live autopilot's wallet (TRADING_PRIVATE_KEY)")
+        mint = await self._coin_from(body.get("mint"))
+        share = max(0.01, min(1.0, num(body.get("pct"), 100) / 100))
+        symbol = self.app.market.cached(mint).get("symbol") or ""
+        ok, message = await live.sell_token(mint, share, symbol, "you sold from the dashboard")
+        return _json({"ok": ok, "message": message}, 200 if ok else 400)
+
+    async def close_paper(self, request):
+        trade = await self.app.engine.paper.close(int(num(request.match_info["id"])))
+        if not trade:
+            return _json({"error": "that paper trade is already closed"}, 400)
+        return _json({"ok": True})
 
     async def live_action(self, request):
         live = getattr(self.app, "live", None)
@@ -323,9 +340,7 @@ class Dashboard:
 
     async def trade(self, request):
         body = await self._body(request)
-        mint = await self.app.market.resolve_mint(find_address(body.get("mint")))
-        if not is_address(mint):
-            raise ValueError("coin address needed")
+        mint = await self._coin_from(body.get("mint"))
         at_mc = parse_amount(body.get("mc"))
         if body.get("side") == "BUY":
             r = await self.app.portfolio.manual_buy(mint, num(body.get("usd")), at_mc)
@@ -333,6 +348,23 @@ class Dashboard:
             r = await self.app.portfolio.manual_sell(mint, usd=num(body.get("usd")),
                                                      fraction=num(body.get("fraction")), mc_usd=at_mc)
         return _json({"ok": True, **r})
+
+    async def _coin_from(self, text) -> str:
+        """A coin from whatever was pasted: contract address, DexScreener/pump.fun/GMGN link, or a ticker you track."""
+        raw = str(text or "").strip()
+        mint = await self.app.market.resolve_mint(find_address(raw)) if find_address(raw) else ""
+        if not is_address(mint) and raw:
+            sym = raw.lstrip("$").lower()
+            for p in self.app.portfolio.open_positions():
+                if p["symbol"].lower() == sym:
+                    return p["mint"]
+            row = self.app.db.row("select mint from coins where lower(symbol)=? and active=1", (sym,))
+            if row:
+                return row["mint"]
+        if not is_address(mint):
+            raise ValueError(f"no coin address in \"{raw[:60]}\" — paste the full contract address (32–44 letters/numbers) "
+                             "or a DexScreener / pump.fun link")
+        return mint
 
     async def undo(self, request):
         row = self.app.portfolio.undo_last_manual()
@@ -353,6 +385,8 @@ class Dashboard:
         r.add_post("/api/coins/{mint}/remove", self.remove_coin)
         r.add_get("/api/live", self.live_view)
         r.add_post("/api/live/{action}", self.live_action)
+        r.add_post("/api/sell", self.sell)
+        r.add_post("/api/paper/{id}/close", self.close_paper)
         r.add_get("/api/whale/{addr}", self.whale)
         r.add_get("/api/coin/{addr}", self.coin)
         r.add_get("/api/lookup/{addr}", self.lookup)

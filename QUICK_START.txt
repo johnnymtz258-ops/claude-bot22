@@ -21,12 +21,26 @@ TRACK A COIN YOU HOLD
   You get told at 2x / 3x / 5x / 10x, if it gives back 35% after 1.5x, at -40%, and when whales sell it.
   /coins lists them · /drop COIN stops one.
 
+GETTING OUT OF A TRADE
+  Dashboard → My trades / Autopilot: Sell 50% / Sell all (from the trading wallet) · Close on paper trades.
+  Telegram: /sellnow COIN 50% · /sellall · the 🔴 Sell now button on live buys.
+  Coins in your Fomo wallet are still sold in Fomo — the bot can only sell from the trading wallet.
+
+LIVE AUTOPILOT (real money, optional — off by default)
+  1. New wallet just for this, funded with only what you can lose.
+  2. Add its private key to .env:  TRADING_PRIVATE_KEY=...   (never share .env or the folder after this!)
+  3. Restart, then /live on. It starts in DRY RUN (nothing is sent). /live dry off to trade for real.
+  0.05 SOL a trade, max 3 open, stops for the day at -0.3 SOL. /live off stops buying.
+
+START BY ITSELF
+  Double-click install_autostart.command once (remove_autostart.command undoes it).
+
 EVERY ALERT HAS THE SAME PLAN
   Sell half at 2x. Sell the rest if it falls 35% from its top, or 40% below your entry.
   Use the 🎯 Ping me at 2x button. The bot also nudges you at 2x / after a 35% drop / at -40%.
 
 USEFUL COMMANDS (optional)
-  /positions   /whales   /paper   /coins   /stats   /analyze WALLET   /find COIN   /export
+  /positions   /whales   /paper   /live   /coins   /stats   /analyze WALLET   /find COIN   /export
   /set NAME VALUE changes a setting (/settings lists them), e.g. /set PAPER_TRADE_USD 25
 
 TO SEND ME DATA FOR TUNING

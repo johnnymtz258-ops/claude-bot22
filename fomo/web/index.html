@@ -27,6 +27,10 @@
 <main>
   <section id="tab-live" class="tab on">
     <div class="tiles" id="live-tiles"></div>
+    <div class="card">
+      <div class="card-head"><h2>Your coins</h2><span class="muted">what you hold and track — and what the plan says to do</span></div>
+      <div class="table-wrap"><table id="my-coins"></table></div>
+    </div>
     <div class="grid2">
       <div class="card">
         <div class="card-head"><h2>Latest whale buys</h2><span class="muted" id="feed-note"></span></div>
@@ -73,12 +77,6 @@
   </section>
 
   <section id="tab-paper" class="tab">
-    <div class="card" id="live-card">
-      <div class="card-head"><h2>Live autopilot · real money</h2><span class="muted" id="live-state"></span></div>
-      <p class="hint" id="live-hint"></p>
-      <div class="row" id="live-actions"></div>
-      <div class="table-wrap"><table id="live-trades"></table></div>
-    </div>
     <div class="tiles" id="paper-tiles"></div>
     <div class="card">
       <div class="card-head"><h2>Paper balance</h2><span class="muted" id="paper-note"></span></div>
@@ -92,6 +90,12 @@
       <div class="card-head"><h2>Closed paper trades</h2></div>
       <div class="table-wrap"><table id="paper-closed"></table></div>
     </div>
+    <details class="card" id="live-card">
+      <summary class="card-head"><h2>Optional: real-money autopilot</h2><span class="muted" id="live-state"></span></summary>
+      <p class="hint" id="live-hint"></p>
+      <div class="row" id="live-actions"></div>
+      <div class="table-wrap"><table id="live-trades"></table></div>
+    </details>
   </section>
 
   <section id="tab-trades" class="tab">

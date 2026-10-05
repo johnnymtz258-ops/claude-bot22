@@ -264,6 +264,38 @@ class LiveTrader:
             await self.notify(line + f"\n<code>{mint}</code>", mint=mint, silent=bool(trade["dry"]), kind="LIVE")
             return True
 
+    async def sell_token(self, mint: str, share: float, symbol: str = "", reason: str = "you sold it") -> tuple[bool, str]:
+        """Sell `share` of whatever the trading wallet holds of `mint` — autopilot trade or not (dashboard / /sellnow)."""
+        if not self.keypair:
+            return False, f"selling needs the trading wallet: {self.key_problem}"
+        share = min(max(share, 0.01), 1.0)
+        if self.db.scalar("select 1 from live_trades where mint=? and status='open'", (mint,)):
+            ok = await self.sell(mint, share, reason)
+            return ok, "sold" if ok else (self.last_error or "sell failed")
+        async with self._lock:
+            held = await self.rpc.token_balance_raw(self.wallet, mint)
+            if not held:
+                return False, ("the trading wallet doesn't hold this coin — if it's in your Fomo wallet, sell it in Fomo"
+                               if held == 0 else "couldn't read the trading wallet's balance")
+            amount = held if share >= 0.999 else int(held * share)
+            sol_before = await self.rpc.sol_balance(self.wallet)
+            try:
+                q = await self.quote(mint, WSOL, amount)
+                sig, confirmed = await self.execute(q)
+            except Exception as exc:
+                await self._fail(symbol or mint[:4], mint, f"sell failed: {exc}")
+                return False, str(exc)
+            if self.dry_run:
+                return True, f"dry run: would get {int(q['outAmount']) / 1e9:.3f} SOL (nothing sent)"
+            if not confirmed:
+                await self._fail(symbol or mint[:4], mint, f"sell not confirmed ({sig[:12]}…)")
+                return False, "not confirmed — check Solscan and try again"
+            sol_after = await self.rpc.sol_balance(self.wallet)
+            got = (sol_after - sol_before) if sol_after is not None and sol_before is not None else int(q["outAmount"]) / 1e9
+            await self.notify(f"<b>🔴 Sold {share * 100:.0f}% of ${esc(symbol or mint[:4])}</b>\n{esc(reason)} · {got:.3f} SOL · "
+                              f'<a href="https://solscan.io/tx/{sig}">transaction</a>\n<code>{mint}</code>', mint=mint, kind="LIVE")
+            return True, f"sold for {got:.3f} SOL"
+
     async def sell_all(self, reason: str = "you sold everything (/sellall)") -> int:
         n = 0
         for t in self.open_trades():

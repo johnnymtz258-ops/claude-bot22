@@ -265,3 +265,41 @@ def test_only_one_copy_of_the_bot_runs(tmp_path):
     assert single_instance(tmp_path) is None          # a second window stops instead of double-alerting
     first.close()
     assert single_instance(tmp_path) is not None
+
+
+def test_coin_entry_is_read_however_you_type_it(chat):
+    from fomo.commands import entry_mc
+    from fomo.util import find_address
+    ca = "DvNcJZTiSMD1RBCtZ2J31mh7s42CVCwrzGapv1Lypump"
+    assert find_address(f"https://dexscreener.com/solana/{ca}?maker=x") == ca
+    assert find_address(f"CA:​{ca}\n") == ca
+    assert entry_mc(["at", "850k"]) == 850_000 and entry_mc(["850k"]) == 850_000
+    assert entry_mc(["entry", "1.2m"]) == 1_200_000 and entry_mc(["@850k"]) == 850_000 and entry_mc([]) == 0
+    chat.market.set_pair(mint=ca, symbol="DVNC", price=0.0001, mc=100_000)
+    assert "from your entry $80K" in chat.say(f"/add {ca} 80k")
+    chat.say(f"/drop {ca}")
+    assert "from your entry $80K" in chat.say(f"/track {ca} entry 80k")
+
+
+def test_dashboard_coin_form_accepts_links_and_explains_bad_input(chat):
+    import json
+    from fomo.dashboard import build_app
+    from aiohttp.test_utils import TestClient, TestServer
+    ca = "DvNcJZTiSMD1RBCtZ2J31mh7s42CVCwrzGapv1Lypump"
+    chat.market.set_pair(mint=ca, symbol="DVNC", price=0.0001, mc=100_000)
+    application, dash = build_app(chat)
+
+    async def go():
+        client = TestClient(TestServer(application))
+        await client.start_server()
+        h = {"X-Fomo-Token": dash.token, "Host": "localhost:8787"}
+        r = await client.post("/api/coins", data=json.dumps({"mint": f"https://pump.fun/coin/{ca}", "entry_mc": "80k"}), headers=h)
+        ok = (r.status, (await r.json())["message"])
+        r = await client.post("/api/coins", data=json.dumps({"mint": "DvNc…pump", "entry_mc": "80k"}), headers=h)
+        bad = (r.status, (await r.json()).get("error", ""))
+        await client.close()
+        return ok, bad
+
+    ok, bad = chat.loop.run_until_complete(go())
+    assert ok[0] == 200 and "your entry $80K" in ok[1]
+    assert bad[0] == 400 and "full contract address" in bad[1]

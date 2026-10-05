@@ -222,3 +222,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .settings-group { margin: 18px 0 6px; font-size: 13px; letter-spacing: .04em; text-transform: uppercase; color: var(--text-secondary); }
 .settings-group:first-child { margin-top: 0; }
+
+details.card > summary { cursor: pointer; list-style: none; }
+details.card > summary::-webkit-details-marker { display: none; }
+details.card > summary h2::before { content: "▸ "; color: var(--text-muted); }
+details.card[open] > summary h2::before { content: "▾ "; }

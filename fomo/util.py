@@ -7,7 +7,10 @@ import re
 import time
 
 BASE58 = set("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
-_ADDRESS_RE = re.compile(r"[1-9A-HJ-NP-Za-km-z]{32,44}")
+_B58 = "1-9A-HJ-NP-Za-km-z"
+_ADDRESS_RE = re.compile(rf"(?<![{_B58}])[{_B58}]{{32,44}}(?![{_B58}])")   # a whole word, never a slice of one
+_LOOSE_RE = re.compile(rf"[{_B58}]{{32,44}}")
+_INVISIBLE = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff"), None)
 
 
 def now() -> int:
@@ -30,9 +33,11 @@ def is_address(value) -> bool:
 
 def find_address(text) -> str:
     """First Solana-looking address inside free text or a URL, else ''."""
-    for match in _ADDRESS_RE.findall(str(text or "")):
-        if is_address(match):
-            return match
+    text = str(text or "").translate(_INVISIBLE)
+    for regex in (_ADDRESS_RE, _LOOSE_RE):
+        for match in regex.findall(text):
+            if is_address(match):
+                return match
     return ""
 
 

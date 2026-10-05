@@ -32,7 +32,7 @@ or -40% from entry.
 <b>Bot</b>
 /paper — paper autopilot trades and balance · /stats — what alerts returned · /status
 /card — re-pin the live card · /export — send me a review file
-/live — real-money autopilot (off by default, dry run first) · /sellall
+/live — real-money autopilot (off by default, dry run first) · /sellnow COIN 50% · /sellall
 /settings · /set NAME VALUE · /pause · /resume"""
 
 
@@ -151,7 +151,8 @@ class Commands:
                 where lower(t.symbol)=? order by a.ts desc limit 1""", (words[0],))
             if row:
                 return row["mint"]
-        raise ValueError("which coin? Reply to its alert, or add the contract address (or ticker you hold).")
+        raise ValueError(f"I couldn't find a coin in \"{' '.join(args)[:60]}\". Paste the full contract address "
+                         "(or a DexScreener / pump.fun link), reply to the coin's alert, or use the ticker of a coin you hold.")
 
     # -- whales -----------------------------------------------------------------------------
     async def cmd_help(self, args, reply_mint):
@@ -179,8 +180,7 @@ class Commands:
         if not address:
             raise ValueError("that doesn't include a Solana wallet address. usage: /add WALLET name")
         if await self._is_coin(address):
-            _, at_mc = _amount_and_mc([a for a in args if find_address(a) != address])
-            ok, text = await self.app.engine.coins.add(address, at_mc)
+            ok, text = await self.app.engine.coins.add(address, entry_mc([a for a in args if find_address(a) != address]))
             await self.say(("" if ok else "⚠️ ") + esc(text) + ("\n/coins lists your tracked coins · /drop COIN stops"
                                                                   if ok else ""))
             return
@@ -594,6 +594,18 @@ class Commands:
             self.app.set_setting("LIVE_TRADING", words[0])
         await self.say(format_live(self.app))
 
+    async def cmd_sellnow(self, args, reply_mint):
+        """/sellnow COIN [50%] — sell from the trading wallet right now (reply to an alert to skip COIN)."""
+        live = getattr(self.app, "live", None)
+        if not live:
+            raise ValueError("selling needs the live autopilot's trading wallet (TRADING_PRIVATE_KEY in .env)")
+        mint = await self._mint([a for a in args if not a.endswith("%")], reply_mint)
+        pct_arg = next((a for a in args if a.endswith("%")), "100%")
+        share = max(0.01, min(1.0, parse_amount(pct_arg[:-1]) / 100))
+        symbol = self.app.market.cached(mint).get("symbol") or mint[:4]
+        ok, message = await live.sell_token(mint, share, symbol, "you sold with /sellnow")
+        await self.say(("✅ " if ok else "⚠️ ") + esc(message))
+
     async def cmd_sellall(self, args, reply_mint):
         live = getattr(self.app, "live", None)
         if not live or not live.open_trades():
@@ -636,7 +648,15 @@ def _amount_and_mc(args: list[str]) -> tuple[float, float]:
             at_mc = parse_amount(a[1:])
         elif not amount and not a.endswith("%") and not is_address(a) and parse_amount(a) > 0:
             amount = parse_amount(a)
+        elif amount and not at_mc and not is_address(a) and a[-1:].lower() in "km" and parse_amount(a) >= 1000:
+            at_mc = parse_amount(a)    # "/bought 20 850k": a second number with k/m is the market cap
     return amount, at_mc
+
+
+def entry_mc(args: list[str]) -> float:
+    """Market cap you bought at, from '/add COIN at 850k', '/add COIN 850k' or '/add COIN entry 1.2m'."""
+    amount, at_mc = _amount_and_mc([a for a in args if a.lower() not in {"entry", "mc", "bought"}])
+    return at_mc or (amount if amount >= 1000 else 0.0)
 
 
 # -- formatting shared by commands and the daily summary -----------------------------------------

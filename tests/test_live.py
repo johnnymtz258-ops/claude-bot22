@@ -161,3 +161,24 @@ def test_live_command(chat, monkeypatch):
     assert "OFF" in chat.say("/live")
     assert "can't turn on" in chat.say("/live on")
     assert chat.cfg.flag("LIVE_TRADING") is False
+
+
+def test_sell_any_coin_the_trading_wallet_holds(bot):
+    live, chain, quotes, kp, msg = live_bot(bot, dry=False)
+    coin = "Held" + "1" * 36 + "pump"
+    assert bot.run(live.sell_token(coin, 0.5, "HELD"))[1].startswith("the trading wallet doesn't hold this coin")
+    chain.tokens = 1_000_000
+    ok, message = bot.run(live.sell_token(coin, 0.5, "HELD", "you sold from the dashboard"))
+    assert ok and message.startswith("sold for") and quotes[-1]["amount"] == "500000" and chain.tokens == 500_000
+    assert any("Sold 50% of $HELD" in m["text"] for m in bot.notes.sent)
+
+
+def test_paper_trade_can_be_closed_by_hand_and_live_follows(bot):
+    live, chain, quotes, kp, msg = live_bot(bot, dry=False)
+    alert(bot)
+    t = bot.db.row("select * from paper_trades")
+    trade = bot.run(bot.engine.paper.close(t["id"]))
+    bot.run(asyncio.sleep(0.05))
+    assert trade["status"] == "closed" and trade["close_reason"] == "closed by you"
+    assert bot.db.row("select status from live_trades")["status"] == "closed"
+    assert bot.run(bot.engine.paper.close(t["id"])) is None

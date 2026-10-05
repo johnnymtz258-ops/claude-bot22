@@ -304,13 +304,13 @@
     const sent = (fn0.sent || 0) + (fn0.silent || 0);
     const blocked = ["flipper", "weak_whale", "chased", "dumping", "micro", "whale_only"].reduce((n, k) => n + (fn0[k] || 0), 0);
     const p = o.paper || {}, lv = o.live;
-    const liveText = !lv ? "—" : !lv.enabled ? "Off" : lv.problem ? "Can't trade" : lv.dry_run ? "Dry run" : "ON";
+    void lv; void c;
     $("live-tiles").replaceChildren(
-      tile("Paper autopilot", usd(p.equity), `${pct(p.return_pct, 1)} · ${p.closed || 0} closed, ${p.won || 0} won`, signClass((p.equity || 0) - (p.start || 0)), true),
-      tile("Your total P/L", usd(me.total, true), `${usd(me.realized, true)} realized · ${usd(me.unrealized, true)} open`, signClass(me.total)),
+      tile("Your total P/L", usd(me.total, true), `${usd(me.realized, true)} realized · ${usd(me.unrealized, true)} open`, signClass(me.total), true),
       tile("Whale buys (24h)", `${sent} sent`, `${blocked} blocked (flippers, already ran, dumping)`),
-      tile("Live autopilot", liveText, lv && lv.enabled && !lv.problem ? `${lv.realized_sol >= 0 ? "+" : ""}${(lv.realized_sol || 0).toFixed(3)} SOL realized` : (lv && lv.problem) || "Autopilot tab to set up"));
-    void c;
+      tile("Your coins", String((o.open_positions || 0) + (o.tracked_coins || 0)), `${o.open_positions || 0} held · ${o.tracked_coins || 0} tracked`),
+      tile("Paper autopilot", usd(p.equity), `${pct(p.return_pct, 1)} · ${p.closed || 0} closed, ${p.won || 0} won`, signClass((p.equity || 0) - (p.start || 0))));
+    renderMyCoins().catch(() => {});
     const rows = f.buys.map((b) => el("tr", { class: "click", onclick: () => openCoin(b.mint) },
       td(ago(b.trade_ts || b.ts)), td(el("span", { class: "grade", title: b.scalp ? "Scalp: take profit into the pump, don't hold" : "" }, b.scalp ? `⚡${b.grade}` : b.grade)), td(b.whale), td(coinCell(b.symbol, b.image, b.mint)),
       td(mc(b.entry_mc), "num"), td(mc(b.now_mc), "num"),
@@ -380,6 +380,24 @@
       "You're not following anyone yet. Paste a wallet above, or use Find whales.");
   }
 
+  // Live tab: every coin you hold or track in one table, with the plan's advice and sell buttons
+  async function renderMyCoins() {
+    const [pos, coins] = await Promise.all([api("/api/positions"), api("/api/coins"), refreshCanSell()]);
+    const held = pos.open.map((p) => ({ mint: p.mint, symbol: p.symbol, kind: "held", value: usd(p.value),
+      x: p.multiple, top: p.coach && p.coach.peak_multiple, mcNow: p.mc_now, whales: p.holders.filter((h) => h.still_in).length,
+      hint: (p.coach && p.coach.hint) || "" }));
+    const seen = new Set(held.map((h) => h.mint));
+    const tracked = coins.filter((c) => !seen.has(c.mint)).map((c) => ({ mint: c.mint, symbol: c.symbol, kind: "tracked", value: "—",
+      x: c.multiple, top: c.peak_multiple, mcNow: c.mc_now, whales: c.whales_in, hint: c.hint || "" }));
+    table($("my-coins"), ["Coin", "", { label: "Value", num: 1 }, { label: "On cost", num: 1 }, { label: "Top", num: 1 }, { label: "MC now", num: 1 }, "Whales in", "Plan says", ""],
+      [...held, ...tracked].map((c) => el("tr", { class: "click", onclick: () => openCoin(c.mint) },
+        td(coinCell(c.symbol, "", c.mint)), td(el("span", { class: "muted" }, c.kind)), td(c.value, "num"),
+        td(c.x ? mult(c.x) : "—", `num ${signClass((c.x || 1) - 1)}`), td(c.top ? mult(c.top) : "—", "num"),
+        td(mc(c.mcNow), "num"), td(String(c.whales || 0)), td(el("span", { class: "coach" }, c.hint), "wrap"),
+        td(sellButtons(c.mint, c.symbol, renderMyCoins)))),
+      "Nothing held or tracked. Paste a coin address on My trades → Tracked coins to follow one.");
+  }
+
   async function renderCoins() {
     const rows = await api("/api/coins");
     table($("coins"), ["Coin", { label: "Progress", num: 1 }, { label: "Top", num: 1 }, { label: "Now", num: 1 }, "Whales in", "What the plan says", ""],
@@ -387,11 +405,13 @@
         td(coinCell(c.symbol, "", c.mint)), td(`${mult(c.multiple)} (${c.ref_label})`, `num ${signClass(c.multiple - 1)}`),
         td(mult(c.peak_multiple), "num"), td(mc(c.mc_now), "num"), td(String(c.whales_in)),
         td(el("span", { class: "coach" }, c.hint || ""), "wrap"),
-        td(el("button", { class: "ghost small", onclick: async (e) => { e.stopPropagation(); await post(`/api/coins/${c.mint}/remove`, {}); renderCoins(); } }, "Stop")))),
+        td(el("span", { class: "row" }, sellButtons(c.mint, c.symbol, renderCoins),
+          el("button", { class: "ghost small", onclick: async (e) => { e.stopPropagation(); await post(`/api/coins/${c.mint}/remove`, {}); renderCoins(); } }, "Stop tracking"))))),
       "No tracked coins. Paste a coin address above (add your entry market cap if you know it).");
   }
 
   async function renderTrades() {
+    await refreshCanSell();
     renderCoins().catch(() => {});
     const d = await api("/api/positions");
     const s = d.summary;
@@ -403,7 +423,7 @@
     const curve = d.curve.length ? [[d.curve[0][0] - 60, 0], ...d.curve] : [];
     lineChart($("curve"), curve, (v) => usd(v, true));
     $("curve-note").textContent = d.curve.length ? "one point per sell" : "";
-    table($("open"), ["Coin", { label: "Value", num: 1 }, { label: "P/L", num: 1 }, { label: "Peak", num: 1 }, { label: "Your entry", num: 1 }, { label: "Now", num: 1 }, "Whales in", "Exit coach"],
+    table($("open"), ["Coin", { label: "Value", num: 1 }, { label: "P/L", num: 1 }, { label: "Peak", num: 1 }, { label: "Your entry", num: 1 }, { label: "Now", num: 1 }, "Whales in", "Exit coach", ""],
       d.open.map((p) => {
         const inNow = p.holders.filter((h) => h.still_in);
         return el("tr", { class: "click", onclick: () => openCoin(p.mint) },
@@ -412,13 +432,33 @@
           td(p.coach && p.coach.peak_multiple ? `${mult(p.coach.peak_multiple)}` : "—", "num"),
           td(mc(p.entry_mc), "num"), td(mc(p.mc_now), "num"),
           td(p.holders.length ? `${inNow.length}/${p.holders.length} ${inNow.map((h) => h.name).slice(0, 3).join(", ")}` : "—", "wrap"),
-          td(el("span", { class: "coach" }, (p.coach && p.coach.hint) || ""), "wrap"));
+          td(el("span", { class: "coach" }, (p.coach && p.coach.hint) || ""), "wrap"),
+          td(sellButtons(p.mint, p.symbol, renderTrades)));
       }), "No open positions.");
     table($("closed"), ["Coin", { label: "Bought", num: 1 }, { label: "Sold", num: 1 }, { label: "Realized", num: 1 }, { label: "Return", num: 1 }, "Last trade"],
       d.closed.map((p) => el("tr", { class: "click", onclick: () => openCoin(p.mint) },
         td(coinCell(p.symbol, "", p.mint)), td(usd(p.bought), "num"), td(usd(p.sold), "num"),
         td(usd(p.realized, true), `num ${signClass(p.realized)}`), td(pct(p.pnl_pct), `num ${signClass(p.pnl_pct)}`), td(ago(p.last_ts)))),
       "No closed coins yet.");
+  }
+
+  // Sell buttons: sell from the live autopilot's trading wallet (asks first; the bot confirms in Telegram too)
+  let canSell = false;
+  async function refreshCanSell() {
+    try { const l = await api("/api/live"); canSell = !!(l.available && l.wallet); } catch (e) { canSell = false; }
+    return canSell;
+  }
+  function sellButtons(mint, symbol, after) {
+    if (!canSell) return "";
+    const btn = (pct, label) => el("button", { class: "ghost small", onclick: async (e) => {
+      e.stopPropagation();
+      if (!confirm(`Sell ${pct}% of $${symbol} from the trading wallet now?`)) return;
+      e.target.disabled = true;
+      try { const r = await post("/api/sell", { mint, pct }); alert(r.message); }
+      catch (err) { alert(err.message); }
+      if (after) after();
+    } }, label);
+    return el("span", { class: "row" }, btn(50, "Sell 50%"), btn(100, "Sell all"));
   }
 
   async function renderLiveTrading() {
@@ -440,11 +480,13 @@
       l.dry_run ? act("Trade for real", "dry-off") : act("Back to dry run", "dry-on"),
       act("Sell everything", "sellall"),
       el("span", { class: "muted" }, ` ${l.closed} closed · ${l.won} won · ${l.realized_sol >= 0 ? "+" : ""}${l.realized_sol.toFixed(3)} SOL · today ${l.today_sol >= 0 ? "+" : ""}${l.today_sol.toFixed(3)} SOL`));
-    table($("live-trades"), ["Coin", { label: "SOL in", num: 1 }, { label: "SOL out", num: 1 }, { label: "P/L", num: 1 }, "Status", "Opened"],
+    canSell = !!l.wallet;
+    table($("live-trades"), ["Coin", { label: "SOL in", num: 1 }, { label: "SOL out", num: 1 }, { label: "P/L", num: 1 }, "Status", "Opened", ""],
       l.recent.map((t) => el("tr", { class: "click", onclick: () => openCoin(t.mint) },
         td(coinCell(t.symbol, "", t.mint)), td(t.sol_in.toFixed(3), "num"), td(t.sol_out.toFixed(3), "num"),
         td(t.status === "closed" ? `${(t.sol_out - t.sol_in >= 0 ? "+" : "")}${(t.sol_out - t.sol_in).toFixed(3)}` : "—", `num ${signClass(t.sol_out - t.sol_in)}`),
-        td(t.status === "closed" ? t.close_reason : (t.dry ? "open (dry run)" : "open"), "wrap"), td(ago(t.open_ts)))),
+        td(t.status === "closed" ? t.close_reason : (t.dry ? "open (dry run)" : "open"), "wrap"), td(ago(t.open_ts)),
+        td(t.status === "open" ? sellButtons(t.mint, t.symbol, renderLiveTrading) : ""))),
       "No live trades yet.");
   }
 
@@ -461,10 +503,16 @@
       empty: "The balance line starts once the autopilot has traded for a few minutes." });
     $("paper-note").textContent = d.curve.length ? "every 5 minutes, open trades at market" : "";
     $("paper-rules").textContent = `${usd(d.rules.size)} a trade · ${d.rules.slippage}% slippage each way · half at 2x · out at -${d.rules.trail}% from top or -${d.rules.stop}%`;
-    table($("paper-open"), ["Coin", { label: "Now", num: 1 }, { label: "Value left", num: 1 }, { label: "Top", num: 1 }, "Half sold", "Opened"],
+    table($("paper-open"), ["Coin", { label: "Now", num: 1 }, { label: "Value left", num: 1 }, { label: "Top", num: 1 }, "Half sold", "Opened", ""],
       s.open.map((t) => el("tr", { class: "click", onclick: () => openCoin(t.mint) },
         td(coinCell(t.symbol, "", t.mint)), td(mult(t.multiple), `num ${signClass(t.multiple - 1)}`), td(usd(t.value), "num"),
-        td(mult(t.peak_x), "num"), td(t.half_taken ? "yes" : "—"), td(ago(t.open_ts)))), "No open paper trades.");
+        td(mult(t.peak_x), "num"), td(t.half_taken ? "yes" : "—"), td(ago(t.open_ts)),
+        td(el("button", { class: "ghost small", onclick: async (e) => {
+          e.stopPropagation();
+          if (!confirm(`Close the paper trade in $${t.symbol} now?${canSell ? " (The live autopilot sells it too.)" : ""}`)) return;
+          try { await post(`/api/paper/${t.id}/close`, {}); } catch (err) { alert(err.message); }
+          renderPaper();
+        } }, "Close")))), "No open paper trades.");
     table($("paper-closed"), ["Coin", { label: "In", num: 1 }, { label: "Out", num: 1 }, { label: "P/L", num: 1 }, "Why it sold", "Closed"],
       d.closed.map((t) => el("tr", { class: "click", onclick: () => openCoin(t.mint) },
         td(coinCell(t.symbol, "", t.mint)), td(usd(t.size_usd), "num"), td(usd(t.proceeds_usd), "num"),
