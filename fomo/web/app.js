@@ -755,7 +755,10 @@
   // ---------- wiring --------------------------------------------------------------------
   const renderers = { live: renderLive, hot: renderHot, whales: renderWhales, paper: renderPaper, trades: renderTrades, report: renderReport, exits: renderExits, stats: renderStats, find: renderStatus, settings: renderSettings };
   async function refresh() {
-    try { await renderers[activeTab](); }
+    try {
+      if (!["live", "settings", "find"].includes(activeTab)) renderStatus().catch(() => {});   // header on every tab
+      await renderers[activeTab]();
+    }
     catch (err) { $("status").replaceChildren(el("span", { class: "pill bad" }, el("span", { class: "dot" }), `Bot not reachable: ${err.message}`)); }
   }
   function showTab(name) {
