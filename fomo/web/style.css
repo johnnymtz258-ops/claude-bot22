@@ -230,3 +230,5 @@ details.card[open] > summary h2::before { content: "▾ "; }
 
 .lessons { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 6px; }
 .lessons li { color: var(--text-primary); line-height: 1.45; }
+
+tr.unsent td { opacity: 0.55; }

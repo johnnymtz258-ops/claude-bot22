@@ -55,6 +55,7 @@ FUNNEL_LABELS = {
     "micro": "not sent: still on the bonding curve (MICRO_ALERTS off)",
     "flipper": "not sent: flipper whale (sells within minutes)",
     "weak_whale": "not sent: copying this whale at your speed loses",
+    "low_quality": "not sent: small buy / tiny cap / grade C (QUALITY_GATE)",
 }
 
 
@@ -77,7 +78,7 @@ def alert_funnel(db, hours: float = 24) -> dict:
 
 def recent_buys(db, market, whales, limit: int = 15, since_hours: float = 48) -> list[dict]:
     rows = db.rows("""select a.*, s.usd_value, s.ts trade_ts from alerts a left join swaps s on s.id=a.swap_id
-        where a.kind in ('BUY','RUNNER') and a.grade<>'SKIP' and a.ts>=? order by a.ts desc limit ?""",
+        where a.kind='BUY' and a.grade<>'SKIP' and a.ts>=? order by a.ts desc limit ?""",
                    (int(time.time() - since_hours * 3600), limit))
     out = []
     for r in rows:

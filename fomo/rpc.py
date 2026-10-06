@@ -59,6 +59,7 @@ class SolanaRPC:
     async def call(self, method: str, params: list, *, timeout: float = 12, attempts: int = 2):
         """Return the JSON-RPC `result`, or None when every node failed."""
         payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+        before = self.last_error
         for attempt in range(attempts):
             for url in self._ordered():
                 await self._pace()
@@ -92,6 +93,8 @@ class SolanaRPC:
                     self.last_rpc_error = err if isinstance(err, dict) else {"message": str(err)}
                     return None  # a definite answer (bad params etc.) — other nodes would agree
                 self.last_ok_ts = time.time()
+                if self.last_error.endswith(f"{method}: rate limited"):
+                    self.last_error = before   # slowed down and got through: nothing was lost
                 if self.min_interval > self.base_interval:   # recover speed gradually after a rate limit
                     self.min_interval = max(self.base_interval, self.min_interval * 0.98)
                 return data.get("result")
@@ -103,11 +106,14 @@ class SolanaRPC:
         """Fetch a confirmed transaction. A just-notified signature can take a moment to index."""
         deadline = time.monotonic() + wait
         delay = 0.35
+        before = self.last_error
         while True:
             self.last_rpc_error = {}
             tx = await self.call("getTransaction", [signature, {
                 "encoding": "jsonParsed", "commitment": "confirmed",
                 "maxSupportedTransactionVersion": self.tx_version}], attempts=1)
+            if tx and self.last_error.endswith("getTransaction: rate limited"):
+                self.last_error = before   # a retry got it: nothing was lost
             if tx or time.monotonic() >= deadline:
                 return tx
             if self._adjust_tx_version(self.last_rpc_error):

@@ -20,6 +20,7 @@ class Bot:
         self.cfg = Config(my_wallets=list(my_wallets), rpc_http=["x"], max_whales=60)
         self.cfg.set("CONFIRM_SECONDS", "0")
         self.cfg.set("QUIET_UPDATE_MINUTES", "0")  # tested on its own in test_report  # judge whale buys at once in tests (test_gates covers the wait)
+        self.cfg.set("QUALITY_GATE", "0")  # small test buys; the gate has its own tests in test_gates
         self.db = Database(":memory:")
         self.rpc = FakeRPC()
         self.market = FakeMarket(self.db, self.rpc)

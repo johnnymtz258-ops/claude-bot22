@@ -47,6 +47,10 @@ class App:
                     cfg.set(name, saved)
                 except ValueError:
                     pass
+        if self.db.get_meta("runner_alerts_off_v22_4") != "1":   # community runners averaged -71% on your data
+            self.db.set_meta("setting:RUNNER_ALERTS", 0)
+            cfg.set("RUNNER_ALERTS", 0)
+            self.db.set_meta("runner_alerts_off_v22_4", "1")
         self.stream: WalletStream | None = None
         self.find_task: asyncio.Task | None = None
         self.last_find: dict | None = None

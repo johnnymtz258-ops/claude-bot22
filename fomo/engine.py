@@ -333,6 +333,11 @@ class Engine:
         if not self.whales.is_alerting(whale):
             status("muted")
             return
+        if self.cfg.flag("QUALITY_GATE") and not setup and (
+                c["usd_value"] < self.cfg.get("QUALITY_MIN_BUY_USD") or grade == "C"
+                or (num(info.get("mc_usd")) or c["trade_mc"]) < self.cfg.get("QUALITY_MIN_MC_USD")):
+            status("low_quality")
+            return  # small buys, tiny caps and grade C: 6% hit 10x and ~85% ended below entry in your data
         prof = self.profiles.get(wallet)
         send_ok, _ = profiles.verdict(prof, self.cfg.get("MIN_COPY_SCORE"))
         if not send_ok and self.cfg.flag("BLOCK_FLIPPERS") and not setup:

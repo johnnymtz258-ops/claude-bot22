@@ -65,3 +65,21 @@ def test_old_coins_and_small_buys_are_not_runner_setups(bot, monkeypatch):
     _setup_buy(bot, age_min=600)                                          # 10h old: normal rules, flipper blocked
     assert bot.notes.sent == []
     assert bot.db.scalar("select status from alerts where kind='BUY'") in ("flipper", "weak_whale")
+
+
+def test_quality_gate_holds_back_small_buys_and_tiny_caps(bot):
+    bot.cfg.set("QUALITY_GATE", "1")
+    bot.whales.add(WHALE, "Rocket")
+    bot.market.set_pair(mint=MINT, price=WHALE_PRICE, mc=75_000)
+    bot.feed(WHALE, pump_buy())                                           # a $225 buy
+    assert bot.notes.sent == []
+    assert bot.db.scalar("select status from alerts where kind='BUY'") == "low_quality"
+    assert bot.db.scalar("select count(*) from copies") == 1              # still scored
+
+
+def test_quality_gate_sends_real_size_buys(bot):
+    bot.cfg.set("QUALITY_GATE", "1")
+    bot.whales.add(WHALE, "Rocket")
+    bot.market.set_pair(mint=MINT, price=1200 / 3_000_000, mc=400_000)   # $1,200 buy, $400K cap, old coin
+    bot.feed(WHALE, pump_buy(sol=8))
+    assert bot.notes.kinds() == ["BUY"]
