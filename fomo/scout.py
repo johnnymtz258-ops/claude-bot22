@@ -21,7 +21,7 @@ import time
 
 from . import profiles
 from .discovery import Discovery
-from .util import esc, mc, pct, short
+from .util import num, esc, mc, pct, short
 
 MIN_TRIPS = 5
 MIN_PNL_SOL = 0.5
@@ -29,8 +29,8 @@ MIN_WIN_RATE = 0.40
 MAX_IDLE_DAYS = 4
 RECHECK_AFTER_DAYS = 3
 CANDIDATE_RETRY_DAYS = 3
-MAX_CHECKS_PER_RUN = 25      # each wallet replay costs ~30 GeckoTerminal calls (free limit: 30 a minute)
-SMALL_BUDGET = {"pages": 40, "samples": 60, "dense": 300, "holders": 12, "wallet_txs": 400}
+MAX_CHECKS_PER_RUN = 30      # each wallet replay costs ~30 GeckoTerminal calls (free limit: 30 a minute)
+SMALL_BUDGET = {"pages": 40, "samples": 50, "dense": 220, "holders": 15, "wallet_txs": 400}
 
 
 COPY_MIN_COINS = 4
@@ -115,11 +115,14 @@ class WhaleScout:
     def auto_count(self) -> int:
         return int(self.db.scalar("select count(*) from whales where active=1 and source='auto'", default=0))
 
-    def pick_coins(self, limit: int = 8) -> list[str]:
+    def pick_coins(self, limit: int = 16) -> list[str]:
         """Coins whose early buyers are worth checking: today's runners, coins your alerts caught that went 3x+,
         coins 2+ of your whales bought, and coins you made money on yourself."""
         now = int(time.time())
-        mints = [c["mint"] for c in self.runners.suggest_coins(limit)]
+        mints = [r["mint"] for r in self.db.rows("""select mint, max(peak_price/price_usd) x from alerts
+            where kind='BUY' and price_usd>0 and peak_price>0 and ts>=? group by mint having x>=5 order by x desc
+            limit 8""", (now - 3 * 86400,))]                # coins your whale alerts caught that ran 5x+
+        mints += [c["mint"] for c in self.runners.suggest_coins(limit)]
         mints += [r["mint"] for r in self.db.rows("""select mint, max(peak_price/entry_price) x from copies
             where open_ts>=? and entry_price>0 group by mint having x>=3 order by x desc limit 5""", (now - 2 * 86400,))]
         mints += [r["mint"] for r in self.db.rows("""select mint, count(distinct wallet) n from swaps
@@ -142,41 +145,59 @@ class WhaleScout:
         followed, picks, checked = [], [], 0
         auto = self.cfg.flag("AUTO_WHALES")
         room = int(self.cfg.get("AUTO_WHALE_LIMIT")) - self.auto_count() if auto else 5
+        # 1) research every winner first and pool their early buyers
+        pool: dict[str, dict] = {}
         for mint in coins:
             self.db.set_meta(f"scouted:{mint}", now)
             coin = await self.discovery.research_coin(mint)
             if not coin.get("ok"):
                 continue
-            for cand in coin["candidates"][:8]:
-                if cand["tracked"] or cand["flags"] or room <= 0 or checked >= MAX_CHECKS_PER_RUN:
+            for cand in coin["candidates"]:
+                if cand["tracked"] or cand["flags"]:
                     continue
-                seen = self.db.row("select * from whale_candidates where address=?", (cand["wallet"],))
-                if seen and now - int(seen["analyzed_ts"] or 0) < CANDIDATE_RETRY_DAYS * 86400:
-                    continue
-                result = await self.discovery.analyze_wallet(cand["wallet"])
-                result["last_trade_ts"] = result.get("last_trade_ts") or await self._last_trade_ts(cand["wallet"])
-                checked += 1
-                ok, reason = qualifies(result, now)
-                level, why = ("no", reason)
-                prof = None
-                if ok:
-                    prof = await self.profiler.profile_history(cand["wallet"], result) if result.get("trip_list") else None
-                    level, why = copyable(prof)
-                    reason = why if level != "unscored" else f"{reason} · {why}"
-                if level == "unscored" and auto:
-                    level, reason = "strong", f"on trial — {reason}"   # follow now; dropped if it turns out a flipper/loser
-                if level == "strong" and auto:
-                    name = f"auto-{short(cand['wallet'])[:4]}"
-                    added, _ = self.whales.add(cand["wallet"], name, source="auto")
-                    if added:
-                        room -= 1
-                        self.profiler.save(cand["wallet"], prof)
-                        followed.append((cand, coin, result, reason))
-                elif level in ("strong", "unscored"):
+                entry = pool.setdefault(cand["wallet"], {"cand": cand, "coin": coin, "wins": set(), "usd": 0.0})
+                entry["wins"].add(coin.get("symbol") or mint[:4])
+                entry["usd"] += num(cand.get("buy_usd"))
+        # 2) wallets early in several winners are the real finds: check those first
+        ranked = sorted(pool.values(), key=lambda e: (-len(e["wins"]), -e["usd"]))
+        for e in ranked:
+            cand, coin = e["cand"], e["coin"]
+            if room <= 0 or checked >= MAX_CHECKS_PER_RUN:
+                break
+            seen = self.db.row("select * from whale_candidates where address=?", (cand["wallet"],))
+            multi = len(e["wins"]) >= 2
+            retry_days = 1 if multi else CANDIDATE_RETRY_DAYS   # a repeat winner gets a fresh look sooner
+            if seen and now - int(seen["analyzed_ts"] or 0) < retry_days * 86400:
+                continue
+            result = await self.discovery.analyze_wallet(cand["wallet"])
+            result["last_trade_ts"] = result.get("last_trade_ts") or await self._last_trade_ts(cand["wallet"])
+            checked += 1
+            ok, reason = qualifies(result, now)
+            if not ok and multi and result.get("pnl_sol", 0) > 0 and not reason.startswith(("🤖", "❌")) \
+                    and now - result.get("last_trade_ts", 0) <= 3 * 86400:
+                ok, reason = True, f"early in {len(e['wins'])} winners ({', '.join(sorted(e['wins'])[:3])})"
+            elif multi:
+                reason = f"early in {len(e['wins'])} winners · {reason}"
+            level, why = ("no", reason)
+            prof = None
+            if ok:
+                prof = await self.profiler.profile_history(cand["wallet"], result) if result.get("trip_list") else None
+                level, why = copyable(prof)
+                reason = why if level != "unscored" else f"{reason} · {why}"
+            if level == "unscored" and auto:
+                level, reason = "strong", f"on trial — {reason}"   # follow now; dropped if it turns out a flipper/loser
+            if level == "strong" and auto:
+                name = f"auto-{short(cand['wallet'])[:4]}"
+                added, _ = self.whales.add(cand["wallet"], name, source="auto")
+                if added:
                     room -= 1
-                    picks.append((cand, coin, result, reason))
-                status = "followed" if (level == "strong" and auto) else "picked" if level != "no" else "rejected"
-                self._remember(cand, coin, result, status, reason, now)
+                    self.profiler.save(cand["wallet"], prof)
+                    followed.append((cand, coin, result, reason))
+            elif level in ("strong", "unscored"):
+                room -= 1
+                picks.append((cand, coin, result, reason))
+            status = "followed" if (level == "strong" and auto) else "picked" if level != "no" else "rejected"
+            self._remember(cand, coin, result, status, reason, now)
         if followed:
             self.refresh_wallets()
             for cand, coin, result, reason in followed:

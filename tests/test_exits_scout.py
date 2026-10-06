@@ -295,3 +295,28 @@ def test_conviction_holders_qualify_with_few_trades():
     assert ok and why.startswith("conviction holder")
     assert not qualifies({**holder, "pnl_sol": 0.8}, now)[0]
     assert not qualifies({**holder, "verdict": "🤖 Too fast to copy"}, now)[0]
+
+
+def test_scanner_checks_wallets_early_in_several_winners_first(bot, monkeypatch):
+    now = int(time.time())
+    one_off = {"wallet": WHALE2, "tracked": False, "flags": [], "entry_mc": 90_000, "to_peak": 12, "buy_usd": 5000}
+    repeat = {"wallet": THIRD, "tracked": False, "flags": [], "entry_mc": 95_000, "to_peak": 11, "buy_usd": 300}
+    coins = {"A" * 44: {"ok": True, "symbol": "CRAWL", "candidates": [one_off, repeat]},
+             "B" * 44: {"ok": True, "symbol": "SEC", "candidates": [repeat]}}
+    order = []
+
+    async def research(mint, progress=None):
+        return coins[mint]
+
+    async def analyze(wallet, progress=None):
+        order.append(wallet)
+        # too few closed trades for the normal rule, but profitable and active
+        return {**GOOD, "trips": 3, "pnl_sol": 1.0, "verdict": "", "trip_list": [], "last_trade_ts": now - 600}
+
+    monkeypatch.setattr(bot.scout.discovery, "research_coin", research)
+    monkeypatch.setattr(bot.scout.discovery, "analyze_wallet", analyze)
+    monkeypatch.setattr(bot.scout, "pick_coins", lambda limit=16: list(coins))
+    bot.run(bot.scout.scout(now))
+    assert order[0] == THIRD                                       # early in 2 winners beats a bigger one-off buy
+    assert bot.whales.get(THIRD)["source"] == "auto"
+    assert "early in 2 winners" in bot.db.row("select reason from whale_candidates where address=?", (THIRD,))["reason"]
