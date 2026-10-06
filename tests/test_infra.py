@@ -158,3 +158,31 @@ def test_autopilot_whales_are_dropped_once_and_yours_kept(tmp_path):
     assert {r["address"] for r in db.rows("select address from whales where active=1")} == {WHALE2}
     db.run("update whales set active=1 where address=?", (WHALE,))  # if you re-add one later, it stays
     assert drop_autopilot_whales(db) == 0
+
+
+def test_rpc_asks_for_newer_transaction_versions():
+    seen = []
+
+    async def node(request):
+        body = await request.json()
+        v = body["params"][1]["maxSupportedTransactionVersion"]
+        seen.append(v)
+        if v < 2:
+            return web.json_response({"jsonrpc": "2.0", "id": 1, "error": {"code": -32015, "message":
+                f"Transaction version ({v + 1}) is not supported by the requesting client. Please try the request again "
+                f"with the following configuration parameter: \"maxSupportedTransactionVersion\": {v + 1}"}})
+        return web.json_response({"jsonrpc": "2.0", "id": 1, "result": {"slot": 7}})
+
+    async def run():
+        app = web.Application()
+        app.router.add_post("/", node)
+        srv = TestServer(app)
+        await srv.start_server()
+        async with aiohttp.ClientSession() as session:
+            rpc = SolanaRPC(session, [str(srv.make_url("/"))])
+            assert await rpc.transaction("sig", wait=3) == {"slot": 7}
+            assert await rpc.transaction("sig2", wait=3) == {"slot": 7}
+        await srv.close()
+
+    asyncio.run(run())
+    assert seen == [1, 2, 2]     # the bot remembers the version, so later fetches work first time

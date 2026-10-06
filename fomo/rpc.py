@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import json
 import time
 
@@ -25,6 +26,8 @@ class SolanaRPC:
         self.errors = 0
         self.rate_limited = 0
         self.last_error = ""
+        self.last_rpc_error: dict = {}
+        self.tx_version = 1   # newest transaction format the bot asks for; adjusted if a node names another
         self.last_ok_ts = 0.0
 
     def _ordered(self) -> list[str]:
@@ -79,6 +82,7 @@ class SolanaRPC:
                         self._note_error(url, f"{method}: {err.get('message', code)}", 1.0)
                         continue
                     self.last_error = f"{time.strftime('%H:%M:%S')} {method}: {err}"
+                    self.last_rpc_error = err if isinstance(err, dict) else {"message": str(err)}
                     return None  # a definite answer (bad params etc.) — other nodes would agree
                 self.last_ok_ts = time.time()
                 return data.get("result")
@@ -91,13 +95,31 @@ class SolanaRPC:
         deadline = time.monotonic() + wait
         delay = 0.35
         while True:
+            self.last_rpc_error = {}
             tx = await self.call("getTransaction", [signature, {
-                "encoding": "jsonParsed", "commitment": "confirmed", "maxSupportedTransactionVersion": 0}],
-                attempts=1)
+                "encoding": "jsonParsed", "commitment": "confirmed",
+                "maxSupportedTransactionVersion": self.tx_version}], attempts=1)
             if tx or time.monotonic() >= deadline:
                 return tx
+            if self._adjust_tx_version(self.last_rpc_error):
+                continue   # newer transaction format: ask again at once with the version the node named
             await asyncio.sleep(delay)
             delay = min(delay * 1.6, 1.5)
+
+    def _adjust_tx_version(self, err: dict) -> bool:
+        """Solana keeps adding transaction versions; a node rejecting one names the version to ask for."""
+        msg = str((err or {}).get("message", ""))
+        if "maxSupportedTransactionVersion" not in msg:
+            return False
+        found = re.search(r'maxSupportedTransactionVersion"?\s*:\s*(\d+)', msg)
+        wanted = int(found.group(1)) if found else None
+        if wanted is not None and wanted != self.tx_version:
+            self.tx_version = wanted
+            return True
+        if wanted is None and self.tx_version > 0:   # an older node that doesn't know the newer version
+            self.tx_version = 0
+            return True
+        return False
 
     async def signatures(self, address: str, *, limit: int = 100, before: str | None = None) -> list[dict]:
         opts = {"limit": max(1, min(1000, int(limit))), "commitment": "confirmed"}
