@@ -19,6 +19,7 @@ class SolanaRPC:
         self.urls = list(urls)
         self.sem = asyncio.Semaphore(max(1, concurrency))
         self.min_interval = max(0.0, min_interval)
+        self.base_interval = self.min_interval
         self._next = 0.0
         self._pace_lock = asyncio.Lock()
         self._cool_until = {u: 0.0 for u in self.urls}
@@ -45,6 +46,11 @@ class SolanaRPC:
         if start > now:
             await asyncio.sleep(start - now)
 
+    def _slow_down(self) -> None:
+        """Rate limited: pause everyone briefly and space calls out more, instead of hammering the plan's limit."""
+        self.min_interval = min(0.5, max(self.min_interval, 0.05) * 1.5)
+        self._next = max(self._next, time.monotonic() + 1.0)
+
     def _note_error(self, url: str, text: str, cool: float) -> None:
         self.errors += 1
         self.last_error = f"{time.strftime('%H:%M:%S')} {text}"
@@ -63,6 +69,7 @@ class SolanaRPC:
                                                      timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
                             if resp.status == 429:
                                 self.rate_limited += 1
+                                self._slow_down()
                                 self._note_error(url, f"{method}: rate limited", 2.0)
                                 continue
                             if resp.status >= 500:
@@ -85,6 +92,8 @@ class SolanaRPC:
                     self.last_rpc_error = err if isinstance(err, dict) else {"message": str(err)}
                     return None  # a definite answer (bad params etc.) — other nodes would agree
                 self.last_ok_ts = time.time()
+                if self.min_interval > self.base_interval:   # recover speed gradually after a rate limit
+                    self.min_interval = max(self.base_interval, self.min_interval * 0.98)
                 return data.get("result")
             await asyncio.sleep(0.4 * (attempt + 1))
         return None
