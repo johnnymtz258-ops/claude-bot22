@@ -39,3 +39,29 @@ def test_coin_already_dumping_is_not_sent(bot):
 def test_gates_report_in_the_funnel(bot):
     from fomo.reports import FUNNEL_LABELS
     assert {"chased", "dumping", "micro"} <= set(FUNNEL_LABELS)
+
+
+def _setup_buy(bot, age_min=30, mc=100_000):
+    import time
+    bot.whales.add(WHALE, "Rocket")
+    price = 1200 / 3_000_000                                              # 8 SOL ($1,200) for 3M tokens
+    bot.market.set_pair(mint=MINT, price=price, mc=mc, created_ms=int((time.time() - age_min * 60) * 1000))
+    bot.feed(WHALE, pump_buy(sol=8))
+
+
+def test_runner_setup_gets_its_own_buy_signal_even_from_a_blocked_whale(bot, monkeypatch):
+    from fomo import profiles
+    monkeypatch.setattr(profiles, "verdict", lambda prof, score: (False, "Flipper"))
+    _setup_buy(bot)
+    assert bot.notes.kinds() == ["BUY"]
+    text = bot.notes.sent[0]["text"]
+    assert text.startswith("🚀 <b>RUNNER SETUP") and "27% of these hit 10x" in text
+    assert not bot.notes.sent[0].get("silent")
+
+
+def test_old_coins_and_small_buys_are_not_runner_setups(bot, monkeypatch):
+    from fomo import profiles
+    monkeypatch.setattr(profiles, "verdict", lambda prof, score: (False, "Flipper"))
+    _setup_buy(bot, age_min=600)                                          # 10h old: normal rules, flipper blocked
+    assert bot.notes.sent == []
+    assert bot.db.scalar("select status from alerts where kind='BUY'") in ("flipper", "weak_whale")

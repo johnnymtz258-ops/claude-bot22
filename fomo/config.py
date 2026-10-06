@@ -51,6 +51,8 @@ TUNABLES = {t.name: t for t in (
     Tunable("PROTECT_AFTER_X", 1.5, "Profit protector arms once a coin reaches this multiple of your cost (0 = off)", 0, 100),
     Tunable("PROTECT_TRAIL_PCT", 35, "Profit protector: warn when an armed coin falls this % from its peak", 10, 90),
     Tunable("MICRO_MC_USD", 0, "Also treat coins below this market cap like bonding-curve coins (0 = off)", 0, 10_000_000),
+    Tunable("RUNNER_SETUP", 1, "Flag the setup most of your 10x coins had — whale buys $1K+ of a just-graduated coin at $40K-250K MC — and send it even from flipper whales (1 = on)", 0, 1, True),
+    Tunable("RUNNER_SETUP_MIN_BUY_USD", 1000, "Runner setup: smallest whale buy that counts", 100, 100000),
     Tunable("MICRO_ALERTS", 1, "Send buys of coins still on the pump.fun bonding curve (flagged ⚡; they either graduate and run or die — off = tracked, not sent)", 0, 1, True),
     Tunable("SCALP_PROTECT_AFTER_X", 1.5, "On SCALP coins you hold, the profit protector arms at this multiple", 0, 100),
     Tunable("SCALP_TRAIL_PCT", 25, "On SCALP coins you hold, warn when it falls this % from its peak", 10, 90),
