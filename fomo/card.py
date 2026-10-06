@@ -93,6 +93,7 @@ class LiveCard:
     def __init__(self, app):
         self.app = app
         self._last_text = ""
+        self._last_ok = 0.0
         self._last_edit = 0.0
 
     def message_id(self) -> int:
@@ -102,23 +103,32 @@ class LiveCard:
         app = self.app
         if not (app.cfg.flag("LIVE_CARD") and app.telegram and app.telegram.ok):
             return 0
-        text = build_card(app)
+        try:
+            text = build_card(app)
+        except Exception as exc:   # never let one broken section freeze the card
+            from . import VERSION
+            text = (f"<b>🟢 FomoBot {VERSION} · live</b>  <i>{time.strftime('%H:%M')}</i>\n"
+                    f"⚠️ Part of this card failed to build: {esc(type(exc).__name__)}: {esc(str(exc)[:120])}")
+            app.engine.last_error = f"live card: {type(exc).__name__}: {exc}"
         msg_id = self.message_id()
+        if msg_id and time.time() - self._last_ok > 600 and self._last_ok:
+            msg_id = 0   # edits have been failing for 10 minutes: post a fresh card instead
         if msg_id and not force and text == self._last_text:
             return msg_id
         if msg_id and await app.telegram.edit(msg_id, text, buttons=CARD_BUTTONS):
-            self._last_text = text
+            self._last_text, self._last_ok = text, time.time()
             return msg_id
         msg_id = await app.telegram.send(text, buttons=CARD_BUTTONS, silent=True)
         if msg_id:
             app.db.set_meta("live_card_id", msg_id)
             await app.telegram.pin(msg_id)
-            self._last_text = text
+            self._last_text, self._last_ok = text, time.time()
         return msg_id
 
     async def run(self) -> None:
         import asyncio
         await asyncio.sleep(20)
+        self.app.db.set_meta("live_card_id", 0)   # every start (and new version) gets a fresh pinned card
         while True:
             try:
                 await self.update()

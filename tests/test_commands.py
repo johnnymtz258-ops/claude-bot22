@@ -147,3 +147,15 @@ def test_card_buttons_run_commands(chat):
 
 def test_paper_command(chat):
     assert "Paper autopilot" in chat.say("/paper")
+
+
+def test_live_card_survives_a_broken_section(chat, monkeypatch):
+    from fomo import card as card_mod
+    from fomo.card import LiveCard
+
+    def boom(app):
+        raise RuntimeError("bad data")
+
+    monkeypatch.setattr(card_mod, "build_card", boom)
+    msg_id = chat.loop.run_until_complete(LiveCard(chat).update())
+    assert msg_id and "Part of this card failed to build: RuntimeError: bad data" in chat.telegram.out[-1]["text"]
