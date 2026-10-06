@@ -10,7 +10,7 @@ import asyncio
 import statistics
 import time
 
-from . import copies, exits, messages, profiles
+from . import playbook, copies, exits, messages, profiles
 from .coins import CoinTracker
 from .community import CommunityChecker
 from .market import IGNORED_MINTS
@@ -297,6 +297,9 @@ class Engine:
             community=community, after=after, micro=micro, profile=self.profiles.get(wallet))
         if not swap["new_position"] and grade != "SKIP":
             reasons.append((None, "Adding to a bag they already held"))
+        pb = (self.profiles.get(wallet) or {}).get("playbook") or {}
+        if pb.get("ok") and grade != "SKIP":
+            reasons.insert(0, (True, playbook.line(pb)))
         if setup and grade != "SKIP":
             reasons.insert(0, (True, "🚀 RUNNER SETUP: whale put $1K+ into a just-graduated coin at $40K-250K MC — "
                                      "in your history 27% of these hit 10x (vs 6% of other buys), peaking ~50 min in. "
@@ -358,8 +361,9 @@ class Engine:
             base_amount=swap["base_amount"], base=swap["base"], entry_mc=c["trade_mc"],
             now_mc=num(info.get("mc_usd")), chase=chase, confluence=confluence, latency_s=latency, info=info,
             late_detect=c["source"] != "stream",
-            hold_line=messages.exit_plan_line(num(info.get("mc_usd")) or c["trade_mc"], self.cfg, scalp,
-                                              exits.hold_plan(self.db, wallet)),
+            hold_line=(f"🎯 Exit plan for this whale: {esc(pb['label'])}" if pb.get("ok") else
+                       messages.exit_plan_line(num(info.get("mc_usd")) or c["trade_mc"], self.cfg, scalp,
+                                               exits.hold_plan(self.db, wallet))),
             form=self.whales.recent_form(wallet), scalp=scalp, profile=prof)
         buttons = [[(label, url, None) for label, url in messages.token_links(mint, info.get("pair_address", ""))],
                    [(f"🔕 Mute {whale.get('name', '')[:12]}", None, f"mute:{wallet}"),

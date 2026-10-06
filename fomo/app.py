@@ -216,7 +216,8 @@ class App:
             prof = self.engine.profiles.get(w["address"])
             ok = profiles.verdict(prof, self.cfg.get("MIN_COPY_SCORE"))[0]
             label = profiles.STYLE_LABEL.get((prof or {}).get("style", "NEW"), "🆕 New")
-            styles.setdefault(label + ("" if ok else " (blocked)"), []).append(esc(w["name"]))
+            pb = ((prof or {}).get("playbook") or {}).get("ok")
+            styles.setdefault(label + (" (📘 own playbook)" if pb else "" if ok else " (blocked)"), []).append(esc(w["name"]))
         for label, names in styles.items():
             lines.append(f"{label}: {', '.join(names)}")
         live = getattr(self, "live", None)

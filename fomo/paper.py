@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import time
 
+from . import playbook
 from .util import esc, mult, num, usd
 
 GLITCH_JUMP = 8.0
@@ -128,15 +129,22 @@ class PaperTrader:
             peak = max(num(t["peak_x"]), x)
             self.db.run("update paper_trades set last_price=?, peak_x=? where id=?", (price, peak, t["id"]))
             t.update(last_price=price, peak_x=peak)
+            plan = playbook.plan_for(self.db, t["whale"])   # this whale's own winning exit plan, if it has one
+            if plan and not plan["half"] and x >= plan["tp"]:
+                done.append(self._sell(t, 1.0, price, f"all out at {plan['tp']:g}x (whale's playbook)", now))
+                continue
             if not t["half_taken"] and x >= 2:
                 done.append(self._sell(t, 0.5, price, "half at 2x", now))
                 t = self.db.row("select * from paper_trades where id=?", (t["id"],))
+            stop_pct = (1 - plan["stop"]) * 100 if plan else stop
             reason = ""
-            if stop > 0 and x <= 1 - stop / 100:
-                reason = f"stop -{stop:.0f}%"
+            if stop_pct > 0 and x <= 1 - stop_pct / 100:
+                reason = f"stop -{stop_pct:.0f}%"
             elif peak >= 1.5 and x <= peak * (1 - trail / 100):
                 reason = f"fell {trail:.0f}% from its {peak:.1f}x top"
-            elif self._whale_half_out(t["whale"], t["mint"], t["open_ts"]):
+            elif plan and now - t["open_ts"] >= plan["hold"]:
+                reason = f"{plan['hold'] // 3600}h max hold (whale's playbook)"
+            elif (not plan or plan["follow_whale"]) and self._whale_half_out(t["whale"], t["mint"], t["open_ts"]):
                 reason = "whale sold half its bag"
             elif now - t["open_ts"] >= MAX_HOLD:
                 reason = "24h max hold"

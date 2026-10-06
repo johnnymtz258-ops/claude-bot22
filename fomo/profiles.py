@@ -97,6 +97,8 @@ def verdict(p: dict | None, min_avg: float = 0.95, min_n: int = 5) -> tuple[bool
     """(send entry alerts?, reason). Flippers and bots never; holders/swing unless copying them loses."""
     if not p:
         return True, ""
+    if (p.get("playbook") or {}).get("ok"):
+        return True, ""   # its own exit plan made money on its recorded copies (see playbook.py)
     if p["style"] in ("FLIPPER", "BOT"):
         return False, (f"{STYLE_LABEL[p['style']]}: first sells ~{dur(p['median_hold_s'])} after buying "
                        f"({p['within5m'] * 100:.0f}% within 5m) — you'd be buying their exit")
@@ -184,7 +186,9 @@ class Profiler:
         old = self.get(address)
         if old and old.get("source") == "history" and old.get("trips", 0) > prof["trips"]:
             # a freshly followed whale: its on-chain history says more than our few records yet
-            return old
+            prof = old
+        from . import playbook
+        prof["playbook"] = playbook.get(self.db, address)   # the exit plan that made money on THIS whale
         return self.save(address, prof)
 
     def refresh_tracked(self) -> int:
