@@ -96,13 +96,14 @@ class WhaleScout:
         self.running = False
 
     async def run(self) -> None:
-        await asyncio.sleep(300)  # let the bot settle (wallet backfill etc.) first
+        await asyncio.sleep(60)   # let the bot settle (wallet backfill etc.) first
         while True:
             try:
                 active = self.cfg.flag("WHALE_PICKS") or self.cfg.flag("AUTO_WHALES")
                 if active and time.time() - self.last_run >= self.cfg.get("AUTO_SCOUT_HOURS") * 3600:
                     await self.scout()
                 if self.cfg.flag("AUTO_WHALES"):
+                    await self.promote_picks()
                     await self.prune()
                 await self.flag_followed()
             except Exception as exc:
@@ -127,7 +128,7 @@ class WhaleScout:
             from my_trades where ts>=? group by mint having pnl>0 order by pnl desc limit 5""", (now - 3 * 86400,))]
         fresh = []
         for m in dict.fromkeys(mints):
-            if now - int(self.db.get_meta(f"scouted:{m}", "0") or 0) > 86400:
+            if now - int(self.db.get_meta(f"scouted:{m}", "0") or 0) > 6 * 3600:
                 fresh.append(m)
         return fresh[:limit]
 
@@ -215,6 +216,26 @@ class WhaleScout:
                     (cand["wallet"], now, now, coin.get("symbol", ""), result.get("verdict", ""),
                      result.get("pnl_sol", 0), result.get("win_rate", 0), result.get("trips", 0),
                      result.get("median_hold_s", 0), result.get("last_trade_ts", 0), status, reason))
+
+    async def promote_picks(self, now: int | None = None) -> list[str]:
+        """With AUTO_WHALES on, follow the profitable wallets earlier runs only suggested (found while it was off)."""
+        now = int(now or time.time())
+        room = int(self.cfg.get("AUTO_WHALE_LIMIT")) - self.auto_count()
+        added = []
+        for c in self.db.rows("""select * from whale_candidates where status='picked' and pnl_sol>0
+                and last_trade_ts>=? order by pnl_sol desc""", (now - MAX_IDLE_DAYS * 86400,)):
+            if room <= 0:
+                break
+            ok, _ = self.whales.add(c["address"], f"auto-{short(c['address'])[:4]}", source="auto")
+            self.db.run("update whale_candidates set status='followed' where address=?", (c["address"],))
+            if ok:
+                room -= 1
+                added.append(c)
+        if added:
+            self.refresh_wallets()
+            await self.notify("🤖 <b>Auto-followed " + str(len(added)) + " whale pick(s)</b>\n" + "\n".join(
+                f"• <code>{c['address']}</code> {esc(c['reason'] or '')}" for c in added), silent=True, kind="AUTO")
+        return [c["address"] for c in added]
 
     async def prune(self, now: int | None = None) -> list[tuple[dict, str]]:
         """Drop auto-followed whales that stopped working. Checked at most once a day."""

@@ -131,6 +131,22 @@ class Market:
                 out.append(address)
         return out
 
+    async def trending_mints(self, pages: int = 2) -> list[str]:
+        """Solana coins trending on GeckoTerminal right now (a second source of runners besides DexScreener)."""
+        cached = getattr(self, "_trending", None)
+        if cached and time.time() - cached[0] < 300:
+            return list(cached[1])
+        out: list[str] = []
+        for page in range(1, pages + 1):
+            data = await self._gecko(f"/networks/solana/trending_pools?page={page}")
+            for row in (data or {}).get("data") or []:
+                base = (((row.get("relationships") or {}).get("base_token") or {}).get("data") or {}).get("id", "")
+                mint = str(base).split("_", 1)[-1]
+                if is_address(mint) and mint not in IGNORED_MINTS and mint not in out:
+                    out.append(mint)
+        self._trending = (time.time(), out)
+        return out
+
     async def price_path(self, mint: str, start_ts: int, end_ts: int) -> list[tuple[int, float]]:
         """Minute closing prices (USD) of `mint` between two times, from whichever pool traded it then."""
         best: list[tuple[int, float]] = []

@@ -167,6 +167,7 @@ class Dashboard:
             p = a.portfolio.position(mint)
             if p and not p["open"] and p["bought"] > 0:
                 closed.append(p)
+        closed.sort(key=lambda p: -p["last_ts"])
         return _json({"open": open_, "closed": closed[:100], "summary": a.portfolio.summary(),
                       "curve": a.portfolio.pnl_curve(), "wallet_synced": bool(a.cfg.my_wallets)})
 

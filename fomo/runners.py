@@ -75,6 +75,10 @@ class RunnerScanner:
         now = int(now or time.time())
         self.last_scan = now
         mints = await self.market.discovery_lists()
+        try:
+            mints += [m for m in await self.market.trending_mints() if m not in mints]
+        except Exception:
+            pass   # GeckoTerminal is a bonus source; DexScreener lists still work without it
         infos = await self.market.tokens(mints, max_age=50) if mints else {}
         self.universe = infos
         if not self.cfg.flag("RUNNER_ALERTS"):
@@ -139,7 +143,7 @@ class RunnerScanner:
     def suggest_coins(self, limit: int = 3) -> list[dict]:
         """Today's biggest runners worth mining for early whales (/suggest)."""
         pool = [i for i in self.universe.values()
-                if num(i.get("mc_usd")) >= 300_000 and num(i.get("liquidity_usd"), -1) >= 30_000
-                and num(i.get("change_h24")) >= 100]
+                if num(i.get("mc_usd")) >= 100_000 and num(i.get("liquidity_usd"), -1) >= 15_000
+                and num(i.get("change_h24")) >= 50]
         pool.sort(key=lambda i: -num(i.get("change_h24")))
         return pool[:limit]

@@ -73,7 +73,7 @@
   const STATUS = { HOT: "🔥 HOT", OK: "✅ OK", NEW: "🆕 NEW", WEAK: "〰️ WEAK", COLD: "🧊 COLD" };
 
   function coinCell(symbol, image, mint) {
-    return el("span", { class: "coin" }, image ? el("img", { src: image, alt: "", loading: "lazy", referrerpolicy: "no-referrer" }) : null,
+    return el("span", { class: "coin" }, image ? el("img", { src: image, alt: "", loading: "lazy", referrerpolicy: "no-referrer", onerror: (e) => e.target.remove() }) : null,
       `$${symbol || short(mint)}`);
   }
   function links(mint, pair) {
@@ -211,7 +211,7 @@
         ? `M${cx - bw / 2},${bottom}V${top + r}Q${cx - bw / 2},${top} ${cx - bw / 2 + r},${top}H${cx + bw / 2 - r}Q${cx + bw / 2},${top} ${cx + bw / 2},${top + r}V${bottom}Z`
         : `M${cx - bw / 2},${top}V${bottom - r}Q${cx - bw / 2},${bottom} ${cx - bw / 2 + r},${bottom}H${cx + bw / 2 - r}Q${cx + bw / 2},${bottom} ${cx + bw / 2},${bottom - r}V${top}Z`;
       const bar = svgEl("path", { d, fill: color, tabindex: 0 });
-      const val = svgEl("text", { x: cx, y: it.value >= 0 ? top - 6 : bottom + 14, "text-anchor": "middle", class: "label-text" });
+      const val = svgEl("text", { x: cx, y: it.value >= 0 ? top - 6 : Math.min(bottom + 14, H - B - 4), "text-anchor": "middle", class: "label-text" });
       val.textContent = fmt(it.value);
       const hit = svgEl("rect", { x: cx - band / 2, y: T, width: band, height: H - T - B, fill: "transparent" });
       const show = (e) => showTip(e, fmt(it.value), `${it.label}: ${plural(it.n, unit[0], unit[1])}, ${Math.round(it.win * 100)}% won`, color);
@@ -311,7 +311,7 @@
       tile("Your coins", String((o.open_positions || 0) + (o.tracked_coins || 0)), `${o.open_positions || 0} held · ${o.tracked_coins || 0} tracked`),
       tile("Paper autopilot", usd(p.equity), `${pct(p.return_pct, 1)} · ${p.closed || 0} closed, ${p.won || 0} won`, signClass((p.equity || 0) - (p.start || 0))));
     renderMyCoins().catch(() => {});
-    const rows = f.buys.map((b) => el("tr", { class: "click", onclick: () => openCoin(b.mint) },
+    const rows = f.buys.slice(0, 30).map((b) => el("tr", { class: "click", onclick: () => openCoin(b.mint) },
       td(ago(b.trade_ts || b.ts)), td(el("span", { class: "grade", title: b.scalp ? "Scalp: take profit into the pump, don't hold" : "" }, b.scalp ? `⚡${b.grade}` : b.grade)), td(b.whale), td(coinCell(b.symbol, b.image, b.mint)),
       td(mc(b.entry_mc), "num"), td(mc(b.now_mc), "num"),
       td(b.change === null ? "—" : pct(b.change), `num ${signClass(b.change)}`),
@@ -437,8 +437,11 @@
       }), "No open positions.");
     table($("closed"), ["Coin", { label: "Bought", num: 1 }, { label: "Sold", num: 1 }, { label: "Realized", num: 1 }, { label: "Return", num: 1 }, "Last trade"],
       d.closed.map((p) => el("tr", { class: "click", onclick: () => openCoin(p.mint) },
-        td(coinCell(p.symbol, "", p.mint)), td(usd(p.bought), "num"), td(usd(p.sold), "num"),
-        td(usd(p.realized, true), `num ${signClass(p.realized)}`), td(pct(p.pnl_pct), `num ${signClass(p.pnl_pct)}`), td(ago(p.last_ts)))),
+        td(coinCell(p.symbol, "", p.mint)), td(usd(p.bought), "num"),
+        ...(p.sale_unrecorded && !p.sold
+          ? [td("sale not seen", "num muted"), td("—", "num"), td("—", "num")]
+          : [td(usd(p.sold), "num"), td(usd(p.realized, true), `num ${signClass(p.realized)}`), td(pct(p.pnl_pct), `num ${signClass(p.pnl_pct)}`)]),
+        td(ago(p.last_ts)))),
       "No closed coins yet.");
   }
 
@@ -524,7 +527,7 @@
     const r = await api(`/api/report?days=${$("report-days").value}`);
     $("lessons").replaceChildren(...r.lessons.map((t) => el("li", {}, t)));
     $("report-tiles").replaceChildren(
-      tile("Result", usd(r.total, true), `${plural(r.n, "closed coin")} · ${r.dead} went to zero`, signClass(r.total), true),
+      tile(`Result · ${r.days} days`, usd(r.total, true), `${plural(r.n, "closed coin")} · ${r.dead} went to zero`, signClass(r.total), true),
       tile("Won", r.n ? `${Math.round(r.won * 100)}%` : "—", "of closed coins"),
       tile("Average win", usd(r.avg_win, true), "per winning coin", "up"),
       tile("Average loss", usd(r.avg_loss, true), "per losing coin", "down"));

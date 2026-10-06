@@ -218,7 +218,7 @@ class Tracker:
                 lines.append(f"Last scan checked {len(checked)} wallets: {len(checked) - len(rejected)} kept · "
                              + " · ".join(f"{n} {k}" for k, n in kinds.items() if n) + " rejected")
         else:
-            lines.append("Whale scanner: first run starts a few minutes after launch.")
+            lines.append("Whale scanner: first run starts a minute after launch.")
         await self.notify("\n".join(lines), kind="QUIET")
         return True
 

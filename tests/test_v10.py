@@ -303,3 +303,37 @@ def test_dashboard_coin_form_accepts_links_and_explains_bad_input(chat):
     ok, bad = chat.loop.run_until_complete(go())
     assert ok[0] == 200 and "your entry $80K" in ok[1]
     assert bad[0] == 400 and "full contract address" in bad[1]
+
+
+def test_trending_coins_from_geckoterminal_feed_the_scanner():
+    import asyncio
+    from fomo.market import Market
+    m = Market(session=None, rpc=None, db=None)
+    m.gecko_every = 0
+    a, b = "A" * 43, "B" * 43
+
+    async def fake_get(url, timeout=8.0):
+        if "page=1" in url:
+            return {"data": [{"relationships": {"base_token": {"data": {"id": f"solana_{a}"}}}},
+                             {"relationships": {"base_token": {"data": {"id": "solana_So11111111111111111111111111111111111111112"}}}}]}
+        return {"data": [{"relationships": {"base_token": {"data": {"id": f"solana_{b}"}}}}]}
+
+    m._get = fake_get
+    loop = asyncio.new_event_loop()
+    assert loop.run_until_complete(m.trending_mints()) == [a, b]       # SOL itself is ignored
+    m._get = None                                                       # cached for 5 minutes: no new calls
+    assert loop.run_until_complete(m.trending_mints()) == [a, b]
+
+
+def test_picks_found_while_auto_follow_was_off_get_followed(bot):
+    import time
+    now = int(time.time())
+    good, idle = "Good" + "1" * 40, "Idle" + "1" * 40
+    for addr, last in ((good, now - 3600), (idle, now - 10 * 86400)):
+        bot.db.run("""insert into whale_candidates(address,found_ts,analyzed_ts,coins,verdict,pnl_sol,win_rate,trips,
+            median_hold_s,last_trade_ts,status,reason) values(?,?,?,'X','',4.9,0.5,11,600,?,'picked','+4.9 SOL')""",
+                   (addr, now, now, last))
+    bot.cfg.set("AUTO_WHALES", "on")
+    assert bot.run(bot.scout.promote_picks(now)) == [good]          # inactive wallets stay suggestions
+    assert bot.db.row("select source from whales where address=?", (good,))["source"] == "auto"
+    assert bot.run(bot.scout.promote_picks(now)) == []

@@ -99,7 +99,8 @@ class Portfolio:
         for t in self.db.rows("select * from my_trades where mint=? order by ts, id", (mint,)):
             sources.add(t["source"])
             first_ts = first_ts or t["ts"]
-            last_ts = t["ts"]
+            if t["source"] != "unrecorded":
+                last_ts = t["ts"]   # the bot noticing a sale it missed isn't a trade of yours
             if t["side"] == "BUY":
                 if tokens <= 1e-9:
                     episode_ts = t["ts"]  # a new holding period starts (first buy, or re-buy after selling out)
