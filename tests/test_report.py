@@ -124,7 +124,7 @@ def test_quiet_update_says_what_was_seen_and_skipped(bot):
     assert bot.run(bot.tracker.quiet_update(t + 60)) is False
     assert bot.run(bot.tracker.quiet_update(t + 16 * 60)) is True
     msg = bot.notes.sent[-1]
-    assert msg["kind"] == "QUIET" and msg["silent"]
+    assert msg["kind"] == "QUIET" and not msg["silent"]           # comes with a normal notification
     assert "skipped $CASHED from Rocket: already ran (+80% already)" in msg["text"]
     assert bot.run(bot.tracker.quiet_update(t + 17 * 60)) is False
 

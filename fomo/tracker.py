@@ -56,7 +56,17 @@ class Tracker:
                 await self.tick()
             except Exception as exc:
                 self.last_error = f"{time.strftime('%H:%M:%S')} {type(exc).__name__}: {exc}"
+            await self._step("quiet update", self.quiet_update)   # runs even if the price step failed
             await asyncio.sleep(PRICE_EVERY)
+
+    async def _step(self, name: str, fn, *args):
+        """Run one part of the loop; a failure is recorded but never stops the other parts."""
+        try:
+            result = fn(*args)
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception as exc:
+            self.last_error = f"{time.strftime('%H:%M:%S')} {name}: {type(exc).__name__}: {exc}"
 
     async def check_gap(self, now: float | None = None) -> float:
         """The price loop runs every 15s. A much longer pause means the Mac slept (lid closed, battery)
@@ -100,12 +110,11 @@ class Tracker:
         for p in positions:
             await self._watch_position(p, infos.get(p["mint"]), now)
         await self._check_watches(watches, infos, now)
-        self._update_outcomes(outcomes, infos, now)
-        await self._alert_reports()
-        await self.quiet_update(now)
-        await self.engine.paper.tick(infos, now)
+        await self._step("outcomes", self._update_outcomes, outcomes, infos, now)
+        await self._step("alert reports", self._alert_reports)
+        await self._step("paper autopilot", self.engine.paper.tick, infos, now)
         if tracked:
-            await self.engine.coins.tick(infos, now)
+            await self._step("tracked coins", self.engine.coins.tick, infos, now)
         if now - self._last_balance_check >= WHALE_BALANCE_CHECK_EVERY:
             self._last_balance_check = now
             await self._check_whale_balances(now)
@@ -210,7 +219,7 @@ class Tracker:
                              + " · ".join(f"{n} {k}" for k, n in kinds.items() if n) + " rejected")
         else:
             lines.append("Whale scanner: first run starts a few minutes after launch.")
-        await self.notify("\n".join(lines), silent=True, kind="QUIET")
+        await self.notify("\n".join(lines), kind="QUIET")
         return True
 
     async def _alert_reports(self) -> int:
