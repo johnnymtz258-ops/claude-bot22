@@ -58,6 +58,7 @@ TUNABLES = {t.name: t for t in (
     Tunable("HYPE_MIN_SCORE", 60, "Hype scanner: score (0-100) a coin needs for an alert", 20, 100),
     Tunable("HYPE_MAX_MC_USD", 5000000, "Hype scanner: ignore coins above this market cap (past early)", 50000, 1000000000),
     Tunable("HYPE_MIN_LIQ_USD", 10000, "Hype scanner: smallest liquidity a coin needs", 0, 10000000),
+    Tunable("HYPE_MAX_H1_PCT", 100, "Hype scanner: don't alert coins already up more than this % in the last hour (late)", 20, 1000),
     Tunable("HYPE_MAX_PER_HOUR", 6, "Hype scanner: most hype alerts per hour", 1, 60),
     Tunable("RUNNER_SETUP", 1, "Flag the setup most of your 10x coins had — whale buys $1K+ of a just-graduated coin at $40K-250K MC — and send it even from flipper whales (1 = on)", 0, 1, True),
     Tunable("RUNNER_SETUP_MIN_BUY_USD", 1000, "Runner setup: smallest whale buy that counts", 100, 100000),

@@ -329,7 +329,7 @@
   }
 
   const HYPE_LABELS = { rush: "🚀 buy rush", pressure: "🟢 buy pressure", volume: "💰 volume surge", momentum: "📈 momentum",
-    whales: "🐋 your whales", boost: "📣 paid boost", profile: "🧾 profile/socials", trending: "🔥 trending", early: "🌱 early" };
+    whales: "🐋 your whales", boost: "📣 paid boost", profile: "🧾 profile/socials", trending: "🔥 trending", early: "🌱 early", loading: "🧲 loading", reload: "♻️ second leg" };
   async function renderHype() {
     const h = await api("/api/hype");
     $("hype-meta").textContent = h.enabled ? `alerts at score ${h.min_score}+ · scanned ${h.last_scan ? ago(h.last_scan) : "—"}` : "alerts off (/set HYPE_ALERTS on)";
@@ -350,7 +350,7 @@
   }
 
   async function renderHot() {
-    renderHype().catch(() => {});
+    renderHype().catch((e) => { $("hype-meta").textContent = `couldn't load the hype board: ${e.message || e}`; });
     const rows = await api(`/api/hot?hours=${$("hot-hours").value}`);
     table($("hot"), ["Coin", "Whales", "Still holding", { label: "First whale in", num: 1 }, { label: "Now", num: 1 }, { label: "Move", num: 1 }, "Who", ""],
       rows.map((r) => el("tr", { class: "click", onclick: () => openCoin(r.mint) },

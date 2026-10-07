@@ -85,10 +85,12 @@ class RunnerScanner:
         # coins your whales bought in the last 2 hours: the whale alert system feeds the hype score
         mints += [r["mint"] for r in self.db.rows("""select distinct mint from swaps where side='BUY' and is_me=0
             and ts>=?""", (now - 2 * 3600,))]
+        hype = getattr(self, "hype", None)
+        if hype:
+            mints += hype.watch_mints(now)   # coins hot in the last 48h: catch the second leg at its start
         mints = list(dict.fromkeys(mints))
         infos = await self.market.tokens(mints, max_age=50) if mints else {}
         self.universe = infos
-        hype = getattr(self, "hype", None)
         if hype:
             try:
                 await hype.scan(infos, lists, now)

@@ -10,6 +10,7 @@ from fomo.db import Database
 from fomo.discovery import Discovery
 from fomo.engine import Engine
 from fomo.portfolio import Portfolio
+from fomo.hype import HypeScanner
 from fomo.runners import RunnerScanner
 from fomo.scout import WhaleScout
 from fomo.telegram import Notifier
@@ -56,6 +57,8 @@ class DemoApp:
         self.stream = FakeStream()
         self.find_task = None
         self.runners = RunnerScanner(self.cfg, self.db, self.market, self.engine, self.whales, self.notify)
+        self.hype = HypeScanner(self.cfg, self.db, self.market, self.engine, self.whales, self.notify)
+        self.runners.hype = self.engine.hype = self.hype
         self.scout = WhaleScout(self.cfg, self.db, self.rpc, self.market, self.whales, self.runners, self.notify, lambda: None)
         self._sig = 0
 

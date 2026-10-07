@@ -34,7 +34,7 @@ def call(c, method, path, **kw):
 
 
 def test_read_endpoints_work(client):
-    for path in ("/api/overview", "/api/feed", "/api/hot", "/api/whales", "/api/positions", "/api/stats",
+    for path in ("/api/overview", "/api/feed", "/api/hot", "/api/hype", "/api/whales", "/api/positions", "/api/stats",
                  "/api/settings", "/api/find", f"/api/coin/{COINS['CASHED'][0]}", f"/api/whale/{WHALES['Rocket']}"):
         status, body = call(client, "GET", path)
         assert status == 200, (path, body)
@@ -85,3 +85,16 @@ def test_settings_and_manual_trade_via_api(client):
     assert status == 200 and r["mc"] == pytest.approx(500_000)
     status, r = call(client, "POST", "/api/trades/undo", headers=h)
     assert r["ok"]
+
+
+def test_hype_board_endpoint_with_scored_coins(client):
+    import time
+    from tests.helpers import MINT
+    client.demo.market.set_pair(mint=MINT, price=0.0002, mc=200_000, liq=40_000, created_ms=int((time.time() - 7200) * 1000),
+                                buys_h1=240, buys_m5=90, sells_m5=30, volume_m5=30_000, change_m5=12, change_h1=60)
+    client.loop.run_until_complete(client.demo.hype.scan(
+        client.loop.run_until_complete(client.demo.market.tokens([MINT], max_age=0)), {}, int(time.time())))
+    status, h = call(client, "GET", "/api/hype")
+    assert status == 200 and h["board"] and h["board"][0]["score"] >= 60 and h["board"][0]["keys"]
+    _, page = call(client, "GET", "/")
+    assert "app.js?v=" in page and "__VERSION__" not in page

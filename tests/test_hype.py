@@ -30,7 +30,7 @@ def test_a_coin_at_the_start_of_a_push_scores_high(bot):
 def test_quiet_coins_and_unsafe_ones_are_not_alerted(bot):
     quiet = score(info_of(buys_m5=5, sells_m5=5, volume_m5=500, change_m5=0), bot.cfg, now=NOW)
     assert not alertable(quiet, bot.cfg)
-    assert "parabolic" in score(info_of(change_h1=450), bot.cfg, now=NOW)["blocked"]
+    assert "late" in score(info_of(change_h1=225), bot.cfg, now=NOW)["blocked"]     # the $A1 alert at +225%: a chase
     assert "dumping" in score(info_of(change_m5=-25), bot.cfg, now=NOW)["blocked"]
     assert "liquidity" in score(info_of(liq=3_000), bot.cfg, now=NOW)["blocked"]
     assert "past early" in score(info_of(mc=40_000_000, liq=2_000_000), bot.cfg, now=NOW)["blocked"]
@@ -65,3 +65,21 @@ def test_whale_alerts_without_hype_are_unchanged(bot):
     bot.feed(WHALE, pump_buy())
     assert bot.notes.kinds() == ["BUY"]
     assert "Hype score" not in bot.notes.sent[0]["text"] and "WHALE + HYPE" not in bot.notes.sent[0]["text"]
+
+
+def test_second_leg_is_caught_while_buyers_load_before_the_price_moves(bot):
+    """$A1: ran to $1.5M, fell to $340K, went quiet — then buys and volume picked up before the pump."""
+    old = int((NOW - 30 * 3600) * 1000)
+    bot.market.set_pair(**hot_pair(mc=1_500_000, liq=120_000, created_ms=old, change_h1=40))
+    bot.market.trending = [MINT]
+    bot.run(bot.runners.tick(int(NOW) - 20 * 3600))              # yesterday: hot, goes on the watch list
+    bot.notes.sent.clear()
+    bot.db.run("delete from alerts")
+    bot.market.trending = []                                       # dropped off trending since
+    bot.market.set_pair(mint=MINT, price=0.00034, mc=340_000, liq=60_000, created_ms=old, buys_h1=120,
+                        buys_m5=30, sells_m5=12, volume_m5=25_000, change_m5=3, change_h1=5, boosts=1)
+    bot.market._cache.clear()
+    bot.run(bot.runners.tick(int(NOW)))
+    assert bot.notes.kinds() == ["HYPE"]
+    text = bot.notes.sent[0]["text"]
+    assert "buyers loading before the price moves" in text and "second leg: peaked at $1.5M" in text

@@ -11,6 +11,12 @@ harder to fake and shows up within minutes, for free:
   🧾 profile / CTO  — new DexScreener token profile or community takeover, with X / Telegram / site
   🔥 trending       — trending on GeckoTerminal
   🌱 early          — young pair, small market cap: most of the move can still be ahead
+  🧲 loading        — buys and volume picking up while the price hasn't moved yet: the earliest pre-pump sign
+  ♻️ second leg     — a coin that ran recently, pulled back hard, and has buyers coming back
+
+Coins that were hot recently stay on the scanner's watch list for 48 hours, even after they drop off the trending
+lists — that's where second legs come from. Coins already up more than HYPE_MAX_H1_PCT in the hour are not alerted:
+by then you're the exit liquidity, not early.
 
 Each coin gets a 0–100 score from these. An alert goes out when the score clears HYPE_MIN_SCORE with at least three
 signals, one of them real buying (rush, volume or whales), and the coin passes the safety gates (liquidity, not
@@ -31,14 +37,15 @@ from .util import ago, esc, mc, num, pct, usd
 
 HYPE = "hype"              # pseudo-wallet for hype alerts' copies and paper trades
 COOLDOWN = 6 * 3600        # one hype alert per coin per 6 hours
-ACTIVITY = {"rush", "volume", "whales"}
+ACTIVITY = {"rush", "volume", "whales", "loading"}
+WATCH_HOURS = 48
 LABELS = {"rush": "🚀 buy rush", "pressure": "🟢 buy pressure", "volume": "💰 volume surge", "momentum": "📈 momentum",
           "whales": "🐋 your whales", "boost": "📣 paid boost", "profile": "🧾 profile/socials", "trending": "🔥 trending",
-          "early": "🌱 early"}
+          "early": "🌱 early", "loading": "🧲 loading", "reload": "♻️ second leg"}
 
 
 def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = None,
-          now: float | None = None) -> dict:
+          now: float | None = None, peak_mc: float = 0.0) -> dict:
     """{"score", "signals": [(key, text, points)], "blocked": reason or ""} for one coin. Pure: no network."""
     now = now or time.time()
     lists = lists or {}
@@ -58,8 +65,8 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
         out["blocked"] = f"liquidity too thin ({usd(max(liq, 0))})"
     elif m5 < -15 or h1 < -35:
         out["blocked"] = f"dumping ({pct(m5)} 5m, {pct(h1)} 1h)"
-    elif m5 > 60 or h1 > 300:
-        out["blocked"] = f"already parabolic ({pct(m5)} 5m, {pct(h1)} 1h)"
+    elif m5 > 40 or h1 > cfg.get("HYPE_MAX_H1_PCT"):
+        out["blocked"] = f"late — already {pct(h1)} this hour ({pct(m5)} in 5 min)"
 
     sig = []
     b5, s5 = num(info.get("buys_m5")), num(info.get("sells_m5"))
@@ -89,6 +96,13 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
         sig.append(("trending", "🔥 trending on GeckoTerminal", 8))
     if age_h <= 24 and mcap <= 1_500_000:
         sig.append(("early", f"🌱 early: pair {_age(age_h)} old at {mc(mcap)} MC", 10))
+    if b5 >= 10 and b5 >= 1.5 * pace and v5 >= 2 * vpace and v5 >= 2_000 and -5 <= m5 <= 8:
+        sig.append(("loading", f"🧲 buyers loading before the price moves: {int(b5)} buys, {usd(v5)} in 5 min "
+                               f"({v5 / vpace:.1f}x the hour's volume pace), price only {pct(m5)}", 20))
+    keys = {k for k, _, _ in sig}
+    if peak_mc >= 2.5 * mcap and keys & {"loading", "rush", "volume"}:
+        sig.append(("reload", f"♻️ second leg: peaked at {mc(peak_mc)} in the last 2 days, now {mc(mcap)} — "
+                              "buyers coming back", 15))
     out["signals"] = sig
     out["score"] = min(100, sum(p for _, _, p in sig))
     return out
@@ -116,6 +130,7 @@ class HypeScanner:
         self.board: list[dict] = []      # this minute's top coins, for the dashboard and /hype
         self.last_scan = 0
         self.last_error = ""
+        db.run("""create table if not exists hype_watch(mint text primary key, hot_ts integer, peak_mc real)""")
 
     def whales_in(self, mint: str, now: float) -> list[dict]:
         try:
@@ -123,10 +138,27 @@ class HypeScanner:
         except Exception:
             return []
 
+    def watch_mints(self, now: float, limit: int = 150) -> list[str]:
+        """Coins that were hot in the last 48h: rescanned every minute so a second leg is caught at the start."""
+        return [r["mint"] for r in self.db.rows("select mint from hype_watch where hot_ts>=? order by hot_ts desc limit ?",
+                                                (int(now) - WATCH_HOURS * 3600, limit))]
+
+    def peak_of(self, mint: str) -> float:
+        return num(self.db.scalar("select peak_mc from hype_watch where mint=?", (mint,)))
+
+    def _remember(self, mint: str, info: dict, r: dict, now: int) -> None:
+        hot = r["score"] >= 40 or num(info.get("change_h24")) >= 200
+        if hot:
+            self.db.run("""insert into hype_watch(mint,hot_ts,peak_mc) values(?,?,?) on conflict(mint) do update set
+                hot_ts=excluded.hot_ts, peak_mc=max(hype_watch.peak_mc, excluded.peak_mc)""",
+                        (mint, now, num(info.get("mc_usd"))))
+        else:
+            self.db.run("update hype_watch set peak_mc=max(peak_mc, ?) where mint=?", (num(info.get("mc_usd")), mint))
+
     def quick(self, mint: str, info: dict, now: float | None = None) -> dict:
         """The score for one coin right now (used by whale entry alerts)."""
         return score({**info, "mint": mint}, self.cfg, whales=self.whales_in(mint, now or time.time()),
-                     lists=self.lists, now=now)
+                     lists=self.lists, now=now, peak_mc=self.peak_of(mint))
 
     async def scan(self, infos: dict[str, dict], lists: dict[str, list], now: int | None = None) -> list[str]:
         now = int(now or time.time())
@@ -134,7 +166,9 @@ class HypeScanner:
         self.lists = {k: set(v) for k, v in lists.items()}
         scored = []
         for mint, info in infos.items():
-            r = score({**info, "mint": mint}, self.cfg, whales=self.whales_in(mint, now), lists=self.lists, now=now)
+            r = score({**info, "mint": mint}, self.cfg, whales=self.whales_in(mint, now), lists=self.lists, now=now,
+                      peak_mc=self.peak_of(mint))
+            self._remember(mint, info, r, now)
             if r["signals"]:
                 scored.append((mint, info, r))
         scored.sort(key=lambda x: (not x[2]["blocked"], x[2]["score"]), reverse=True)
