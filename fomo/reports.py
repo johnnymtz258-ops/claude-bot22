@@ -55,7 +55,8 @@ FUNNEL_LABELS = {
     "micro": "not sent: still on the bonding curve (MICRO_ALERTS off)",
     "flipper": "not sent: flipper whale (sells within minutes)",
     "weak_whale": "not sent: copying this whale at your speed loses",
-    "low_quality": "not sent: small buy / tiny cap / grade C (QUALITY_GATE)",
+    "low_quality": "not sent: grade C (QUALITY_GATE)",
+    "accumulated": "held back at first, re-judged as the whale kept buying",
 }
 
 

@@ -21,6 +21,7 @@ from .whales import AFTERMATH_MIN, aftermath, dumps
 
 ALERT_MAX_AGE = 600          # a trade first seen later than this is recorded but not alerted
 RETRY_DELAYS = (5, 15, 30, 60)
+ACCUMULATE_WINDOW = 2 * 3600   # buys of one coin by one whale within this window count as one position
 SELL_ALERT_COOLDOWN = 600    # at most one partial-sell message per whale+coin per 10 minutes
 ALERTED_RECENTLY = 48 * 3600
 THIN_LIQUIDITY_USD = 5_000
@@ -262,8 +263,20 @@ class Engine:
             out.append({"wallet": r["wallet"], "name": self.whales.name(r["wallet"]), "entry_mc": num(r["entry_mc"])})
         return out
 
+    def _accumulated(self, wallet: str, mint: str, now_ts: int) -> tuple[int, float]:
+        """(buys, total $) this whale put into the coin in the last ACCUMULATE_WINDOW — a whale building a position
+        in pieces ($12, $73, $93, $150, $250…) is one big buy, not seven small ones."""
+        r = self.db.row("select count(*) n, coalesce(sum(usd_value),0) usd from swaps where wallet=? and mint=? "
+                        "and side='BUY' and ts>=?", (wallet, mint, now_ts - ACCUMULATE_WINDOW))
+        return int(r["n"] or 0), num(r["usd"])
+
     async def on_whale_buy(self, c: dict) -> None:
         wallet, mint = c["wallet"], c["swap"]["mint"]
+        n_buys, total = self._accumulated(wallet, mint, c["ts"])
+        c["fill_usd"] = c["usd_value"]
+        if n_buys >= 2 and total > c["usd_value"]:
+            c["accum"] = (n_buys, total)
+            c["usd_value"] = total            # judge the position it's building, not this one fill
         too_small = c["usd_value"] < self.cfg.get("MIN_WHALE_BUY_USD")
         if too_small or c["trade_mc"] > self.cfg.get("MAX_ENTRY_MC_USD"):
             # dust/test buy, or the coin is past the "early" range — noted so /status can explain quiet days
@@ -273,7 +286,14 @@ class Engine:
             return
         key = (wallet, mint)
         repeat_since = int(time.time()) - int(self.cfg.get("REPEAT_ALERT_HOURS") * 3600)
-        if key in self._confirming or self.db.scalar(
+        held_back = self.db.row("""select id from alerts where wallet=? and mint=? and kind in ('BUY','SEEN') and ts>=?
+            and status in ('low_quality','too_small') order by ts desc limit 1""", (wallet, mint, repeat_since))
+        earlier_sent = self.db.scalar("""select 1 from alerts where wallet=? and mint=? and kind='BUY' and ts>=?
+            and status not in ('low_quality','too_small','accumulated')""", (wallet, mint, repeat_since))
+        if held_back and c.get("accum") and not earlier_sent and key not in self._confirming:
+            # held back as too small, but the whale kept buying: judge the whole position now
+            self.db.run("update alerts set status='accumulated' where id=?", (held_back["id"],))
+        elif key in self._confirming or self.db.scalar(
                 "select 1 from alerts where wallet=? and mint=? and kind='BUY' and ts>=?", (wallet, mint, repeat_since)):
             await self._maybe_add_alert(c)  # the whale is adding to a buy we already handled
             return
@@ -324,6 +344,9 @@ class Engine:
         pb = (self.profiles.get(wallet) or {}).get("playbook") or {}
         if pb.get("ok") and grade != "SKIP":
             reasons.insert(0, (True, playbook.line(pb)))
+        if c.get("accum") and grade != "SKIP":
+            reasons.insert(0, (True, f"🐋 Accumulating: {c['accum'][0]} buys, ${c['accum'][1]:,.0f} in total over the "
+                                     f"last {ACCUMULATE_WINDOW // 3600}h — building a position, not testing"))
         if setup and grade != "SKIP":
             reasons.insert(0, (True, "🚀 RUNNER SETUP: whale put $1K+ into a just-graduated coin at $40K-250K MC — "
                                      "in your history 27% of these hit 10x (vs 6% of other buys), peaking ~50 min in. "
@@ -360,12 +383,17 @@ class Engine:
         if not self.whales.is_alerting(whale):
             status("muted")
             return
-        proven = stats["n"] >= 5 and stats["avg"] > 0   # this whale's own copies are making money: size is no reason
-        if self.cfg.flag("QUALITY_GATE") and not setup and (
-                (c["usd_value"] < self.cfg.get("QUALITY_MIN_BUY_USD") and not proven) or grade == "C"
-                or (num(info.get("mc_usd")) or c["trade_mc"]) < self.cfg.get("QUALITY_MIN_MC_USD")):
+        if self.cfg.flag("QUALITY_GATE") and not setup and grade == "C":
             status("low_quality")
-            return  # small buys, tiny caps and grade C: 6% hit 10x and ~85% ended below entry in your data
+            return  # grade C lost even with the exit plan in your data (0.93x avg over 22 buys)
+        proven = stats["n"] >= 5 and stats["avg"] > 0   # this whale's own copies are making money: size is no reason
+        small = c["usd_value"] < self.cfg.get("QUALITY_MIN_BUY_USD") and not proven
+        tiny = (num(info.get("mc_usd")) or c["trade_mc"]) < self.cfg.get("QUALITY_MIN_MC_USD")
+        if (small or tiny) and not setup:
+            # sent, but marked: with the exit plan these averaged 1.07x vs 1.26x for $500+ buys at $30K+ MC
+            reasons.insert(0, (None, "🔸 Smaller signal: " + ("small buy" if small else "tiny market cap") +
+                               " — these averaged 1.07x with the exit plan vs 1.26x for bigger buys. "
+                               "Use a smaller size and take half at 2x"))
         prof = self.profiles.get(wallet)
         send_ok, _ = profiles.verdict(prof, self.cfg.get("MIN_COPY_SCORE"))
         if not send_ok and self.cfg.flag("BLOCK_FLIPPERS") and not setup:
@@ -478,7 +506,7 @@ class Engine:
             return
         info = c["info"]
         position = self.portfolio.position(mint, num(info.get("price_usd")) or None)
-        text = (f"<b>➕ {esc(whale.get('name') or wallet[:6])} added {usd(c['usd_value'])} more · "
+        text = (f"<b>➕ {esc(whale.get('name') or wallet[:6])} added {usd(c.get('fill_usd', c['usd_value']))} more · "
                 f"${esc(info.get('symbol') or self.market.symbol(mint))}</b>\n"
                 f"Bought more at {mc(c['trade_mc'])} MC — still building the position. You hold "
                 f"{usd(position['value'])} ({pct(position['pnl_pct'])}).\n<code>{mint}</code>")

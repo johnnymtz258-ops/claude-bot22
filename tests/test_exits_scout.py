@@ -336,7 +336,7 @@ def test_new_whale_whose_first_copies_dump_is_dropped_fast(bot):
 
 def test_wallets_that_buy_too_small_to_alert_are_not_followed():
     from fomo.scout import qualifies
-    r = {**GOOD, "last_trade_ts": time.time(), "trip_list": [{"bought_usd": 120}] * 9}
+    r = {**GOOD, "last_trade_ts": time.time(), "trip_list": [{"bought_usd": 40}] * 9}
     ok, why = qualifies(r)
     assert not ok and "buys too small" in why
     ok, _ = qualifies({**r, "trip_list": [{"bought_usd": 900}] * 9})

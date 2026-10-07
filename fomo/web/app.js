@@ -684,7 +684,7 @@
 
   // ---------- drawers -------------------------------------------------------------------
   function openDrawer(...children) {
-    $("drawer-body").replaceChildren(...children);
+    $("drawer-body").replaceChildren(...children.filter((c) => c !== null && c !== undefined && c !== false));
     $("drawer").classList.add("open");
     $("drawer").setAttribute("aria-hidden", "false");
   }

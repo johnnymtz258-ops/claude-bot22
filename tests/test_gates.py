@@ -67,14 +67,12 @@ def test_old_coins_and_small_buys_are_not_runner_setups(bot, monkeypatch):
     assert bot.db.scalar("select status from alerts where kind='BUY'") in ("flipper", "weak_whale")
 
 
-def test_quality_gate_holds_back_small_buys_and_tiny_caps(bot):
+def test_quality_gate_marks_small_buys_and_holds_back_only_grade_c(bot):
     bot.cfg.set("QUALITY_GATE", "1")
     bot.whales.add(WHALE, "Rocket")
     bot.market.set_pair(mint=MINT, price=WHALE_PRICE, mc=75_000)
-    bot.feed(WHALE, pump_buy())                                           # a $225 buy
-    assert bot.notes.sent == []
-    assert bot.db.scalar("select status from alerts where kind='BUY'") == "low_quality"
-    assert bot.db.scalar("select count(*) from copies") == 1              # still scored
+    bot.feed(WHALE, pump_buy())                                           # a $225 buy: sent, marked smaller
+    assert bot.notes.kinds() == ["BUY"] and "Smaller signal: small buy" in bot.notes.sent[0]["text"]
 
 
 def test_quality_gate_sends_real_size_buys(bot):
@@ -96,3 +94,16 @@ def test_quality_gate_lets_small_buys_through_from_a_whale_whose_copies_win(bot)
     bot.market.set_pair(mint=MINT, price=WHALE_PRICE, mc=75_000)
     bot.feed(WHALE, pump_buy())                                          # a $225 buy
     assert bot.notes.kinds() == ["BUY"]
+
+
+def test_whale_building_a_position_in_small_pieces_is_judged_on_the_total(bot):
+    bot.whales.add(WHALE, "Builder")
+    bot.market.set_pair(mint=MINT, price=WHALE_PRICE, mc=75_000)
+    bot.cfg.set("MIN_WHALE_BUY_USD", "400")
+    bot.feed(WHALE, pump_buy())                                           # $225: too small on its own
+    assert bot.notes.sent == []
+    bot.feed(WHALE, pump_buy(new=False, pre_tokens=3_000_000))           # $450 in total: a real position
+    assert bot.notes.kinds() == ["BUY"]
+    assert "Accumulating: 2 buys" in bot.notes.sent[0]["text"]
+    bot.feed(WHALE, pump_buy(new=False, pre_tokens=6_000_000))           # more adds: no second alert
+    assert bot.notes.kinds().count("BUY") == 1
