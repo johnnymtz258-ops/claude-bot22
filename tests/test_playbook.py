@@ -56,3 +56,20 @@ def test_whale_without_enough_copies_keeps_the_default_rules(bot):
     _copies(bot, WHALE, [SPIKE] * 3)
     assert playbook.evaluate(bot.db, WHALE)["ok"] is False
     assert playbook.plan_for(bot.db, WHALE) is None
+
+
+def test_scanner_follows_a_fast_flipper_whose_replayed_buys_win_with_a_plan():
+    from fomo import profiles
+    from fomo.scout import copyable
+    trips, paths = [], {}
+    for i in range(8):
+        mint = f"Hist{i}" + "1" * 38
+        t0 = 1_700_000_000 + i * 10_000
+        trips.append({"mint": mint, "buy_ts": t0, "first_sell_ts": t0 + 30, "half_out_ts": t0 + 30,
+                      "bought_usd": 800, "sold_usd": 900, "closed": True})
+        shape = SPIKE if i < 6 else DUD
+        paths[mint] = [(t0 + 60 * k, p) for k, p in enumerate([1.0] + shape)]
+    prof = profiles.build_profile(trips, paths, 60, "history")
+    assert prof["style"] in ("FLIPPER", "BOT") and prof["playbook"]["ok"]   # would have been rejected before
+    level, why = copyable(prof)
+    assert level == "strong" and why.startswith("📘")

@@ -94,6 +94,7 @@ def test_analyze_wallet_round_trips(bot):
 def test_verdicts():
     base = dict(trips=10, median_hold_s=600, buys_per_day=10, pnl_sol=5, win_rate=0.5, median_entry_mc=400_000)
     assert verdict(base)[0].startswith("✅")
-    assert verdict({**base, "median_hold_s": 20})[0].startswith("🤖")
+    assert verdict({**base, "median_hold_s": 20})[0].startswith("⚡")   # replayed with your own exit plan, not rejected
+    assert verdict({**base, "buys_per_day": 200})[0].startswith("🤖")
     assert verdict({**base, "pnl_sol": -1})[0].startswith("❌")
     assert verdict({**base, "trips": 2})[0].startswith("🆕")

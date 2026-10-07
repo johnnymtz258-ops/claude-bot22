@@ -1,3 +1,3 @@
 """FomoBot Whale Copy: follow proven Solana whales into coins early."""
 
-VERSION = "22.6"
+VERSION = "22.7"

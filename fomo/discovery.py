@@ -58,6 +58,11 @@ class Discovery:
         async def one(row):
             nonlocal done
             async with sem:
+                strained = getattr(self.rpc, "strained", None)
+                for _ in range(30):   # live whale trades come first: step aside while the RPC is rate limited
+                    if not (strained and strained()):
+                        break
+                    await asyncio.sleep(1)
                 tx = await self.rpc.transaction(row["signature"], wait=0)
             done += 1
             if progress and done % 50 == 0:
@@ -264,12 +269,14 @@ class Discovery:
 
 def verdict(r: dict) -> tuple[str, list[str]]:
     why = []
-    if r["trips"] >= 3 and r["median_hold_s"] < 60:
-        why.append(f"median hold {r['median_hold_s']:.0f}s — faster than you can copy by hand")
     if r["buys_per_day"] > 60:
         why.append(f"{r['buys_per_day']:.0f} buys/day — looks like a bot")
     if why:
         return "🤖 Too fast to copy", why
+    if r["trips"] >= 3 and r["median_hold_s"] < 60:
+        # not rejected: the scanner replays its buys and keeps it if an exit plan of your own makes money
+        return "⚡ Very fast flipper", [f"median hold {r['median_hold_s']:.0f}s — you can't follow its exits, "
+                                       "only your own plan"]
     if r["trips"] < 5:
         return "🆕 Not enough closed trades to judge", [f"only {r['trips']} round trips in the recent history"]
     if r["pnl_sol"] <= 0 or r["win_rate"] < 0.35:

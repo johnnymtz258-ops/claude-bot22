@@ -302,7 +302,7 @@
     const me = o.me, c = o.copies;
     const fn0 = (o.funnel || { counts: {} }).counts;
     const sent = (fn0.sent || 0) + (fn0.silent || 0);
-    const blocked = ["flipper", "weak_whale", "chased", "dumping", "micro", "whale_only"].reduce((n, k) => n + (fn0[k] || 0), 0);
+    const blocked = ["flipper", "weak_whale", "chased", "dumping", "micro", "whale_only", "low_quality"].reduce((n, k) => n + (fn0[k] || 0), 0);
     const p = o.paper || {}, lv = o.live;
     void lv; void c;
     $("live-tiles").replaceChildren(
@@ -311,11 +311,11 @@
       tile("Your coins", String((o.open_positions || 0) + (o.tracked_coins || 0)), `${o.open_positions || 0} held · ${o.tracked_coins || 0} tracked`),
       tile("Paper autopilot", usd(p.equity), `${pct(p.return_pct, 1)} · ${p.closed || 0} closed, ${p.won || 0} won`, signClass((p.equity || 0) - (p.start || 0))));
     renderMyCoins().catch(() => {});
-    const rows = f.buys.slice(0, 30).map((b) => el("tr", { class: (b.status === "sent" || b.status === "silent") ? "click" : "click unsent", title: (b.status === "sent" || b.status === "silent") ? "sent to Telegram" : `not sent: ${(o.funnel_labels || {})[b.status] || b.status || "pending"}`, onclick: () => openCoin(b.mint) },
+    const rows = f.buys.slice(0, 30).map((b) => el("tr", { class: (b.status === "sent" || b.status === "silent") ? "click" : "click unsent", title: (b.status === "sent" || b.status === "silent") ? "sent to Telegram" : `not sent: ${String((o.funnel_labels || {})[b.status] || b.status || "pending").replace(/^not sent: /, "")}`, onclick: () => openCoin(b.mint) },
       td(ago(b.trade_ts || b.ts)), td(el("span", { class: "grade", title: b.scalp ? "Scalp: take profit into the pump, don't hold" : "" }, b.scalp ? `⚡${b.grade}` : b.grade)), td(b.whale), td(coinCell(b.symbol, b.image, b.mint)),
-      td(mc(b.entry_mc), "num"), td(mc(b.now_mc), "num"),
+      td(mc(b.entry_mc), "num"), td(b.now_mc ? mc(b.now_mc) : "no price", "num"),
       td(b.change === null ? "—" : pct(b.change), `num ${signClass(b.change)}`),
-      td(b.confluence > 1 ? `🐋×${b.confluence}` : (b.status === "sent" || b.status === "silent") ? "✅ sent" : "not sent"), td(links(b.mint, ""))));
+      td(`${(b.status === "sent" || b.status === "silent") ? "✅ sent" : "not sent"}${b.confluence > 1 ? ` · 🐋×${b.confluence}` : ""}`), td(links(b.mint, ""))));
     table($("feed"), ["When", "Grade", "Whale", "Coin", { label: "Whale entry", num: 1 }, { label: "Now", num: 1 },
       { label: "Since whale", num: 1 }, "Sent?", ""], rows, "No whale buys in the last 3 days. Add whales on the Whales tab.");
     const fn = o.funnel || { total: 0, counts: {} };
@@ -626,7 +626,7 @@
       return [...head, el("div", { class: "settings-row" }, el("div", {}, el("div", { class: "name" }, s.name), el("div", { class: "help" }, s.help), msg), input)];
     }));
     const h = [["Version", o.version], ["Up for", dur(o.uptime)], ["Wallet stream", o.stream.connected ? `connected (${o.stream.subs} subscriptions)` : `reconnecting ${o.stream.error || ""}`],
-      ["RPC", `${o.helius ? "Helius" : "public"} · ${o.rpc.calls.toLocaleString()} calls · ${o.rpc.errors} errors · ${o.rpc.rate_limited} rate-limited`],
+      ["RPC", `${o.helius ? "Helius" : "public"} · ${o.rpc.calls.toLocaleString()} calls · ${(o.rpc.errors - o.rpc.rate_limited).toLocaleString()} failed · ${o.rpc.rate_limited.toLocaleString()} slowed down by the plan's rate limit (retried)`],
       ["Your wallet", o.wallet_synced ? "synced" : "not synced (MY_WALLETS in .env)"], ["Recent issues", o.errors.join(" | ") || "none"]];
     $("health").replaceChildren(...h.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]));
   }

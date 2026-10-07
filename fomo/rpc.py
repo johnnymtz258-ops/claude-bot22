@@ -28,6 +28,7 @@ class SolanaRPC:
         self.rate_limited = 0
         self.last_error = ""
         self.last_rpc_error: dict = {}
+        self._last_429 = 0.0
         self.tx_version = 1   # newest transaction format the bot asks for; adjusted if a node names another
         self.last_ok_ts = 0.0
 
@@ -46,8 +47,13 @@ class SolanaRPC:
         if start > now:
             await asyncio.sleep(start - now)
 
+    def strained(self) -> bool:
+        """Rate limited in the last 10 seconds: background work (the whale scanner) should wait."""
+        return time.monotonic() - self._last_429 < 10
+
     def _slow_down(self) -> None:
         """Rate limited: pause everyone briefly and space calls out more, instead of hammering the plan's limit."""
+        self._last_429 = time.monotonic()
         self.min_interval = min(0.5, max(self.min_interval, 0.05) * 1.5)
         self._next = max(self._next, time.monotonic() + 1.0)
 
@@ -93,8 +99,8 @@ class SolanaRPC:
                     self.last_rpc_error = err if isinstance(err, dict) else {"message": str(err)}
                     return None  # a definite answer (bad params etc.) — other nodes would agree
                 self.last_ok_ts = time.time()
-                if self.last_error.endswith(f"{method}: rate limited"):
-                    self.last_error = before   # slowed down and got through: nothing was lost
+                if self.last_error != before:
+                    self.last_error = before   # a retry got through (rate limit, network blip): nothing was lost
                 if self.min_interval > self.base_interval:   # recover speed gradually after a rate limit
                     self.min_interval = max(self.base_interval, self.min_interval * 0.98)
                 return data.get("result")
@@ -112,7 +118,7 @@ class SolanaRPC:
             tx = await self.call("getTransaction", [signature, {
                 "encoding": "jsonParsed", "commitment": "confirmed",
                 "maxSupportedTransactionVersion": self.tx_version}], attempts=1)
-            if tx and self.last_error.endswith("getTransaction: rate limited"):
+            if tx and self.last_error != before:
                 self.last_error = before   # a retry got it: nothing was lost
             if tx or time.monotonic() >= deadline:
                 return tx

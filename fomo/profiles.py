@@ -90,6 +90,10 @@ def build_profile(trips: list[dict], paths: dict, delay: float, source: str) -> 
             "closed": len(closed),
             "source": source, "updated_ts": int(time.time())}
     prof.update(summarize(copies))
+    if source == "history":   # a scanner candidate: which exit plan would have made money copying it?
+        from . import playbook
+        prof["playbook"] = {**playbook.evaluate_trades(playbook.from_trips(trips, paths, delay),
+                                                       playbook.MIN_HISTORY_COPIES), "source": "history"}
     return prof
 
 
@@ -188,7 +192,15 @@ class Profiler:
             # a freshly followed whale: its on-chain history says more than our few records yet
             prof = old
         from . import playbook
-        prof["playbook"] = playbook.get(self.db, address)   # the exit plan that made money on THIS whale
+        recorded = playbook.get(self.db, address)   # the exit plan that made money on THIS whale
+        history = (old or {}).get("playbook") or {}
+        if history.get("source") == "history" and history.get("ok") and not recorded.get("ok") \
+                and recorded.get("n", 0) < playbook.MIN_COPIES:
+            # followed for its replayed history; until the bot has 8 copies of its own, trade it by that plan
+            prof["playbook"] = history
+            self.db.set_meta(f"playbook:{address}", json.dumps({**history, "ts": int(time.time())}))
+        else:
+            prof["playbook"] = recorded
         return self.save(address, prof)
 
     def refresh_tracked(self) -> int:

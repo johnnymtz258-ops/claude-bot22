@@ -17,6 +17,7 @@ import time
 
 FEE = 0.02            # 1% each way
 MIN_COPIES = 8        # fewer recorded copies than this: not enough evidence to unblock a whale
+MIN_HISTORY_COPIES = 6   # a scanner candidate's on-chain buys replayed on minute candles
 MIN_AVG_WO_BEST = 1.10
 MIN_MEDIAN = 1.0
 REFRESH = 3 * 3600
@@ -63,10 +64,9 @@ def _paths(db, whale: str) -> list[tuple[float, list]]:
     return out
 
 
-def evaluate(db, whale: str) -> dict:
-    """Best plan for this whale and how it did: {plan, label, n, avg, median, avg_wo_best, won, ok}."""
-    trades = _paths(db, whale)
-    if len(trades) < MIN_COPIES:
+def evaluate_trades(trades: list[tuple[float, list]], min_copies: int = MIN_COPIES) -> dict:
+    """Best plan over [(entry price, price path)]: {plan, label, n, avg, median, avg_wo_best, won, ok}."""
+    if len(trades) < min_copies:
         return {"plan": "", "n": len(trades), "ok": False}
     best = None
     for name, plan in PLANS.items():
@@ -79,6 +79,21 @@ def evaluate(db, whale: str) -> dict:
         if best is None or key > best[0]:
             best = (key, res)
     return best[1]
+
+
+def evaluate(db, whale: str) -> dict:
+    """Best plan for this whale from the copies the bot recorded."""
+    return evaluate_trades(_paths(db, whale))
+
+
+def from_trips(trips: list[dict], paths: dict, delay: float) -> list[tuple[float, list]]:
+    """A wallet's on-chain buys as copies you could have made `delay` seconds later (used by the scanner)."""
+    out = []
+    for t in trips:
+        pts = [(ts, p) for ts, p in paths.get(t["mint"]) or [] if ts >= t["buy_ts"] + delay and p > 0]
+        if len(pts) >= 5 and pts[0][0] <= t["buy_ts"] + delay + 240:
+            out.append((pts[0][1], pts))
+    return out
 
 
 def get(db, whale: str, fresh: bool = False) -> dict:

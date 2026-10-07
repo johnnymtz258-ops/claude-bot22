@@ -320,3 +320,24 @@ def test_scanner_checks_wallets_early_in_several_winners_first(bot, monkeypatch)
     assert order[0] == THIRD                                       # early in 2 winners beats a bigger one-off buy
     assert bot.whales.get(THIRD)["source"] == "auto"
     assert "early in 2 winners" in bot.db.row("select reason from whale_candidates where address=?", (THIRD,))["reason"]
+
+
+def test_new_whale_whose_first_copies_dump_is_dropped_fast(bot):
+    now = int(time.time())
+    bot.whales.add(WHALE, "auto-dump", source="auto")
+    bot.db.run("update whales set added_ts=? where address=?", (now - 6 * 3600, WHALE))
+    for i in range(4):
+        bot.db.run("""insert into copies(whale,mint,open_ts,entry_price,last_price,status)
+            values(?,?,?,1.0,0.3,'open')""", (WHALE, f"Dump{i}" + "1" * 36, now - 3600))
+    dropped = bot.run(bot.scout.prune(now))
+    assert [w["address"] for w, _ in dropped] == [WHALE]
+    assert "first 4 copies averaged" in dropped[0][1]
+
+
+def test_wallets_that_buy_too_small_to_alert_are_not_followed():
+    from fomo.scout import qualifies
+    r = {**GOOD, "last_trade_ts": time.time(), "trip_list": [{"bought_usd": 120}] * 9}
+    ok, why = qualifies(r)
+    assert not ok and "buys too small" in why
+    ok, _ = qualifies({**r, "trip_list": [{"bought_usd": 900}] * 9})
+    assert ok
