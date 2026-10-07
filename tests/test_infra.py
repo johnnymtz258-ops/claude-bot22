@@ -207,3 +207,27 @@ def test_live_trade_fetch_is_retried_in_seconds(bot, monkeypatch):
     assert bot.db.scalar("select count(*) from swaps") == 1
     assert bot.db.scalar("select source from swaps") == "stream"
     worker.cancel()
+
+
+def test_rate_limits_never_show_as_a_health_issue():
+    calls = {"n": 0}
+
+    async def node(request):
+        calls["n"] += 1
+        if calls["n"] % 2:
+            return web.Response(status=429)
+        return web.json_response({"jsonrpc": "2.0", "id": 1, "result": 7})
+
+    async def run():
+        app = web.Application()
+        app.router.add_post("/", node)
+        srv = TestServer(app)
+        await srv.start_server()
+        async with aiohttp.ClientSession() as session:
+            rpc = SolanaRPC(session, [str(srv.make_url("/"))])
+            assert await rpc.call("getSlot", [], attempts=1) is None     # throttled, background call gave up
+            assert await rpc.call("getSlot", []) == 7
+            assert rpc.last_error == "" and "rate limited" in rpc.last_transient and rpc.rate_limited >= 1
+        await srv.close()
+
+    asyncio.run(run())

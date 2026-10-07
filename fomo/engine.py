@@ -186,6 +186,9 @@ class Engine:
         attempt = self._retries.get(key, 0)
         if attempt >= len(RETRY_DELAYS):
             self._retries.pop(key, None)
+            why = getattr(self.rpc, "last_transient", "") or "no answer"
+            self.last_error = (f"{time.strftime('%H:%M:%S')} couldn't load a trade by {self.whales.name(wallet)} after "
+                               f"{len(RETRY_DELAYS) + 1} tries ({why.split(' ', 1)[-1]}) — the backup check will retry it")
             return
         self._retries[key] = attempt + 1
 

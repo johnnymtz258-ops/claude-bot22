@@ -28,6 +28,7 @@ class SolanaRPC:
         self.rate_limited = 0
         self.last_error = ""
         self.last_rpc_error: dict = {}
+        self.last_transient = ""
         self._last_429 = 0.0
         self._priority = 0   # live whale-trade fetches waiting: background calls hold back until they're done
         self.tx_version = 1   # newest transaction format the bot asks for; adjusted if a node names another
@@ -59,8 +60,10 @@ class SolanaRPC:
         self._next = max(self._next, time.monotonic() + 1.0)
 
     def _note_error(self, url: str, text: str, cool: float) -> None:
+        # temporary (rate limit, timeout, network blip): retried, counted, never an "issue" on its own —
+        # a whale trade that is still lost after every retry is reported by the engine instead
         self.errors += 1
-        self.last_error = f"{time.strftime('%H:%M:%S')} {text}"
+        self.last_transient = f"{time.strftime('%H:%M:%S')} {text}"
         self._cool_until[url] = time.monotonic() + cool
 
     async def call(self, method: str, params: list, *, timeout: float = 12, attempts: int = 2,
