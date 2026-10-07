@@ -423,7 +423,11 @@ class Tracker:
     async def poll_once(self) -> None:
         since = self.engine.started_ts - 120
         for wallet in self.engine.watched_wallets():
-            for s in await self.rpc.signatures(wallet, limit=10):
+            try:
+                sigs = await self.rpc.signatures(wallet, limit=10, priority=True)   # backup for live trades
+            except TypeError:
+                sigs = await self.rpc.signatures(wallet, limit=10)
+            for s in sigs:
                 if s.get("err") is None and int(s.get("blockTime") or 0) >= since:
                     await self.engine.enqueue(wallet, str(s.get("signature")), "poll")
 

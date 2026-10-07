@@ -20,6 +20,7 @@ from .util import esc, mc, num, pct, usd
 from .whales import AFTERMATH_MIN, aftermath, dumps
 
 ALERT_MAX_AGE = 600          # a trade first seen later than this is recorded but not alerted
+RETRY_DELAYS = (5, 15, 30, 60)
 SELL_ALERT_COOLDOWN = 600    # at most one partial-sell message per whale+coin per 10 minutes
 ALERTED_RECENTLY = 48 * 3600
 THIN_LIQUIDITY_USD = 5_000
@@ -126,6 +127,7 @@ class Engine:
         self.coins = CoinTracker(db, cfg, market, whales, portfolio, notify)
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=5000)
         self._inflight: set[tuple[str, str]] = set()
+        self._retries: dict[tuple[str, str], int] = {}
         self._buying: set[tuple[str, str]] = set()  # whale+coin buys being handled right now
         self._confirming: set[tuple[str, str]] = set()  # whale+coin buys waiting for the confirm price
         self._tasks: set = set()
@@ -161,15 +163,37 @@ class Engine:
                 self.queue.task_done()
 
     async def process(self, wallet: str, signature: str, source: str = "stream") -> None:
-        tx = await self.rpc.transaction(signature)
+        try:
+            tx = await self.rpc.transaction(signature, priority=True)
+        except TypeError:   # an RPC without priorities
+            tx = await self.rpc.transaction(signature)
         if not tx:
-            return  # not marked processed, so the backup poller retries it later
+            self._retry_later(wallet, signature, source)
+            return  # not marked processed: retried in seconds, and the backup poller is still there
+        self._retries.pop((signature, wallet), None)
         self.db.run("insert or ignore into processed(sig,wallet,ts) values(?,?,?)",
                     (signature, wallet, int(time.time())))
         sol_usd = await self.market.sol_usd()
         swap = parse_swap(tx, wallet, sol_usd)
         if swap and swap["mint"] not in IGNORED_MINTS:
             await self.handle_swap(wallet, signature, swap, source, sol_usd)
+
+    def _retry_later(self, wallet: str, signature: str, source: str) -> None:
+        """A whale trade whose details didn't load (rate limit, not indexed yet): try again in 5s, 15s, 30s, 60s
+        instead of waiting for the backup poller — in your data those waited 43 minutes on average."""
+        key = (signature, wallet)
+        attempt = self._retries.get(key, 0)
+        if attempt >= len(RETRY_DELAYS):
+            self._retries.pop(key, None)
+            return
+        self._retries[key] = attempt + 1
+
+        async def later():
+            await asyncio.sleep(RETRY_DELAYS[attempt])
+            await self.enqueue(wallet, signature, source)
+        task = asyncio.create_task(later())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     # -- one parsed trade --------------------------------------------------------------------
     async def handle_swap(self, wallet: str, signature: str, swap: dict, source: str, sol_usd: float) -> None:
@@ -336,8 +360,9 @@ class Engine:
         if not self.whales.is_alerting(whale):
             status("muted")
             return
+        proven = stats["n"] >= 5 and stats["avg"] > 0   # this whale's own copies are making money: size is no reason
         if self.cfg.flag("QUALITY_GATE") and not setup and (
-                c["usd_value"] < self.cfg.get("QUALITY_MIN_BUY_USD") or grade == "C"
+                (c["usd_value"] < self.cfg.get("QUALITY_MIN_BUY_USD") and not proven) or grade == "C"
                 or (num(info.get("mc_usd")) or c["trade_mc"]) < self.cfg.get("QUALITY_MIN_MC_USD")):
             status("low_quality")
             return  # small buys, tiny caps and grade C: 6% hit 10x and ~85% ended below entry in your data

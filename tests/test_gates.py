@@ -83,3 +83,16 @@ def test_quality_gate_sends_real_size_buys(bot):
     bot.market.set_pair(mint=MINT, price=1200 / 3_000_000, mc=400_000)   # $1,200 buy, $400K cap, old coin
     bot.feed(WHALE, pump_buy(sol=8))
     assert bot.notes.kinds() == ["BUY"]
+
+
+def test_quality_gate_lets_small_buys_through_from_a_whale_whose_copies_win(bot):
+    import time
+    bot.cfg.set("QUALITY_GATE", "1")
+    bot.whales.add(WHALE, "Small but good")
+    now = int(time.time())
+    for i in range(6):
+        bot.db.run("""insert into copies(whale,mint,open_ts,entry_price,last_price,status,return_pct,close_ts)
+            values(?,?,?,1.0,1.4,'closed',40,?)""", (WHALE, f"Won{i}" + "1" * 39, now - 86400 * 2, now - 86400))
+    bot.market.set_pair(mint=MINT, price=WHALE_PRICE, mc=75_000)
+    bot.feed(WHALE, pump_buy())                                          # a $225 buy
+    assert bot.notes.kinds() == ["BUY"]

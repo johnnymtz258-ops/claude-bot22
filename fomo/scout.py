@@ -296,7 +296,8 @@ class WhaleScout:
             typical = buys[len(buys) // 2] if len(buys) >= 3 else None
             if trial is not None and trial[0] >= TRIAL_MIN_COPIES and trial[1] < TRIAL_DROP_AVG:
                 reason = f"its first {trial[0]} copies averaged {trial[1]:+.0f}%"
-            elif typical is not None and typical < MIN_TYPICAL_BUY_USD and self.cfg.flag("QUALITY_GATE"):
+            elif typical is not None and typical < MIN_TYPICAL_BUY_USD and self.cfg.flag("QUALITY_GATE") \
+                    and not (trial and trial[0] >= 5 and trial[1] > 0):   # small buys, but its copies win: keep
                 reason = f"buys too small for alerts (typical ${typical:,.0f})"
             elif not send_ok:
                 reason = why

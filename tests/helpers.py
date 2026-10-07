@@ -161,7 +161,7 @@ class FakeRPC:
         self.balances: dict[tuple[str, str], float] = {}
         self.sigs: dict[str, list] = {}
 
-    async def transaction(self, sig, wait=0):
+    async def transaction(self, sig, wait=0, priority=False):
         return self.txs.get(sig)
 
     async def mint_info(self, mint):

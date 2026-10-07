@@ -186,3 +186,24 @@ def test_rpc_asks_for_newer_transaction_versions():
 
     asyncio.run(run())
     assert seen == [1, 2, 2]     # the bot remembers the version, so later fetches work first time
+
+
+def test_live_trade_fetch_is_retried_in_seconds(bot, monkeypatch):
+    from fomo import engine as eng
+    from tests.helpers import MINT, pump_buy
+    monkeypatch.setattr(eng, "RETRY_DELAYS", (0.05, 0.05))
+    bot.whales.add(WHALE, "Rocket")
+    bot.market.set_pair(mint=MINT, price=0.000075, mc=75_000)
+    tx = pump_buy()
+    sig = "late-index-sig"
+    real = bot.rpc.txs
+    bot.rpc.txs = {}                                     # not indexed yet when the stream fires
+    worker = asyncio.get_event_loop().create_task(bot.engine.worker())
+    bot.run(bot.engine.enqueue(WHALE, sig, "stream"))
+    bot.run(asyncio.sleep(0.02))
+    assert bot.db.scalar("select count(*) from swaps") == 0
+    bot.rpc.txs = {**real, sig: tx}                      # indexed a moment later
+    bot.run(asyncio.sleep(0.3))
+    assert bot.db.scalar("select count(*) from swaps") == 1
+    assert bot.db.scalar("select source from swaps") == "stream"
+    worker.cancel()

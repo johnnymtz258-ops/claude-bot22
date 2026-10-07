@@ -29,6 +29,7 @@ class SolanaRPC:
         self.last_error = ""
         self.last_rpc_error: dict = {}
         self._last_429 = 0.0
+        self._priority = 0   # live whale-trade fetches waiting: background calls hold back until they're done
         self.tx_version = 1   # newest transaction format the bot asks for; adjusted if a node names another
         self.last_ok_ts = 0.0
 
@@ -62,12 +63,17 @@ class SolanaRPC:
         self.last_error = f"{time.strftime('%H:%M:%S')} {text}"
         self._cool_until[url] = time.monotonic() + cool
 
-    async def call(self, method: str, params: list, *, timeout: float = 12, attempts: int = 2):
+    async def call(self, method: str, params: list, *, timeout: float = 12, attempts: int = 2,
+                   priority: bool = False):
         """Return the JSON-RPC `result`, or None when every node failed."""
         payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
         before = self.last_error
         for attempt in range(attempts):
             for url in self._ordered():
+                waited = 0
+                while not priority and self._priority > 0 and waited < 100:   # live trades go first
+                    await asyncio.sleep(0.1)
+                    waited += 1
                 await self._pace()
                 async with self.sem:
                     self.calls += 1
@@ -108,7 +114,16 @@ class SolanaRPC:
         return None
 
     # -- typed helpers ----------------------------------------------------------------------
-    async def transaction(self, signature: str, *, wait: float = 6.0):
+    async def transaction(self, signature: str, *, wait: float = 6.0, priority: bool = False):
+        if not priority:
+            return await self._transaction(signature, wait, False)
+        self._priority += 1
+        try:
+            return await self._transaction(signature, wait, True)
+        finally:
+            self._priority -= 1
+
+    async def _transaction(self, signature: str, wait: float, priority: bool):
         """Fetch a confirmed transaction. A just-notified signature can take a moment to index."""
         deadline = time.monotonic() + wait
         delay = 0.35
@@ -117,7 +132,7 @@ class SolanaRPC:
             self.last_rpc_error = {}
             tx = await self.call("getTransaction", [signature, {
                 "encoding": "jsonParsed", "commitment": "confirmed",
-                "maxSupportedTransactionVersion": self.tx_version}], attempts=1)
+                "maxSupportedTransactionVersion": self.tx_version}], attempts=1, priority=priority)
             if tx and self.last_error != before:
                 self.last_error = before   # a retry got it: nothing was lost
             if tx or time.monotonic() >= deadline:
@@ -142,11 +157,12 @@ class SolanaRPC:
             return True
         return False
 
-    async def signatures(self, address: str, *, limit: int = 100, before: str | None = None) -> list[dict]:
+    async def signatures(self, address: str, *, limit: int = 100, before: str | None = None,
+                         priority: bool = False) -> list[dict]:
         opts = {"limit": max(1, min(1000, int(limit))), "commitment": "confirmed"}
         if before:
             opts["before"] = before
-        result = await self.call("getSignaturesForAddress", [address, opts], timeout=20)
+        result = await self.call("getSignaturesForAddress", [address, opts], timeout=20, priority=priority)
         return result if isinstance(result, list) else []
 
     async def mint_info(self, mint: str) -> dict | None:
