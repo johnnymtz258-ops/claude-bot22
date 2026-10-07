@@ -85,6 +85,14 @@ class Dashboard:
         return _json({"buys": reports.recent_buys(a.db, a.market, a.whales, limit=60, since_hours=72),
                       "messages": list(a.notify.feed)[:40]})
 
+    async def hype(self, request):
+        hype = getattr(self.app, "hype", None)
+        if not hype:
+            return _json({"board": [], "record": {}, "signals": [], "min_score": 0, "enabled": False})
+        return _json({"board": hype.board, "record": hype.record(), "signals": hype.signal_results(),
+                      "min_score": self.app.cfg.get("HYPE_MIN_SCORE"), "enabled": self.app.cfg.flag("HYPE_ALERTS"),
+                      "last_scan": hype.last_scan})
+
     async def hot(self, request):
         hours = num(request.query.get("hours"), 24) or 24
         return _json(reports.hot_coins(self.app.db, self.app.market, self.app.whales, hours=hours))
@@ -389,6 +397,7 @@ class Dashboard:
         r.add_get("/api/overview", self.overview)
         r.add_get("/api/feed", self.feed)
         r.add_get("/api/hot", self.hot)
+        r.add_get("/api/hype", self.hype)
         r.add_get("/api/whales", self.whales)
         r.add_get("/api/paper", self.paper)
         r.add_get("/api/coins", self.coins)
@@ -442,7 +451,7 @@ async def start_dashboard(app) -> None:
 
 GROUP_ORDER = ["Automation", "Live trading (real money)", "Which buys get sent", "Selling", "Scoring", "Other"]
 _GROUPS = {
-    "Automation": ("AUTO_", "WHALE_PICKS", "PAPER_", "LIVE_CARD", "RUNNER_ALERTS"),
+    "Automation": ("HYPE_", "AUTO_", "WHALE_PICKS", "PAPER_", "LIVE_CARD", "RUNNER_ALERTS"),
     "Live trading (real money)": ("LIVE_TRADING", "LIVE_DRY_RUN", "LIVE_TRADE", "LIVE_MAX", "LIVE_DAILY", "LIVE_SLIP",
                                   "LIVE_PRIO"),
     "Which buys get sent": ("MIN_WHALE", "MAX_ENTRY", "CONFIRM_", "LATE_CHASE", "DUMP_GATE", "BLOCK_FLIPPERS",

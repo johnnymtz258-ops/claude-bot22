@@ -328,7 +328,29 @@
       : [el("li", { class: "empty" }, "Nothing sent since the bot started.")]));
   }
 
+  const HYPE_LABELS = { rush: "🚀 buy rush", pressure: "🟢 buy pressure", volume: "💰 volume surge", momentum: "📈 momentum",
+    whales: "🐋 your whales", boost: "📣 paid boost", profile: "🧾 profile/socials", trending: "🔥 trending", early: "🌱 early" };
+  async function renderHype() {
+    const h = await api("/api/hype");
+    $("hype-meta").textContent = h.enabled ? `alerts at score ${h.min_score}+ · scanned ${h.last_scan ? ago(h.last_scan) : "—"}` : "alerts off (/set HYPE_ALERTS on)";
+    const rec = h.record || {};
+    $("hype-record").textContent = rec.n ? `${rec.n} alerts · ${Math.round(rec.win_rate * 100)}% won · avg ${pct(rec.avg)} · ${Math.round(rec.hit_2x * 100)}% reached 2x` : "record still being measured";
+    table($("hype-board"), [{ label: "Score", num: 1 }, "Coin", { label: "MC", num: 1 }, { label: "5m", num: 1 }, { label: "1h", num: 1 }, "Signals", ""],
+      (h.board || []).map((b) => el("tr", { class: b.blocked ? "click unsent" : "click", title: b.blocked ? `held back: ${b.blocked}` : b.signals.join("\n"), onclick: () => openCoin(b.mint) },
+        td(el("b", {}, String(b.score)), `num ${b.score >= h.min_score && !b.blocked ? "up" : ""}`), td(coinCell(b.symbol, b.image, b.mint)),
+        td(mc(b.mc_usd), "num"), td(pct(b.change_m5), `num ${signClass(b.change_m5)}`), td(pct(b.change_h1), `num ${signClass(b.change_h1)}`),
+        td(b.blocked ? `held back: ${b.blocked}` : b.keys.map((k) => HYPE_LABELS[k] || k).join(" · "), "wrap"),
+        td(el("span", { class: "links" }, links(b.mint, ""), b.x_url ? el("a", { href: b.x_url, target: "_blank", rel: "noopener", onclick: (e) => e.stopPropagation() }, "𝕏") : null)))),
+      "Nothing scored yet — the first scan runs a minute after launch.");
+    table($("hype-signals"), ["Signal", { label: "Alerts", num: 1 }, { label: "Hit 1.5x", num: 1 }, { label: "Hit 2x", num: 1 }, { label: "1h later", num: 1 }],
+      (h.signals || []).map((r) => el("tr", {}, td(HYPE_LABELS[r.signal] || r.signal), td(String(r.n), "num"),
+        td(`${Math.round(r.hit_1_5x * 100)}%`, "num"), td(`${Math.round(r.hit_2x * 100)}%`, "num"),
+        td(r.avg_1h === null ? "—" : pct(r.avg_1h), `num ${signClass(r.avg_1h)}`))),
+      "No hype alerts yet — results appear here as they come in.");
+  }
+
   async function renderHot() {
+    renderHype().catch(() => {});
     const rows = await api(`/api/hot?hours=${$("hot-hours").value}`);
     table($("hot"), ["Coin", "Whales", "Still holding", { label: "First whale in", num: 1 }, { label: "Now", num: 1 }, { label: "Move", num: 1 }, "Who", ""],
       rows.map((r) => el("tr", { class: "click", onclick: () => openCoin(r.mint) },

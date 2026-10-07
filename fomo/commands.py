@@ -17,6 +17,12 @@ and losing whales are tracked but never alerted. Each buy is re-checked ~45s lat
 ran 50%+, is dumping, or is a micro-cap. Every alert has the plan: half at 2x, rest out at -35% from the top
 or -40% from entry.
 
+<b>🔥 Hype scanner</b>
+Every minute it scores new, trending, boosted and whale-bought coins on what a real push looks like: buy rush,
+buyers vs sellers, volume surge, your whales, paid boosts, socials, trending, early market cap. A coin that
+lines up gets a 🔥 HYPE alert; a whale buy into a hyped coin is marked 🔥🐋 WHALE + HYPE.
+/hype — hottest coins right now and which signals have worked
+
 <b>Whales</b>
 /whales — who you follow, style and copy score · /whale name — one whale
 /add WALLET name — follow (profiled right away) · /remove name · /mute · /unmute
@@ -406,6 +412,32 @@ class Commands:
         if not n or not self.app.db.run("delete from watches where id=?", (n,)):
             raise ValueError("usage: /unwatch N — /watches shows the numbers")
         await self.say(f"Removed target {n}.")
+
+    async def cmd_hype(self, args, reply_mint):
+        hype = getattr(self.app, "hype", None)
+        if not hype:
+            await self.say("The hype scanner isn't running.")
+            return
+        from .hype import LABELS
+        rec = hype.record()
+        lines = ["<b>🔥 Hype scanner</b> — coins at the start of a push "
+                 f"({'alerts ON' if self.app.cfg.flag('HYPE_ALERTS') else 'alerts OFF: /set HYPE_ALERTS on'}, "
+                 f"alert at score {self.app.cfg.get('HYPE_MIN_SCORE'):.0f}+)",
+                 (f"Record: {rec['n']} alerts · {rec['win_rate'] * 100:.0f}% won · avg {pct(rec['avg'])} · "
+                  f"{rec['hit_2x'] * 100:.0f}% reached 2x") if rec["n"] else "Record: still being measured"]
+        board = [b for b in hype.board if not b["blocked"]][:8]
+        if board:
+            lines.append("\n<b>Hottest right now</b>")
+        for b in board:
+            lines.append(f"<b>{b['score']}</b> · ${esc(b['symbol'] or b['mint'][:4])} {mc(b['mc_usd'])} · "
+                         + ", ".join(LABELS.get(k, k) for k in b["keys"][:4]) + f"\n<code>{b['mint']}</code>")
+        results = [r for r in hype.signal_results() if r["n"] >= 3]
+        if results:
+            lines.append("\n<b>Which signals worked</b> (hype alerts, last 14 days)")
+            for r in results[:8]:
+                lines.append(f"{LABELS.get(r['signal'], r['signal'])}: {r['n']} alerts · {r['hit_1_5x'] * 100:.0f}% hit 1.5x · "
+                             f"{r['hit_2x'] * 100:.0f}% hit 2x")
+        await self.say("\n".join(lines))
 
     async def cmd_runners(self, args, reply_mint):
         rows = self.app.db.rows("select * from alerts where kind='RUNNER' order by ts desc limit 10")

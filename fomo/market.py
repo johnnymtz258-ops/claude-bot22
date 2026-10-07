@@ -38,6 +38,7 @@ def pair_to_info(pair: dict) -> dict:
     base = pair.get("baseToken") or {}
     liq = (pair.get("liquidity") or {}).get("usd")
     txns = (pair.get("txns") or {}).get("h1") or {}
+    txns5 = (pair.get("txns") or {}).get("m5") or {}
     txns24 = (pair.get("txns") or {}).get("h24") or {}
     change = pair.get("priceChange") or {}
     info = pair.get("info") or {}
@@ -64,6 +65,12 @@ def pair_to_info(pair: dict) -> dict:
         "socials_count": len(links),
         "socials": [str(x.get("type") or x.get("platform") or x.get("label") or "site").lower() for x in links][:6],
         "volume_h1": num((pair.get("volume") or {}).get("h1")),
+        "buys_m5": int(num(txns5.get("buys"))),
+        "sells_m5": int(num(txns5.get("sells"))),
+        "volume_m5": num((pair.get("volume") or {}).get("m5")),
+        "boosts": int(num((pair.get("boosts") or {}).get("active"))),
+        "x_url": next((str(x.get("url") or "") for x in links
+                       if str(x.get("type") or "").lower() in ("twitter", "x") and x.get("url")), ""),
         "volume_h24": num((pair.get("volume") or {}).get("h24")),
     }
 
@@ -328,19 +335,42 @@ class Market:
                 return mint
         return address
 
-    async def discovery_lists(self) -> list[str]:
-        """Solana coins DexScreener users are paying attention to right now
-        (new profiles, community takeovers, boosts). Attention only — never a reason to buy by itself."""
-        urls = [f"{DEX}/token-profiles/latest/v1", f"{DEX}/community-takeovers/latest/v1",
-                f"{DEX}/token-boosts/latest/v1", f"{DEX}/token-boosts/top/v1"]
-        found: list[str] = []
-        for data in await asyncio.gather(*(self._get(u) for u in urls)):
+    async def attention_lists(self) -> dict[str, list[str]]:
+        """Solana coins DexScreener users are paying attention to right now, by list: new token profiles,
+        community takeovers, and paid boosts (a project paying for promotion = a push is on)."""
+        urls = {"profiles": f"{DEX}/token-profiles/latest/v1", "takeovers": f"{DEX}/community-takeovers/latest/v1",
+                "boosts": f"{DEX}/token-boosts/latest/v1", "top_boosts": f"{DEX}/token-boosts/top/v1"}
+        out: dict[str, list[str]] = {}
+        results = await asyncio.gather(*(self._get(u) for u in urls.values()))
+        for name, data in zip(urls, results):
+            found = []
             for item in data if isinstance(data, list) else []:
                 if isinstance(item, dict) and str(item.get("chainId", "")).lower() == "solana":
                     address = str(item.get("tokenAddress") or "")
                     if is_address(address) and address not in IGNORED_MINTS:
                         found.append(address)
-        return list(dict.fromkeys(found))
+            out[name] = list(dict.fromkeys(found))
+        return out
+
+    async def discovery_lists(self) -> list[str]:
+        """All coins on the attention lists. Attention only — never a reason to buy by itself."""
+        lists = await self.attention_lists()
+        return list(dict.fromkeys(m for found in lists.values() for m in found))
+
+    async def new_pool_mints(self, limit: int = 20) -> list[str]:
+        """Brand-new Solana pools on GeckoTerminal (cached 2 minutes) — where new runners start."""
+        cached = getattr(self, "_new_pools", None)
+        if cached and time.time() - cached[0] < 120:
+            return list(cached[1])
+        out: list[str] = []
+        data = await self._gecko("/networks/solana/new_pools?page=1")
+        for row in (data or {}).get("data") or []:
+            base = (((row.get("relationships") or {}).get("base_token") or {}).get("data") or {}).get("id", "")
+            mint = str(base).split("_", 1)[-1]
+            if is_address(mint) and mint not in IGNORED_MINTS and mint not in out:
+                out.append(mint)
+        self._new_pools = (time.time(), out[:limit])
+        return out[:limit]
 
     async def search(self, query: str, limit: int = 5) -> list[dict]:
         from urllib.parse import quote

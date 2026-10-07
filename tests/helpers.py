@@ -127,6 +127,14 @@ def pair(mint=MINT, symbol="CASHED", price=0.00085, mc=850_000.0, liq=90_000.0, 
             p["priceChange"]["h1"] = value
         elif key == "dex":
             p["dexId"] = value
+        elif key in ("buys_m5", "sells_m5"):
+            p["txns"].setdefault("m5", {})[key[:-3] if key.endswith("_m5") else key] = value
+        elif key == "volume_m5":
+            p["volume"]["m5"] = value
+        elif key == "change_m5":
+            p["priceChange"]["m5"] = value
+        elif key == "boosts":
+            p["boosts"] = {"active": value}
         elif key == "socials":
             p["info"]["socials"], p["info"]["websites"] = [{"type": "twitter"}] * value, []
     return p
@@ -230,6 +238,15 @@ class FakeMarket(Market):
 
     async def discovery_lists(self):
         return list(self.watchlist)
+
+    async def attention_lists(self):
+        return {"profiles": list(self.watchlist), "boosts": list(getattr(self, "boosted", []))}
+
+    async def trending_mints(self, pages=2):
+        return list(getattr(self, "trending", []))
+
+    async def new_pool_mints(self, limit=20):
+        return []
 
     async def rugcheck(self, mint, timeout=3.0):
         await asyncio.sleep(0.01)  # a real network call yields to other tasks

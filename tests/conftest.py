@@ -5,6 +5,7 @@ import pytest
 from fomo.config import Config
 from fomo.db import Database
 from fomo.engine import Engine
+from fomo.hype import HypeScanner
 from fomo.portfolio import Portfolio
 from fomo.runners import RunnerScanner
 from fomo.scout import WhaleScout
@@ -32,6 +33,8 @@ class Bot:
                                self.notes)
         self._sig = 0
         self.runners = RunnerScanner(self.cfg, self.db, self.market, self.engine, self.whales, self.notes)
+        self.hype = HypeScanner(self.cfg, self.db, self.market, self.engine, self.whales, self.notes)
+        self.runners.hype = self.engine.hype = self.hype
         self.scout = WhaleScout(self.cfg, self.db, self.rpc, self.market, self.whales, self.runners, self.notes, lambda: None)
 
     def run(self, coro):

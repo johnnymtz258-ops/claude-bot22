@@ -89,11 +89,11 @@ class Tracker:
         open_copies = self.db.rows("select * from copies where status='open'")
         positions = self.portfolio.open_positions()
         recent = [r["mint"] for r in self.db.rows(
-            "select distinct mint from alerts where kind='BUY' and ts>=?", (now - 3 * 3600,))]
+            "select distinct mint from alerts where kind in ('BUY','HYPE') and ts>=?", (now - 3 * 3600,))]
         closed = self.portfolio.recently_closed()
         watches = self.db.rows("select * from watches where hit_ts=0")
         outcomes = self.db.rows("""select id,ts,mint,price_usd,peak_price,low_price,p1h,p6h,p24h from alerts
-            where kind='BUY' and price_usd>0 and ts>=? and p24h is null""", (now - OUTCOME_WINDOW,))
+            where kind in ('BUY','HYPE') and price_usd>0 and ts>=? and p24h is null""", (now - OUTCOME_WINDOW,))
         older = set()
         if now - self._last_outcome >= OUTCOME_EVERY:
             self._last_outcome = now

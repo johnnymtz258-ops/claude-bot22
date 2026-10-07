@@ -74,13 +74,26 @@ class RunnerScanner:
     async def tick(self, now: int | None = None) -> list[str]:
         now = int(now or time.time())
         self.last_scan = now
-        mints = await self.market.discovery_lists()
-        try:
-            mints += [m for m in await self.market.trending_mints() if m not in mints]
-        except Exception:
-            pass   # GeckoTerminal is a bonus source; DexScreener lists still work without it
+        lists = await self.market.attention_lists()
+        mints = [m for found in lists.values() for m in found]
+        for name, source in (("trending", self.market.trending_mints), ("new", self.market.new_pool_mints)):
+            try:
+                lists[name] = await source()
+            except Exception:
+                lists[name] = []   # GeckoTerminal is a bonus source; DexScreener lists still work without it
+            mints += lists[name]
+        # coins your whales bought in the last 2 hours: the whale alert system feeds the hype score
+        mints += [r["mint"] for r in self.db.rows("""select distinct mint from swaps where side='BUY' and is_me=0
+            and ts>=?""", (now - 2 * 3600,))]
+        mints = list(dict.fromkeys(mints))
         infos = await self.market.tokens(mints, max_age=50) if mints else {}
         self.universe = infos
+        hype = getattr(self, "hype", None)
+        if hype:
+            try:
+                await hype.scan(infos, lists, now)
+            except Exception as exc:
+                hype.last_error = f"{time.strftime('%H:%M:%S')} {type(exc).__name__}: {exc}"
         if not self.cfg.flag("RUNNER_ALERTS"):
             return []
         passed = [i for i in infos.values() if prefilter(i, self.cfg, now)[0]]

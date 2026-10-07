@@ -19,6 +19,7 @@ from .live import LiveTrader
 from .market import Market
 from .portfolio import Portfolio
 from .rpc import SolanaRPC, WalletStream
+from .hype import HypeScanner
 from .runners import RunnerScanner
 from .scout import WhaleScout
 from .telegram import Notifier, Telegram
@@ -169,6 +170,8 @@ class App:
                                    self.notify)
             self.discovery = Discovery(self.rpc, self.market, self.db, cfg)
             self.runners = RunnerScanner(cfg, self.db, self.market, self.engine, self.whales, self.notify)
+            self.hype = HypeScanner(cfg, self.db, self.market, self.engine, self.whales, self.notify)
+            self.runners.hype = self.engine.hype = self.hype
             self.engine.profiles.discovery = self.discovery
             self.scout = WhaleScout(cfg, self.db, self.rpc, self.market, self.whales, self.runners, self.notify,
                                     self.refresh_wallets, self.engine.profiles)

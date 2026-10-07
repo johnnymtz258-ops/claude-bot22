@@ -10,6 +10,7 @@ import asyncio
 import statistics
 import time
 
+from .hype import LABELS as hype_labels, alertable
 from . import playbook, copies, exits, messages, profiles
 from .coins import CoinTracker
 from .community import CommunityChecker
@@ -129,6 +130,7 @@ class Engine:
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=5000)
         self._inflight: set[tuple[str, str]] = set()
         self._retries: dict[tuple[str, str], int] = {}
+        self.hype = None   # HypeScanner, set by the app: whale alerts carry the coin's hype score
         self._buying: set[tuple[str, str]] = set()  # whale+coin buys being handled right now
         self._confirming: set[tuple[str, str]] = set()  # whale+coin buys waiting for the confirm price
         self._tasks: set = set()
@@ -347,6 +349,14 @@ class Engine:
         pb = (self.profiles.get(wallet) or {}).get("playbook") or {}
         if pb.get("ok") and grade != "SKIP":
             reasons.insert(0, (True, playbook.line(pb)))
+        hype = getattr(self, "hype", None)
+        hyped = None
+        if hype and grade != "SKIP":
+            hyped = hype.quick(mint, info)
+            keys = [k for k, _, _ in hyped["signals"] if k != "whales"]
+            if hyped["score"] >= 30 and set(keys) & {"rush", "pressure", "volume", "momentum", "boost", "trending"}:
+                reasons.insert(0, (True if hyped["score"] >= self.cfg.get("HYPE_MIN_SCORE") else None,
+                                   f"🔥 Hype score {hyped['score']}/100: " + ", ".join(hype_labels.get(k, k) for k in keys[:5])))
         if c.get("accum") and grade != "SKIP":
             reasons.insert(0, (True, f"🐋 Accumulating: {c['accum'][0]} buys, ${c['accum'][1]:,.0f} in total over the "
                                      f"last {ACCUMULATE_WINDOW // 3600}h — building a position, not testing"))
@@ -427,6 +437,8 @@ class Engine:
                    [("🎯 Ping me at 2x", None, f"x2:{mint}")]]
         if setup:
             text = "🚀 <b>RUNNER SETUP</b>\n" + text
+        elif hyped and alertable(hyped, self.cfg):
+            text = f"🔥🐋 <b>WHALE + HYPE · score {hyped['score']}</b>\n" + text
         silent = grade == "C" and self.cfg.flag("QUIET_LOW_GRADE") and not setup
         msg_id = await self.notify(text, buttons=buttons, silent=silent, mint=mint, wallet=wallet, kind="BUY")
         self.db.run("update alerts set tg_message_id=?, status=? where id=?",

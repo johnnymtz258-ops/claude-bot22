@@ -15,7 +15,7 @@
 </header>
 <nav class="tabs" id="tabs">
   <button data-tab="live" class="on">Live</button>
-  <button data-tab="hot">Hot coins</button>
+  <button data-tab="hot">🔥 Hype</button>
   <button data-tab="whales">Whales</button>
   <button data-tab="paper">Autopilot</button>
   <button data-tab="trades">My trades</button>
@@ -45,6 +45,16 @@
   </section>
 
   <section id="tab-hot" class="tab">
+    <div class="card">
+      <div class="card-head"><h2>🔥 Hype scanner — coins at the start of a push</h2><span class="muted" id="hype-meta"></span></div>
+      <p class="hint">Every minute: new pools, trending, boosted and whale-bought coins, scored on buy rush, buyers vs sellers, volume surge, your whales, paid boosts, socials, trending and how early it is. Coins at the alert score get a 🔥 alert in Telegram. Greyed rows are held back (and why).</p>
+      <div class="table-wrap"><table id="hype-board"></table></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Which signals have worked</h2><span class="muted" id="hype-record"></span></div>
+      <p class="hint">Hype alerts from the last 14 days, by signal: how many reached 1.5x and 2x after the alert. This is how you tell real hype from noise.</p>
+      <div class="table-wrap"><table id="hype-signals"></table></div>
+    </div>
     <div class="card">
       <div class="card-head"><h2>Coins with 2+ of your whales</h2>
         <select id="hot-hours"><option value="6">6h</option><option value="24" selected>24h</option><option value="72">3 days</option></select>
