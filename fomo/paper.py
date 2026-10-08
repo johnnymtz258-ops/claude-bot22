@@ -129,9 +129,14 @@ class PaperTrader:
             peak = max(num(t["peak_x"]), x)
             self.db.run("update paper_trades set last_price=?, peak_x=? where id=?", (price, peak, t["id"]))
             t.update(last_price=price, peak_x=peak)
-            plan = playbook.plan_for(self.db, t["whale"])   # this whale's own winning exit plan, if it has one
+            if t["whale"] == "hype":
+                from .hype import exit_plan
+                plan = exit_plan(self.cfg)                       # hype coins: take the first move
+            else:
+                plan = playbook.plan_for(self.db, t["whale"])   # this whale's own winning exit plan, if it has one
             if plan and not plan["half"] and x >= plan["tp"]:
-                done.append(self._sell(t, 1.0, price, f"all out at {plan['tp']:g}x (whale's playbook)", now))
+                why = "hype take-profit" if t["whale"] == "hype" else "whale's playbook"
+                done.append(self._sell(t, 1.0, price, f"all out at {plan['tp']:g}x ({why})", now))
                 continue
             if not t["half_taken"] and x >= 2:
                 done.append(self._sell(t, 0.5, price, "half at 2x", now))
@@ -143,7 +148,8 @@ class PaperTrader:
             elif peak >= 1.5 and x <= peak * (1 - trail / 100):
                 reason = f"fell {trail:.0f}% from its {peak:.1f}x top"
             elif plan and now - t["open_ts"] >= plan["hold"]:
-                reason = f"{plan['hold'] // 3600}h max hold (whale's playbook)"
+                reason = (f"{plan['hold'] // 60} min limit (hype exit)" if t["whale"] == "hype"
+                          else f"{plan['hold'] // 3600}h max hold (whale's playbook)")
             elif (not plan or plan["follow_whale"]) and self._whale_half_out(t["whale"], t["mint"], t["open_ts"]):
                 reason = "whale sold half its bag"
             elif now - t["open_ts"] >= MAX_HOLD:

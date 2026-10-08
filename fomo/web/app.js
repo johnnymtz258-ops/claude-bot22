@@ -651,7 +651,7 @@
       return [...head, el("div", { class: "settings-row" }, el("div", {}, el("div", { class: "name" }, s.name), el("div", { class: "help" }, s.help), msg), input)];
     }));
     const h = [["Version", o.version], ["Up for", dur(o.uptime)], ["Wallet stream", o.stream.connected ? `connected (${o.stream.subs} subscriptions)` : `reconnecting ${o.stream.error || ""}`],
-      ["RPC", `${o.helius ? "Helius" : "public"} · ${o.rpc.calls.toLocaleString()} calls · ${(o.rpc.errors - o.rpc.rate_limited).toLocaleString()} failed · ${o.rpc.rate_limited.toLocaleString()} slowed down by the plan's rate limit (retried)`],
+      ["RPC", `${o.helius ? (o.rpc.primary_down ? "⚠️ Helius not answering — using the public RPC" : "Helius") : "public"} · ${o.rpc.calls.toLocaleString()} calls · ${(o.rpc.errors - o.rpc.rate_limited).toLocaleString()} failed · ${o.rpc.rate_limited.toLocaleString()} slowed down by the plan's rate limit (retried)`],
       ["Your wallet", o.wallet_synced ? "synced" : "not synced (MY_WALLETS in .env)"], ["Recent issues", o.errors.join(" | ") || "none"]];
     $("health").replaceChildren(...h.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]));
   }

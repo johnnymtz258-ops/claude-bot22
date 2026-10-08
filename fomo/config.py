@@ -51,7 +51,7 @@ TUNABLES = {t.name: t for t in (
     Tunable("PROTECT_AFTER_X", 1.5, "Profit protector arms once a coin reaches this multiple of your cost (0 = off)", 0, 100),
     Tunable("PROTECT_TRAIL_PCT", 35, "Profit protector: warn when an armed coin falls this % from its peak", 10, 90),
     Tunable("MICRO_MC_USD", 0, "Also treat coins below this market cap like bonding-curve coins (0 = off)", 0, 10_000_000),
-    Tunable("QUALITY_GATE", 1, "Hold back grade C whale buys (they lost even with the exit plan) and mark small buys / tiny caps as smaller signals (1 = on)", 0, 1, True),
+    Tunable("QUALITY_GATE", 0, "Hold back grade C whale buys (off by default: in your data the held-back ones did as well as the sent ones). Small buys / tiny caps / grade C are always marked 🔸 (1 = hold back)", 0, 1, True),
     Tunable("QUALITY_MIN_BUY_USD", 500, "Below this whale buy size an alert is marked as a smaller signal", 0, 100000),
     Tunable("QUALITY_MIN_MC_USD", 30000, "Below this market cap an alert is marked as a smaller signal", 0, 10000000),
     Tunable("NEW_WHALE_WATCH_DAYS", 7, "Watch new auto-found / linked wallets this many days before their buys are sent (they still count for stacking and hype); 0 = off", 0, 60),
@@ -59,7 +59,10 @@ TUNABLES = {t.name: t for t in (
     Tunable("FOLLOW_FUNDING", 1, "Follow the funding path: when a whale sends FUNDING_MIN_SOL+ to a fresh wallet, watch that wallet too (1 = on)", 0, 1, True),
     Tunable("FUNDING_MIN_SOL", 5, "Smallest SOL transfer from a whale to a fresh wallet that gets followed", 0.5, 10000),
     Tunable("HYPE_ALERTS", 1, "Hype scanner: alert coins at the start of a push — buy rush, volume surge, your whales, boosts, trending (1 = on)", 0, 1, True),
-    Tunable("HYPE_MIN_SCORE", 60, "Hype scanner: score (0-100) a coin needs for an alert", 20, 100),
+    Tunable("HYPE_MIN_SCORE", 45, "Hype scanner: score (0-100) a coin needs for an alert", 20, 100),
+    Tunable("HYPE_TP_PCT", 30, "Hype alerts' exit: sell everything at this % profit", 5, 1000),
+    Tunable("HYPE_STOP_PCT", 25, "Hype alerts' exit: stop loss %", 5, 90),
+    Tunable("HYPE_MAX_MINUTES", 60, "Hype alerts' exit: sell whatever is left after this many minutes", 5, 1440),
     Tunable("HYPE_MAX_MC_USD", 5000000, "Hype scanner: ignore coins above this market cap (past early)", 50000, 1000000000),
     Tunable("HYPE_MIN_LIQ_USD", 10000, "Hype scanner: smallest liquidity a coin needs", 0, 10000000),
     Tunable("HYPE_MAX_H1_PCT", 100, "Hype scanner: don't alert coins already up more than this % in the last hour (late)", 20, 1000),
@@ -112,6 +115,7 @@ class Config:
     helius_key: str = ""
     rpc_http: list = field(default_factory=list)
     rpc_wss: str = ""
+    rpc_wss_fallback: str = ""
     my_wallets: list = field(default_factory=list)
     state_dir: Path = Path(".")
     db_path: Path = Path("whales.db")
@@ -153,6 +157,10 @@ class Config:
         return parsed
 
 
+PUBLIC_RPC = "https://api.mainnet-beta.solana.com"
+PUBLIC_WSS = "wss://api.mainnet-beta.solana.com"
+
+
 def load(env_file: Path | None = None) -> Config:
     try:
         from dotenv import load_dotenv
@@ -168,10 +176,10 @@ def load(env_file: Path | None = None) -> Config:
         url = url.strip()
         if url and url not in rpc_http:
             rpc_http.append(url)
-    if not rpc_http:
-        rpc_http.append("https://api.mainnet-beta.solana.com")
+    if PUBLIC_RPC not in rpc_http:
+        rpc_http.append(PUBLIC_RPC)   # last resort: if Helius stops answering (credits used up, outage), keep working
     rpc_wss = (f"wss://mainnet.helius-rpc.com/?api-key={helius}" if helius
-               else _env("SOLANA_RPC_WSS") or "wss://api.mainnet-beta.solana.com")
+               else _env("SOLANA_RPC_WSS") or PUBLIC_WSS)
 
     wallets_text = _env("MY_WALLETS") or _env("PUBLIC_SOLANA_WALLET_ADDRESS")
     my_wallets = [w.strip() for w in wallets_text.replace(";", ",").split(",") if is_address(w.strip())]
@@ -193,6 +201,7 @@ def load(env_file: Path | None = None) -> Config:
         helius_key=helius,
         rpc_http=rpc_http,
         rpc_wss=rpc_wss,
+        rpc_wss_fallback=PUBLIC_WSS if rpc_wss != PUBLIC_WSS else "",
         my_wallets=my_wallets,
         state_dir=state_dir,
         db_path=db_path,

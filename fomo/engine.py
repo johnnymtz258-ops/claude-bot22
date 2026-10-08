@@ -468,7 +468,10 @@ class Engine:
         proven = stats["n"] >= 5 and stats["avg"] > 0   # this whale's own copies are making money: size is no reason
         small = c["usd_value"] < self.cfg.get("QUALITY_MIN_BUY_USD") and not proven
         tiny = (num(info.get("mc_usd")) or c["trade_mc"]) < self.cfg.get("QUALITY_MIN_MC_USD")
-        if (small or tiny) and not setup:
+        if grade == "C" and not setup:
+            reasons.insert(0, (None, "🔸 Smaller signal: grade C — size down; these did about as well as the rest "
+                                     "in your data, so they're sent rather than hidden"))
+        elif (small or tiny) and not setup:
             # sent, but marked: with the exit plan these averaged 1.07x vs 1.26x for $500+ buys at $30K+ MC
             reasons.insert(0, (None, "🔸 Smaller signal: " + ("small buy" if small else "tiny market cap") +
                                " — these averaged 1.07x with the exit plan vs 1.26x for bigger buys. "

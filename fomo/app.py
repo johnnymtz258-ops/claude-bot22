@@ -48,6 +48,10 @@ class App:
                     cfg.set(name, saved)
                 except ValueError:
                     pass
+        if self.db.get_meta("quality_gate_off_v25_2") != "1":   # held-back grade C did as well as sent alerts
+            self.db.set_meta("setting:QUALITY_GATE", 0)
+            cfg.set("QUALITY_GATE", 0)
+            self.db.set_meta("quality_gate_off_v25_2", "1")
         if self.db.get_meta("runner_alerts_off_v22_4") != "1":   # community runners averaged -71% on your data
             self.db.set_meta("setting:RUNNER_ALERTS", 0)
             cfg.set("RUNNER_ALERTS", 0)
@@ -177,7 +181,7 @@ class App:
             self.scout = WhaleScout(cfg, self.db, self.rpc, self.market, self.whales, self.runners, self.notify,
                                     self.refresh_wallets, self.engine.profiles)
             self.commands = Commands(self)
-            self.stream = WalletStream(cfg.rpc_wss, self.engine.enqueue)
+            self.stream = WalletStream(cfg.rpc_wss, self.engine.enqueue, cfg.rpc_wss_fallback)
 
             imported = import_legacy_whales(self.db, cfg.legacy_db_path,
                                             [config.ROOT / "tracked_wallets.json",

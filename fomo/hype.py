@@ -46,7 +46,7 @@ LABELS = {"rush": "🚀 buy rush", "pressure": "🟢 buy pressure", "volume": "�
 
 
 BURST = {"rush", "volume", "loading", "pressure"}   # the same burst of buying seen four ways: one shared budget
-BURST_CAP = 35
+BURST_CAP = 45
 
 
 def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = None,
@@ -58,8 +58,6 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
     mint = info.get("mint", "")
     mcap, liq = num(info.get("mc_usd")), num(info.get("liquidity_usd"), -1)
     m5, h1 = num(info.get("change_m5")), num(info.get("change_h1"))
-    created = num(info.get("pair_created_ts"))
-    age_h = (now - created) / 3600 if created else 999.0
     out = {"score": 0, "signals": [], "blocked": ""}
     if mcap <= 0 or num(info.get("price_usd")) <= 0:
         out["blocked"] = "no price"
@@ -81,7 +79,8 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
     elif b5 >= 15 and b5 >= 1.5 * pace:
         sig.append(("rush", f"🚀 buying picking up: {int(b5)} buys in 5 min ({b5 / pace:.1f}x the hour's pace)", 12))
     if b5 >= 15 and b5 >= 1.6 * max(s5, 1):
-        sig.append(("pressure", f"🟢 buyers outnumber sellers {int(b5)}/{int(s5)} in 5 min", 15))
+        # the best signal in your 32 hype alerts: 39% won, 1.12x with the exit plan (all: 28%, 0.92x)
+        sig.append(("pressure", f"🟢 buyers outnumber sellers {int(b5)}/{int(s5)} in 5 min", 20))
     v5, vpace = num(info.get("volume_m5")), max(num(info.get("volume_h1")) / 12, 1.0)
     if v5 >= 5_000 and v5 >= 2.5 * vpace:
         sig.append(("volume", f"💰 volume surge: {usd(v5)} in 5 min, {v5 / vpace:.1f}x the hour's pace", 20))
@@ -91,21 +90,16 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
         sig.append(("whales", f"🐋 {len(whales)} of your whales in: " + ", ".join(w["name"] for w in whales[:4]), 30))
     elif whales:
         sig.append(("whales", f"🐋 your whale {whales[0]['name']} bought it", 15))
+    # paid boosts went 0 for 7 and profile/socials 14% won in your alerts: shown for context, worth no points
     if num(info.get("boosts")) > 0 or mint in lists.get("boosts", ()) or mint in lists.get("top_boosts", ()):
-        sig.append(("boost", "📣 paid DexScreener boost — the team is pushing it", 10))
+        sig.append(("boost", "📣 paid DexScreener boost (context only — boosted coins went 0 for 7 in your alerts)", 0))
     if mint in lists.get("takeovers", ()):
-        sig.append(("profile", "🧾 community takeover on DexScreener", 8))
+        sig.append(("profile", "🧾 community takeover on DexScreener", 0))
     elif mint in lists.get("profiles", ()) or (num(info.get("socials_count")) >= 2 and info.get("x_url")):
-        sig.append(("profile", "🧾 X / Telegram / site listed", 8))
+        sig.append(("profile", "🧾 X / Telegram / site listed", 0))
     if mint in lists.get("trending", ()):
         sig.append(("trending", "🔥 trending on GeckoTerminal", 8))
-    if age_h < 1:
-        # an 8-minute-old pair's buy rush is mostly the dev's bundle and bots ($CORES: score 93, -93% minutes later)
-        sig.append(("fresh", f"🍼 brand-new launch ({_age(age_h)} old) — dev, bundles and bots still control it", -10))
-    elif age_h <= 72 and mcap <= 1_500_000:
-        sig.append(("early", f"🌱 survived its launch: {_age(age_h)} old at {mc(mcap)} MC", 10))
-    elif age_h <= 30 * 24:
-        sig.append(("survivor", f"🛡 {age_h / 24:.0f} days old and drawing new buyers — past the dev/sniper phase", 10))
+    # age: in your 32 alerts brand-new pairs did as well as any (41% won) and 1h-3d-old ones worst — no age points
     top10 = num((holders or {}).get("top10_pct"), -1)
     if top10 > 35:
         sig.append(("bundle", f"⚠️ top 10 wallets hold {top10:.0f}% of supply (pools excluded) — bundle / insider supply", -25))
@@ -125,9 +119,18 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
 
 
 def alertable(result: dict, cfg) -> bool:
-    keys = {k for k, _, _ in result["signals"]}
+    keys = {k for k, _, p in result["signals"] if p > 0}
     return (not result["blocked"] and result["score"] >= cfg.get("HYPE_MIN_SCORE")
-            and len(keys) >= 3 and bool(keys & ACTIVITY))
+            and len(keys) >= 2 and bool(keys & ACTIVITY))
+
+
+def exit_plan(cfg) -> dict:
+    """Hype coins spike and fade: on your 32 hype alerts, selling everything at +30% with a -25% stop and a 1-hour
+    limit averaged 1.04x (56% won); holding for 2x averaged 0.92x (28% won)."""
+    return {"label": f"sell it all at +{cfg.get('HYPE_TP_PCT'):.0f}%, stop -{cfg.get('HYPE_STOP_PCT'):.0f}%, "
+                     f"out after {cfg.get('HYPE_MAX_MINUTES'):.0f} min",
+            "tp": 1 + cfg.get("HYPE_TP_PCT") / 100, "half": False, "stop": 1 - cfg.get("HYPE_STOP_PCT") / 100,
+            "hold": int(cfg.get("HYPE_MAX_MINUTES") * 60), "follow_whale": False}
 
 
 def _age(hours: float) -> str:
@@ -275,11 +278,12 @@ class HypeScanner:
         else:
             lines.append("Hype alerts are new — their record is being measured (/hype). Start small.")
         age_d = (now - created) / 86400 if created else 0
-        lines.append("💼 Size: shot — keep it small (a slice of your ~15% shots bucket); on a coin this young, devs, "
-                     "insiders and bots are ahead of you" if age_d < 14 else
-                     "💼 Size: normal — the coin survived its first weeks")
-        lines.append(f"Plan: take half at 2x ({mc(mcap * 2)} MC), rest out if it falls 35% from its top, "
-                     f"-{self.cfg.get('STOP_LOSS_PCT'):.0f}% stop.")
+        lines.append("💼 Size: shot — keep it small; on a coin this young, devs, insiders and bots are ahead of you"
+                     if age_d < 14 else "💼 Size: normal — the coin survived its first weeks")
+        plan = exit_plan(self.cfg)
+        lines.append(f"🎯 Plan: sell it all at +{self.cfg.get('HYPE_TP_PCT'):.0f}% ({mc(mcap * plan['tp'])} MC) · "
+                     f"stop -{self.cfg.get('HYPE_STOP_PCT'):.0f}% ({mc(mcap * plan['stop'])} MC) · out after "
+                     f"{self.cfg.get('HYPE_MAX_MINUTES'):.0f} min. Hype coins spike and fade — take the first move.")
         lines.append(f"<code>{mint}</code>")
         links = [(label, url, None) for label, url in messages.token_links(mint, info.get("pair_address", ""))]
         if info.get("x_url"):

@@ -1,5 +1,6 @@
 """Startup self-check: prints what's configured and what to fix. Never stops the bot."""
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -26,12 +27,26 @@ async def online_checks(cfg):
                      f"Telegram token rejected: {data.get('description')}")
             except Exception as exc:
                 line(False, f"Telegram unreachable ({type(exc).__name__})")
-        try:
-            async with s.post(cfg.rpc_http[0], json={"jsonrpc": "2.0", "id": 1, "method": "getSlot"}) as r:
-                data = await r.json(content_type=None)
-            line("result" in data, "Solana RPC answering" if "result" in data else f"Solana RPC error: {data}")
-        except Exception as exc:
-            line(False, f"Solana RPC unreachable ({type(exc).__name__})")
+        for i, url in enumerate(cfg.rpc_http[:2]):
+            name = "Helius" if "helius" in url else "Public Solana RPC"
+            try:
+                async with s.post(url, json={"jsonrpc": "2.0", "id": 1, "method": "getSlot"}) as r:
+                    status, body = r.status, await r.text()
+                try:
+                    data = json.loads(body)
+                except ValueError:
+                    hint = (" — your Helius credits may be used up (check dashboard.helius.dev) or it's rate limiting you"
+                            if "helius" in url else "")
+                    line(False, f"{name} answered HTTP {status} with a non-JSON page: {body.strip()[:80]!r}{hint}")
+                    continue
+                ok = "result" in data
+                line(ok, f"{name} answering" if ok else f"{name} error: {str(data.get('error'))[:120]}")
+                if ok and i == 0:
+                    break   # the main node works: no need to test the fallback
+            except Exception as exc:
+                line(False, f"{name} unreachable ({type(exc).__name__})")
+        if len(cfg.rpc_http) > 1:
+            print("   (if Helius fails, the bot switches to the public Solana RPC automatically — slower, but it keeps working)")
         try:
             async with s.get("https://api.dexscreener.com/tokens/v1/solana/So11111111111111111111111111111111111111112") as r:
                 line(r.status == 200, "DexScreener prices" if r.status == 200 else f"DexScreener HTTP {r.status}")

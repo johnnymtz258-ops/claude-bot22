@@ -23,8 +23,9 @@ def info_of(**over):
 def test_a_coin_at_the_start_of_a_push_scores_high(bot):
     r = score(info_of(), bot.cfg, lists={"boosts": {MINT}}, now=NOW)
     keys = [k for k, _, _ in r["signals"]]
-    assert {"rush", "pressure", "volume", "momentum", "boost", "early"} <= set(keys)
-    assert r["score"] >= 60 and not r["blocked"] and alertable(r, bot.cfg)
+    assert {"rush", "pressure", "volume", "momentum", "boost"} <= set(keys)
+    assert r["score"] >= 45 and not r["blocked"] and alertable(r, bot.cfg)
+    assert dict((k, p) for k, _, p in r["signals"])["boost"] == 0      # boosts went 0 for 7: context, no points
 
 
 def test_quiet_coins_and_unsafe_ones_are_not_alerted(bot):
@@ -42,7 +43,9 @@ def test_scanner_sends_one_hype_alert_and_trades_it_on_paper(bot):
     bot.run(bot.runners.tick(int(NOW)))
     assert bot.notes.kinds() == ["HYPE"]
     text = bot.notes.sent[0]["text"]
-    assert "HYPE BUILDING" in text and "buy rush" in text and "Plan: take half at 2x" in text
+    assert "HYPE BUILDING" in text and "buy rush" in text and "sell it all at +30%" in text
+    from fomo.hype import exit_plan
+    assert exit_plan(bot.cfg)["tp"] == 1.3
     assert bot.db.scalar("select count(*) from paper_trades where whale='hype'") == 1
     assert bot.hype.board and bot.hype.board[0]["mint"] == MINT
     bot.run(bot.runners.tick(int(NOW) + 60))                    # same coin a minute later: no repeat
@@ -99,7 +102,7 @@ def test_cores_a_bundled_eight_minute_old_launch_is_not_a_93(bot):
     _cores(bot, 8, [26_000_000] * 5)                          # 5 wallets with ~49% of the supply
     assert bot.notes.kinds() == []
     row = bot.hype.board[0]
-    assert row["score"] < 40 and "bundle" in row["keys"] and "fresh" in row["keys"]
+    assert row["score"] < 45 and "bundle" in row["keys"]
 
 
 def test_the_same_push_on_a_coin_that_survived_its_launch_with_spread_supply_is_alerted(bot):
@@ -107,4 +110,16 @@ def test_the_same_push_on_a_coin_that_survived_its_launch_with_spread_supply_is_
     _cores(bot, 2 * 24 * 60, [2_500_000] * 10)               # 2 days old, top 10 hold ~9%
     assert bot.notes.kinds() == ["HYPE"]
     text = bot.notes.sent[0]["text"]
-    assert "supply spread out" in text and "survived its launch" in text
+    assert "supply spread out" in text
+
+
+def test_hype_paper_trades_take_the_first_move(bot):
+    bot.cfg.set("PAPER_SLIPPAGE_PCT", "0")
+    bot.market.set_pair(**hot_pair())
+    bot.market.boosted = [MINT]
+    bot.run(bot.runners.tick(int(NOW)))
+    bot.market.set_pair(**hot_pair(price=0.0002 * 1.32, mc=264_000))   # +32%: the exit takes it
+    bot.market._cache.clear()
+    bot.run(bot.tracker.tick(int(NOW) + 120))
+    t = bot.db.row("select * from paper_trades where whale='hype'")
+    assert t["status"] == "closed" and "hype take-profit" in t["close_reason"]

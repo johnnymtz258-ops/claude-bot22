@@ -94,7 +94,12 @@ class SolanaRPC:
                                 self._note_error(url, f"{method}: HTTP {resp.status}", 5.0)
                                 continue
                             data = await resp.json(content_type=None)
-                    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+                    except ValueError:
+                        # not JSON: a credit-limit / outage page. Rest this node for a minute; the fallback answers
+                        self._note_error(url, f"{method}: the node answered with a non-JSON page (credits used up or outage)",
+                                         60.0)
+                        continue
+                    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                         self._note_error(url, f"{method}: {type(exc).__name__}", 5.0)
                         continue
                 if not isinstance(data, dict):
@@ -230,7 +235,12 @@ class SolanaRPC:
 
     def health(self) -> dict:
         return {"calls": self.calls, "errors": self.errors, "rate_limited": self.rate_limited,
-                "last_error": self.last_error, "last_ok_ts": int(self.last_ok_ts)}
+                "last_error": self.last_error, "last_ok_ts": int(self.last_ok_ts),
+                "primary_down": self.primary_down()}
+
+    def primary_down(self) -> bool:
+        """The first (preferred) node is cooling off after failures and calls are going to a fallback."""
+        return len(self.urls) > 1 and self._cool_until.get(self.urls[0], 0) > time.monotonic()
 
 
 class WalletStream:
@@ -239,8 +249,12 @@ class WalletStream:
     `on_signature(wallet, signature)` must be quick (it should just enqueue work).
     """
 
-    def __init__(self, url: str, on_signature):
+    def __init__(self, url: str, on_signature, fallback: str = ""):
         self.url = url
+        self.primary = url
+        self.fallback = fallback
+        self._failures = 0
+        self._fallback_until = 0.0
         self.on_signature = on_signature
         self.wanted: set[str] = set()
         self.sub_of: dict[str, int] = {}
@@ -302,11 +316,18 @@ class WalletStream:
 
         backoff = 1.0
         while True:
+            # Helius refusing connections (credits used up, outage): use the public stream for 10 minutes, then retry
+            if self.fallback and self._failures >= 3 and self.url == self.primary:
+                self.url, self._fallback_until, backoff = self.fallback, time.time() + 600, 1.0
+            elif self.url != self.primary and time.time() >= self._fallback_until:
+                self.url, self._failures = self.primary, 0
             try:
                 async with websockets.connect(self.url, ping_interval=20, ping_timeout=20,
                                               open_timeout=15, close_timeout=5, max_size=2 ** 23) as ws:
                     self._ws = ws
                     self.connected = True
+                    if self.url == self.primary:
+                        self._failures = 0
                     self.sub_of.clear(); self.wallet_of.clear(); self.pending.clear()
                     backoff = 1.0
                     await self._sync()
@@ -323,6 +344,8 @@ class WalletStream:
                 raise
             except Exception as exc:  # network drops are expected; reconnect with backoff
                 self.last_error = f"{time.strftime('%H:%M:%S')} {type(exc).__name__}: {str(exc)[:120]}"
+                if self.url == self.primary:
+                    self._failures += 1
             finally:
                 self.connected = False
                 self._ws = None
