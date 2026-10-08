@@ -83,3 +83,28 @@ def test_second_leg_is_caught_while_buyers_load_before_the_price_moves(bot):
     assert bot.notes.kinds() == ["HYPE"]
     text = bot.notes.sent[0]["text"]
     assert "buyers loading before the price moves" in text and "second leg: peaked at $1.5M" in text
+
+
+def _cores(bot, age_min, holders):
+    from tests.helpers import ON_CURVE
+    bot.market.set_pair(mint=MINT, price=0.0002, mc=53_500, liq=17_936, created_ms=int((NOW - age_min * 60) * 1000),
+                        buys_h1=430, buys_m5=173, sells_m5=40, volume_m5=9_894, change_m5=8, change_h1=23)
+    bot.rpc.holders[MINT] = [(ON_CURVE[i], amount) for i, amount in enumerate(holders)]
+    bot.market.watchlist = [MINT]                             # a new DexScreener token profile, like most launches
+    bot.run(bot.runners.tick(int(NOW)))
+
+
+def test_cores_a_bundled_eight_minute_old_launch_is_not_a_93(bot):
+    """$CORES: 8 minutes old, 173 buys in 5 min — and the dev's bundle holding the supply. It dumped 93% minutes later."""
+    _cores(bot, 8, [26_000_000] * 5)                          # 5 wallets with ~49% of the supply
+    assert bot.notes.kinds() == []
+    row = bot.hype.board[0]
+    assert row["score"] < 40 and "bundle" in row["keys"] and "fresh" in row["keys"]
+
+
+def test_the_same_push_on_a_coin_that_survived_its_launch_with_spread_supply_is_alerted(bot):
+    bot.market.boosted = [MINT]
+    _cores(bot, 2 * 24 * 60, [2_500_000] * 10)               # 2 days old, top 10 hold ~9%
+    assert bot.notes.kinds() == ["HYPE"]
+    text = bot.notes.sent[0]["text"]
+    assert "supply spread out" in text and "survived its launch" in text

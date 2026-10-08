@@ -329,12 +329,13 @@
   }
 
   const HYPE_LABELS = { rush: "🚀 buy rush", pressure: "🟢 buy pressure", volume: "💰 volume surge", momentum: "📈 momentum",
-    whales: "🐋 your whales", boost: "📣 paid boost", profile: "🧾 profile/socials", trending: "🔥 trending", early: "🌱 early", loading: "🧲 loading", reload: "♻️ second leg" };
+    whales: "🐋 your whales", boost: "📣 paid boost", profile: "🧾 profile/socials", trending: "🔥 trending", early: "🌱 survived launch", loading: "🧲 loading", reload: "♻️ second leg",
+    survivor: "🛡 survivor", spread: "👥 spread supply", bundle: "⚠️ bundled supply", fresh: "🍼 brand-new" };
   async function renderHype() {
     const h = await api("/api/hype");
     $("hype-meta").textContent = h.enabled ? `alerts at score ${h.min_score}+ · scanned ${h.last_scan ? ago(h.last_scan) : "—"}` : "alerts off (/set HYPE_ALERTS on)";
     const rec = h.record || {};
-    $("hype-record").textContent = rec.n ? `${rec.n} alerts · ${Math.round(rec.win_rate * 100)}% won · avg ${pct(rec.avg)} · ${Math.round(rec.hit_2x * 100)}% reached 2x` : "record still being measured";
+    $("hype-record").textContent = rec.alerts ? `with the exit plan: ${rec.n} closed · ${Math.round(rec.win_rate * 100)}% won · avg ${pct(rec.avg)} · ${Math.round(rec.hit_2x * 100)}% of ${rec.alerts} alerts reached 2x` : "record still being measured";
     table($("hype-board"), [{ label: "Score", num: 1 }, "Coin", { label: "MC", num: 1 }, { label: "5m", num: 1 }, { label: "1h", num: 1 }, "Signals", ""],
       (h.board || []).map((b) => el("tr", { class: b.blocked ? "click unsent" : "click", title: b.blocked ? `held back: ${b.blocked}` : b.signals.join("\n"), onclick: () => openCoin(b.mint) },
         td(el("b", {}, String(b.score)), `num ${b.score >= h.min_score && !b.blocked ? "up" : ""}`), td(coinCell(b.symbol, b.image, b.mint)),

@@ -41,11 +41,16 @@ ACTIVITY = {"rush", "volume", "whales", "loading"}
 WATCH_HOURS = 48
 LABELS = {"rush": "🚀 buy rush", "pressure": "🟢 buy pressure", "volume": "💰 volume surge", "momentum": "📈 momentum",
           "whales": "🐋 your whales", "boost": "📣 paid boost", "profile": "🧾 profile/socials", "trending": "🔥 trending",
-          "early": "🌱 early", "loading": "🧲 loading", "reload": "♻️ second leg"}
+          "early": "🌱 survived launch", "loading": "🧲 loading", "reload": "♻️ second leg",
+          "survivor": "🛡 survivor", "spread": "👥 spread supply", "bundle": "⚠️ bundled supply", "fresh": "🍼 brand-new"}
+
+
+BURST = {"rush", "volume", "loading", "pressure"}   # the same burst of buying seen four ways: one shared budget
+BURST_CAP = 35
 
 
 def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = None,
-          now: float | None = None, peak_mc: float = 0.0) -> dict:
+          now: float | None = None, peak_mc: float = 0.0, holders: dict | None = None) -> dict:
     """{"score", "signals": [(key, text, points)], "blocked": reason or ""} for one coin. Pure: no network."""
     now = now or time.time()
     lists = lists or {}
@@ -94,8 +99,18 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
         sig.append(("profile", "🧾 X / Telegram / site listed", 8))
     if mint in lists.get("trending", ()):
         sig.append(("trending", "🔥 trending on GeckoTerminal", 8))
-    if age_h <= 24 and mcap <= 1_500_000:
-        sig.append(("early", f"🌱 early: pair {_age(age_h)} old at {mc(mcap)} MC", 10))
+    if age_h < 1:
+        # an 8-minute-old pair's buy rush is mostly the dev's bundle and bots ($CORES: score 93, -93% minutes later)
+        sig.append(("fresh", f"🍼 brand-new launch ({_age(age_h)} old) — dev, bundles and bots still control it", -10))
+    elif age_h <= 72 and mcap <= 1_500_000:
+        sig.append(("early", f"🌱 survived its launch: {_age(age_h)} old at {mc(mcap)} MC", 10))
+    elif age_h <= 30 * 24:
+        sig.append(("survivor", f"🛡 {age_h / 24:.0f} days old and drawing new buyers — past the dev/sniper phase", 10))
+    top10 = num((holders or {}).get("top10_pct"), -1)
+    if top10 > 35:
+        sig.append(("bundle", f"⚠️ top 10 wallets hold {top10:.0f}% of supply (pools excluded) — bundle / insider supply", -25))
+    elif 0 <= top10 <= 20:
+        sig.append(("spread", f"👥 supply spread out: top 10 wallets hold {top10:.0f}%", 10))
     if b5 >= 10 and b5 >= 1.5 * pace and v5 >= 2 * vpace and v5 >= 2_000 and -5 <= m5 <= 8:
         sig.append(("loading", f"🧲 buyers loading before the price moves: {int(b5)} buys, {usd(v5)} in 5 min "
                                f"({v5 / vpace:.1f}x the hour's volume pace), price only {pct(m5)}", 20))
@@ -104,7 +119,8 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
         sig.append(("reload", f"♻️ second leg: peaked at {mc(peak_mc)} in the last 2 days, now {mc(mcap)} — "
                               "buyers coming back", 15))
     out["signals"] = sig
-    out["score"] = min(100, sum(p for _, _, p in sig))
+    burst = min(BURST_CAP, sum(p for k, _, p in sig if k in BURST))
+    out["score"] = max(0, min(100, burst + sum(p for k, _, p in sig if k not in BURST)))
     return out
 
 
@@ -166,8 +182,13 @@ class HypeScanner:
         self.lists = {k: set(v) for k, v in lists.items()}
         scored = []
         for mint, info in infos.items():
-            r = score({**info, "mint": mint}, self.cfg, whales=self.whales_in(mint, now), lists=self.lists, now=now,
-                      peak_mc=self.peak_of(mint))
+            whales_in, peak = self.whales_in(mint, now), self.peak_of(mint)
+            r = score({**info, "mint": mint}, self.cfg, whales=whales_in, lists=self.lists, now=now, peak_mc=peak)
+            if not r["blocked"] and r["score"] >= self.cfg.get("HYPE_MIN_SCORE") - 20:
+                holders = await self._holders(mint, info)   # who actually holds it: spread out, or bundled?
+                if holders:
+                    r = score({**info, "mint": mint}, self.cfg, whales=whales_in, lists=self.lists, now=now,
+                              peak_mc=peak, holders=holders)
             self._remember(mint, info, r, now)
             if r["signals"]:
                 scored.append((mint, info, r))
@@ -202,6 +223,13 @@ class HypeScanner:
     def _sent_last_hour(self, now: int) -> int:
         return int(self.db.scalar("select count(*) from alerts where kind='HYPE' and ts>=?", (now - 3600,), default=0))
 
+    async def _holders(self, mint: str, info: dict) -> dict | None:
+        try:
+            community = await self.engine.community.check(mint, info)
+        except Exception:
+            return None
+        return community if num(community.get("top10_pct"), -1) >= 0 else None
+
     async def _unsafe(self, mint: str, info: dict) -> bool:
         safety = await self.market.safety(mint)
         if not safety.get("ok", True) or safety.get("freeze_authority"):
@@ -209,8 +237,19 @@ class HypeScanner:
         community = await self.engine.community.check(mint, info)
         return community.get("label") == "WHALE-ONLY"
 
-    def record(self) -> dict:
-        return self.whales.stats(HYPE, fresh=True)
+    def record(self, days: int = 30) -> dict:
+        """How hype alerts did TRADED WITH THE EXIT PLAN (the paper autopilot's closed trades), plus how many reached 2x.
+        (It used to hold every coin for a day, which said '-98%' while 21% of the alerts had reached 2x.)"""
+        since = int(time.time()) - days * 86400
+        closed = self.db.rows("""select size_usd, proceeds_usd from paper_trades where whale=? and status='closed'
+            and open_ts>=? and size_usd>0""", (HYPE, since))
+        rets = [(num(t["proceeds_usd"]) / num(t["size_usd"]) - 1) * 100 for t in closed]
+        alerts = self.db.rows("""select price_usd, peak_price from alerts where kind='HYPE' and price_usd>0 and ts>=?""",
+                              (since,))
+        peaks = [num(a["peak_price"]) / num(a["price_usd"]) for a in alerts]
+        return {"n": len(rets), "win_rate": sum(r > 0 for r in rets) / len(rets) if rets else 0.0,
+                "avg": sum(rets) / len(rets) if rets else 0.0, "alerts": len(alerts),
+                "hit_2x": sum(p >= 2 for p in peaks) / len(peaks) if peaks else 0.0}
 
     async def alert(self, mint: str, info: dict, r: dict, now: int) -> None:
         keys = ",".join(k for k, _, _ in r["signals"])
@@ -231,8 +270,8 @@ class HypeScanner:
         lines += [esc(t) for _, t, _ in r["signals"]]
         rec = self.record()
         if rec["n"] >= 3:
-            lines.append(f"Hype alerts so far: {rec['n']} · {rec['win_rate'] * 100:.0f}% won · avg {pct(rec['avg'])} · "
-                         f"{rec['hit_2x'] * 100:.0f}% reached 2x")
+            lines.append(f"Hype alerts with the exit plan: {rec['n']} closed · {rec['win_rate'] * 100:.0f}% won · "
+                         f"avg {pct(rec['avg'])} · {rec['hit_2x'] * 100:.0f}% of {rec['alerts']} alerts reached 2x")
         else:
             lines.append("Hype alerts are new — their record is being measured (/hype). Start small.")
         age_d = (now - created) / 86400 if created else 0

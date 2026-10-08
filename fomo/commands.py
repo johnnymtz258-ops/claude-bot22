@@ -429,8 +429,9 @@ class Commands:
         lines = ["<b>🔥 Hype scanner</b> — coins at the start of a push "
                  f"({'alerts ON' if self.app.cfg.flag('HYPE_ALERTS') else 'alerts OFF: /set HYPE_ALERTS on'}, "
                  f"alert at score {self.app.cfg.get('HYPE_MIN_SCORE'):.0f}+)",
-                 (f"Record: {rec['n']} alerts · {rec['win_rate'] * 100:.0f}% won · avg {pct(rec['avg'])} · "
-                  f"{rec['hit_2x'] * 100:.0f}% reached 2x") if rec["n"] else "Record: still being measured"]
+                 (f"Record with the exit plan: {rec['n']} closed · {rec['win_rate'] * 100:.0f}% won · avg {pct(rec['avg'])} · "
+                  f"{rec['hit_2x'] * 100:.0f}% of {rec['alerts']} alerts reached 2x") if rec["alerts"]
+                 else "Record: still being measured"]
         board = [b for b in hype.board if not b["blocked"]][:8]
         if board:
             lines.append("\n<b>Hottest right now</b>")
