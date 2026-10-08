@@ -231,3 +231,25 @@ def test_rate_limits_never_show_as_a_health_issue():
         await srv.close()
 
     asyncio.run(run())
+
+
+def test_scanner_pauses_while_helius_is_out(bot, monkeypatch):
+    calls = []
+
+    async def fake_scout(now=None):
+        calls.append(1)
+        return {}
+
+    monkeypatch.setattr(bot.scout, "scout", fake_scout)
+    bot.scout.discovery.rpc.primary_down = lambda: True
+    sleeps = []
+
+    async def no_sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) > 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    with pytest.raises(asyncio.CancelledError):
+        bot.run(bot.scout.run())
+    assert calls == [] and "scanner paused" in bot.scout.paused

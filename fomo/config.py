@@ -201,7 +201,8 @@ def load(env_file: Path | None = None) -> Config:
         helius_key=helius,
         rpc_http=rpc_http,
         rpc_wss=rpc_wss,
-        rpc_wss_fallback=PUBLIC_WSS if rpc_wss != PUBLIC_WSS else "",
+        rpc_wss_fallback=(_env("SOLANA_RPC_WSS") if helius and _env("SOLANA_RPC_WSS") else
+                          PUBLIC_WSS if rpc_wss != PUBLIC_WSS else ""),
         my_wallets=my_wallets,
         state_dir=state_dir,
         db_path=db_path,

@@ -203,6 +203,9 @@ class Tracker:
         for j in blocked[:4]:
             extra = f" ({j['chase_pct']:+.0f}% already)" if j["status"] == "chased" else ""
             lines.append(f"• skipped ${esc(j['symbol'] or '?')} from {esc(j['name'] or '?')}: {why[j['status']]}{extra}")
+        if getattr(self.rpc, "primary_down", lambda: False)():
+            lines.append("⚠️ Helius isn't answering (credits used up?) — running on the public Solana RPC: slower, "
+                         "whale scanner paused until Helius is back.")
         last_scan = int(num(self.db.get_meta("scout_last_run", "0")))
         if last_scan:
             nxt = last_scan + int(self.cfg.get("AUTO_SCOUT_HOURS") * 3600) - now

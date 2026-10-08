@@ -620,7 +620,7 @@
   async function renderScout() {
     const s = await api("/api/scout");
     const sum = s.last_summary || {};
-    $("scout-summary").textContent = `${s.enabled ? "On" : "Off (Settings: WHALE_PICKS)"} · ${s.auto_follow ? "auto-follows picks" : "suggests, you follow"} · last run ${s.last_run ? ago(s.last_run) : "not yet"}`
+    $("scout-summary").textContent = `${s.enabled ? "On" : "Off (Settings: WHALE_PICKS)"} · ${s.auto_follow ? "auto-follows picks" : "suggests, you follow"} · last run ${s.last_run ? ago(s.last_run) : "not yet"}${s.paused ? " · ⏸ " + s.paused : ""}`
       + (sum.coins ? ` — researched ${plural(sum.coins.length, "coin")}, checked ${plural(sum.checked || 0, "wallet")}, picked ${(sum.picked || 0) + (sum.followed || 0)}` : "")
       + ". Early buyers of today's runners, replayed as a copier who buys a minute late: holders whose copies made money are followed, flippers are skipped.";
     $("scout-run").disabled = s.running;

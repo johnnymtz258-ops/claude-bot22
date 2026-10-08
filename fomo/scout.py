@@ -106,13 +106,18 @@ class WhaleScout:
             self.last_run = 0
         self.last_error = ""
         self.running = False
+        self.paused = ""
 
     async def run(self) -> None:
         await asyncio.sleep(60)   # let the bot settle (wallet backfill etc.) first
         while True:
             try:
                 active = self.cfg.flag("WHALE_PICKS") or self.cfg.flag("AUTO_WHALES")
-                if active and time.time() - self.last_run >= self.cfg.get("AUTO_SCOUT_HOURS") * 3600:
+                if self.rpc_out():
+                    self.paused = "Helius isn't answering (credits used up?) — scanner paused so the public RPC " \
+                                  "serves your live whale trades"
+                elif active and time.time() - self.last_run >= self.cfg.get("AUTO_SCOUT_HOURS") * 3600:
+                    self.paused = ""
                     await self.scout()
                 if self.cfg.flag("AUTO_WHALES"):
                     await self.promote_picks()
@@ -123,6 +128,12 @@ class WhaleScout:
             finally:
                 self.running = False
             await asyncio.sleep(600)
+
+    def rpc_out(self) -> bool:
+        """The main RPC (Helius) is down and calls are going to the slow public fallback."""
+        rpc = getattr(self.discovery, "rpc", None)
+        check = getattr(rpc, "primary_down", None)
+        return bool(check and check())
 
     def auto_count(self) -> int:
         return int(self.db.scalar("select count(*) from whales where active=1 and source in ('auto','linked')",
@@ -360,7 +371,7 @@ class WhaleScout:
         except ValueError:
             summary = {}
         return {"enabled": self.cfg.flag("WHALE_PICKS") or self.cfg.flag("AUTO_WHALES"),
-                "auto_follow": self.cfg.flag("AUTO_WHALES"), "running": self.running, "last_run": self.last_run,
+                "auto_follow": self.cfg.flag("AUTO_WHALES"), "running": self.running, "last_run": self.last_run, "paused": self.paused,
                 "auto_whales": self.auto_count(), "limit": int(self.cfg.get("AUTO_WHALE_LIMIT")),
                 "last_summary": summary, "error": self.last_error,
                 "candidates": self.db.rows("select * from whale_candidates order by analyzed_ts desc limit 40")}
