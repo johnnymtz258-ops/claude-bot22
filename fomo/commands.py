@@ -23,6 +23,12 @@ buyers vs sellers, volume surge, your whales, paid boosts, socials, trending, ea
 lines up gets a 🔥 HYPE alert; a whale buy into a hyped coin is marked 🔥🐋 WHALE + HYPE.
 /hype — hottest coins right now and which signals have worked
 
+<b>🎯 Insider framework</b>
+New wallets the scanner finds are 👀 watched for 7 days before their buys are sent (they graduate early once their
+copies win). 2+ of your wallets building the same coin that's 7+ days old = 🎯 SMART MONEY STACKING. When a whale
+funds a fresh wallet with 5+ SOL, the bot follows that wallet too (🧬 funding path). The scanner looks for wallets
+that bought in the 15 minutes before a pump — not the launch snipers — and early on more than one winner.
+
 <b>Whales</b>
 /whales — who you follow, style and copy score · /whale name — one whale
 /add WALLET name — follow (profiled right away) · /remove name · /mute · /unmute

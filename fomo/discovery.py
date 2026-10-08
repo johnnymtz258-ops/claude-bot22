@@ -25,7 +25,9 @@ from .util import num
 
 EARLY_FRACTION = 1 / 3   # "early" = bought at a price no higher than a third of the later peak
 MIN_BUY_USD = 100
-SNIPER_SLOTS = 2          # buys within this many slots of the first trade = launch snipers
+SNIPER_SLOTS = 2
+PRE_PUMP_WINDOW = 15 * 60    # buyers in the 15 minutes before the pump candle: positioned before the move was obvious
+LAUNCH_PHASE = 10 * 60       # buyers in the first 10 minutes after launch: devs, insiders and bots — you can't beat them          # buys within this many slots of the first trade = launch snipers
 
 
 def _budget(helius: bool) -> dict:
@@ -127,9 +129,16 @@ class Discovery:
         if not early_until:  # never 3x'd from the first sample: use the first third of the run-up
             early_until = samples[0]["ts"] + (peak["ts"] - samples[0]["ts"]) // 3
         window = [r for r in history if int(r.get("blockTime") or 0) <= early_until]
+        # the buyers that matter are the ones in the minutes BEFORE the pump candle, not the launch snipers:
+        # read that stretch densely, and the rest of the early history more thinly
+        pre = [r for r in window if int(r.get("blockTime") or 0) >= early_until - PRE_PUMP_WINDOW]
+        rest = [r for r in window if int(r.get("blockTime") or 0) < early_until - PRE_PUMP_WINDOW]
+        n_pre = min(len(pre), self.budget["dense"] // 2)
         if progress:
             await progress(f"reading {min(len(window), self.budget['dense'])} early trades…")
-        trades = await self._parse_many(_spread(window, self.budget["dense"]), trade, progress, "early trades")
+        trades = await self._parse_many(_spread(pre, n_pre) + _spread(rest, self.budget["dense"] - n_pre), trade,
+                                        progress, "early trades")
+        launch_ts = int(history[0].get("blockTime") or 0) if from_launch else 0
 
         launch_slot = int(history[0].get("slot") or 0) if from_launch else 0
         creator = trades[0]["wallet"] if from_launch and trades and trades[0]["ts"] <= int(history[0].get("blockTime") or 0) else ""
@@ -143,8 +152,11 @@ class Discovery:
                 b["buys"] += 1
             else:
                 b["sells"] += 1
+        for b in buyers.values():
+            b["pre_pump"] = early_until - PRE_PUMP_WINDOW <= b["first_ts"] <= early_until
+            b["launch_phase"] = bool(launch_ts) and b["first_ts"] - launch_ts < LAUNCH_PHASE
         ranked = sorted((b for b in buyers.values() if b["buy_usd"] >= MIN_BUY_USD and b["tokens"] > 0),
-                        key=lambda b: -b["buy_usd"])[:self.budget["holders"]]
+                        key=lambda b: (not b["pre_pump"], -b["buy_usd"]))[:self.budget["holders"]]
         balances = await asyncio.gather(*(self.rpc.token_balance(b["wallet"], mint) for b in ranked))
         tracked = {r["address"] for r in self.db.rows("select address from whales where active=1")}
         candidates = []
@@ -163,7 +175,9 @@ class Discovery:
                 "to_now": now_price / entry if entry > 0 and now_price > 0 else 0.0,
                 "holding_now": bal, "held_pct": (bal / b["tokens"] * 100) if bal is not None else None,
                 "first_ts": b["first_ts"], "buys": b["buys"], "flags": flags, "tracked": b["wallet"] in tracked,
-                "score": math.log2(max(to_peak, 1.0)) * math.log10(1 + b["buy_usd"]) * (0.3 if flags else 1.0),
+                "pre_pump": b["pre_pump"], "launch_phase": b["launch_phase"],
+                "score": math.log2(max(to_peak, 1.0)) * math.log10(1 + b["buy_usd"]) * (0.3 if flags else 1.0)
+                         * (2.0 if b["pre_pump"] else 0.6 if b["launch_phase"] else 1.0),
             })
         candidates.sort(key=lambda c: -c["score"])
         return {"mint": mint, "ok": True, "symbol": info.get("symbol") or mint[:4], "trades": len(history),

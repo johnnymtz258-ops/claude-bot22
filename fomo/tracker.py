@@ -11,7 +11,7 @@ import time
 
 from . import copies, exits, messages
 from .db import OUTCOME_POINTS
-from .util import dur, esc, mc, mult, num, usd
+from .util import is_address, dur, esc, mc, mult, num, usd
 
 PRICE_EVERY = 15
 WHALE_BALANCE_CHECK_EVERY = 600
@@ -252,8 +252,9 @@ class Tracker:
 
     async def _check_whale_balances(self, now: int) -> None:
         """Catch whale exits the stream missed (e.g. tokens moved to another wallet)."""
-        for c in self.db.rows("select * from copies where status='open' and whale<>'runner' and open_ts<=?",
-                              (now - 600,)):
+        for c in self.db.rows("select * from copies where status='open' and open_ts<=?", (now - 600,)):
+            if not is_address(c["whale"]):
+                continue   # pseudo-wallets ('runner', 'hype') hold nothing on chain
             balance = await self.rpc.token_balance(c["whale"], c["mint"])
             if balance is not None and balance <= 0 and num(c.get("last_price")) > 0:
                 copies.sell(self.db, c, 1.0, num(c["last_price"]), self.cfg.get("COPY_FEE_PCT"),

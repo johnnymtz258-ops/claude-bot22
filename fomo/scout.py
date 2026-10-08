@@ -125,7 +125,8 @@ class WhaleScout:
             await asyncio.sleep(600)
 
     def auto_count(self) -> int:
-        return int(self.db.scalar("select count(*) from whales where active=1 and source='auto'", default=0))
+        return int(self.db.scalar("select count(*) from whales where active=1 and source in ('auto','linked')",
+                                  default=0))
 
     def pick_coins(self, limit: int = 16) -> list[str]:
         """Coins whose early buyers are worth checking: today's runners, coins your alerts caught that went 3x+,
@@ -174,11 +175,13 @@ class WhaleScout:
             for cand in coin["candidates"]:
                 if cand["tracked"] or cand["flags"]:
                     continue
-                entry = pool.setdefault(cand["wallet"], {"cand": cand, "coin": coin, "wins": set(), "usd": 0.0})
+                entry = pool.setdefault(cand["wallet"], {"cand": cand, "coin": coin, "wins": set(), "usd": 0.0, "pre": 0})
                 entry["wins"].add(coin.get("symbol") or mint[:4])
                 entry["usd"] += num(cand.get("buy_usd"))
+                entry["pre"] += 1 if cand.get("pre_pump") else 0
         # 2) wallets early in several winners are the real finds: check those first
-        ranked = sorted(pool.values(), key=lambda e: (-len(e["wins"]), -e["usd"]))
+        # early on several winners first, then wallets that bought right before a pump (not at launch)
+        ranked = sorted(pool.values(), key=lambda e: (-len(e["wins"]), -e["pre"], -e["usd"]))
         for e in ranked:
             cand, coin = e["cand"], e["coin"]
             if room <= 0 or checked >= MAX_CHECKS_PER_RUN or over_budget():
@@ -197,6 +200,8 @@ class WhaleScout:
                 ok, reason = True, f"early in {len(e['wins'])} winners ({', '.join(sorted(e['wins'])[:3])})"
             elif multi:
                 reason = f"early in {len(e['wins'])} winners · {reason}"
+            if e["pre"]:
+                reason = f"bought in the 15 min before a pump · {reason}"
             level, why = ("no", reason)
             prof = None
             if ok:
@@ -284,7 +289,7 @@ class WhaleScout:
             return []
         self.db.set_meta("scout_last_prune", now)
         dropped = []
-        for w in self.db.rows("select * from whales where active=1 and source='auto'"):
+        for w in self.db.rows("select * from whales where active=1 and source in ('auto','linked')"):
             stats = self.whales.stats(w["address"], fresh=True)
             age_days = (now - int(w["added_ts"] or now)) / 86400
             last = int(w["last_trade_ts"] or 0) or int(w["added_ts"] or now)
@@ -294,8 +299,12 @@ class WhaleScout:
             buys = sorted(num(r["usd_value"]) for r in self.db.rows(
                 "select usd_value from swaps where wallet=? and side='BUY' and ts>=?", (w["address"], now - 3 * 86400)))
             typical = buys[len(buys) // 2] if len(buys) >= 3 else None
+            sells = int(self.db.scalar("select count(*) from swaps where wallet=? and side='SELL' and ts>=?",
+                                       (w["address"], now - 7 * 86400), default=0))
             if trial is not None and trial[0] >= TRIAL_MIN_COPIES and trial[1] < TRIAL_DROP_AVG:
                 reason = f"its first {trial[0]} copies averaged {trial[1]:+.0f}%"
+            elif len(buys) >= 10 and sells == 0:
+                reason = f"no exits seen: {len(buys)} buys and 0 sells — you follow wallets to learn their exits"
             elif typical is not None and typical < MIN_TYPICAL_BUY_USD and self.cfg.flag("QUALITY_GATE") \
                     and not (trial and trial[0] >= 5 and trial[1] > 0):   # small buys, but its copies win: keep
                 reason = f"buys too small for alerts (typical ${typical:,.0f})"
@@ -323,23 +332,12 @@ class WhaleScout:
         return dropped
 
     def _trial_result(self, address: str, since: int) -> tuple[int, float] | None:
-        """(copies, average %) of a whale's copies since it was followed, open ones at today's price."""
-        rows = self.db.rows("select * from copies where whale=? and open_ts>=?", (address, since))
-        if not rows:
-            return None
-        fee = self.cfg.get("COPY_FEE_PCT")
-        rets = []
-        for c in rows:
-            if c["status"] == "closed":
-                rets.append(num(c["return_pct"]))
-            elif num(c["entry_price"]) > 0 and num(c["last_price"]) > 0:
-                rets.append((num(c["last_price"]) / num(c["entry_price"]) - 1) * 100 - 2 * fee)
-        return (len(rets), sum(min(r, 300) for r in rets) / len(rets)) if rets else None
+        return self.whales.trial(address, since)
 
     async def flag_followed(self) -> list[str]:
         """Tell you once about each whale you follow that turned out to be a flipper or a losing copy."""
         flagged = []
-        for w in self.db.rows("select * from whales where active=1 and source<>'auto'"):
+        for w in self.db.rows("select * from whales where active=1 and source not in ('auto','linked')"):
             prof = self.profiler.get(w["address"])
             ok, why = profiles.verdict(prof, self.cfg.get("MIN_COPY_SCORE"))
             key = f"flagged:{w['address']}"

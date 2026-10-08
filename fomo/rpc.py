@@ -8,6 +8,8 @@ import time
 
 import aiohttp
 
+from .util import is_address
+
 # JSON-RPC errors that mean "this node can't answer right now" -> try the next node / later.
 RETRYABLE_RPC_CODES = {-32004, -32005, -32007, -32009, -32014, -32016, 429}
 
@@ -189,6 +191,8 @@ class SolanaRPC:
 
     async def token_balance(self, owner: str, mint: str) -> float | None:
         """Total balance of `mint` held by `owner` (None if the RPC failed)."""
+        if not (is_address(owner) and is_address(mint)):
+            return None   # never send the RPC something that isn't an address
         result = await self.call("getTokenAccountsByOwner", [owner, {"mint": mint},
                                                             {"encoding": "jsonParsed", "commitment": "confirmed"}])
         if not isinstance(result, dict):
@@ -204,6 +208,8 @@ class SolanaRPC:
 
     async def token_balance_raw(self, owner: str, mint: str) -> int | None:
         """Balance of `mint` held by `owner` in the token's smallest unit (what swaps are priced in)."""
+        if not (is_address(owner) and is_address(mint)):
+            return None   # never send the RPC something that isn't an address
         result = await self.call("getTokenAccountsByOwner", [owner, {"mint": mint},
                                                             {"encoding": "jsonParsed", "commitment": "confirmed"}])
         if not isinstance(result, dict):

@@ -105,6 +105,8 @@ class Dashboard:
             w["profile"] = prof.get(w["address"])
             ok, why = profiles.verdict(w["profile"], self.app.cfg.get("MIN_COPY_SCORE"))
             w["blocked"], w["blocked_why"] = not ok, why
+            w["watching"] = self.app.engine.watching(w)
+            w["note"] = w.get("note") or ""
         return _json(board)
 
     async def paper(self, request):

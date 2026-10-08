@@ -257,3 +257,20 @@ def trader_swap(tx: dict, mint: str, sol_usd: float = 0.0) -> tuple[str, dict] |
             if swap and swap["mint"] == mint:
                 return signer, swap
     return None
+
+
+def sol_transfers_out(tx: dict, wallet: str) -> list[tuple[str, int]]:
+    """[(destination, lamports)] for plain SOL transfers sent by `wallet` in this transaction (system program
+    transfers, top-level or inner). Used to follow a whale's funding path: whale -> fresh wallet -> next buy."""
+    out = []
+    if not tx or ((tx.get("meta") or {}).get("err") is not None):
+        return out
+    for ix in _all_instructions(tx):
+        parsed = ix.get("parsed") if isinstance(ix, dict) else None
+        if not isinstance(parsed, dict) or ix.get("program") != "system" or parsed.get("type") not in ("transfer",
+                                                                                                    "transferWithSeed"):
+            continue
+        info = parsed.get("info") or {}
+        if str(info.get("source") or "") == wallet and info.get("destination"):
+            out.append((str(info["destination"]), _int(info.get("lamports"))))
+    return out

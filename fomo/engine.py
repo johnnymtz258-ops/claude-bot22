@@ -16,12 +16,14 @@ from .coins import CoinTracker
 from .community import CommunityChecker
 from .market import IGNORED_MINTS
 from .paper import PaperTrader
-from .swaps import parse_swap
-from .util import esc, mc, num, pct, usd
+from .swaps import sol_transfers_out, parse_swap
+from .util import esc, is_address, mc, num, pct, usd
 from .whales import AFTERMATH_MIN, aftermath, dumps
 
 ALERT_MAX_AGE = 600          # a trade first seen later than this is recorded but not alerted
 RETRY_DELAYS = (5, 15, 30, 60)
+FRESH_MAX_TXS = 8          # a destination with more history than this isn't a fresh split wallet
+LINKED_PER_DAY = 5
 ACCUMULATE_WINDOW = 2 * 3600   # buys of one coin by one whale within this window count as one position
 SELL_ALERT_COOLDOWN = 600    # at most one partial-sell message per whale+coin per 10 minutes
 ALERTED_RECENTLY = 48 * 3600
@@ -131,6 +133,7 @@ class Engine:
         self._inflight: set[tuple[str, str]] = set()
         self._retries: dict[tuple[str, str], int] = {}
         self.hype = None   # HypeScanner, set by the app: whale alerts carry the coin's hype score
+        self.refresh_wallets = None   # set by the app: resubscribe the stream after a wallet is added
         self._buying: set[tuple[str, str]] = set()  # whale+coin buys being handled right now
         self._confirming: set[tuple[str, str]] = set()  # whale+coin buys waiting for the confirm price
         self._tasks: set = set()
@@ -180,6 +183,58 @@ class Engine:
         swap = parse_swap(tx, wallet, sol_usd)
         if swap and swap["mint"] not in IGNORED_MINTS:
             await self.handle_swap(wallet, signature, swap, source, sol_usd)
+        elif not swap and source == "stream" and wallet not in self.whales.my_wallets:
+            await self._follow_funding(wallet, tx)
+
+    async def _follow_funding(self, wallet: str, tx: dict) -> list[str]:
+        """Funding → buyer → split → rotate: when a whale sends real size to a FRESH wallet, that wallet is often where
+        its next position gets built. Follow it (watch-only at first, like every new wallet)."""
+        if not self.cfg.flag("FOLLOW_FUNDING") or not self.whales.get(wallet):
+            return []
+        followed = []
+        now = int(time.time())
+        for dest, lamports in sol_transfers_out(tx, wallet):
+            sol = lamports / 1e9
+            if sol < self.cfg.get("FUNDING_MIN_SOL") or not is_address(dest) or self.whales.get(dest) \
+                    or dest in self.whales.my_wallets:
+                continue
+            if self.db.scalar("select count(*) from whales where source='linked' and added_ts>=?", (now - 86400,),
+                              default=0) >= LINKED_PER_DAY:
+                break
+            sigs = await self.rpc.signatures(dest, limit=FRESH_MAX_TXS + 1)
+            if len(sigs) > FRESH_MAX_TXS:
+                continue   # an established wallet or an exchange deposit address, not a fresh split
+            name = f"{self.whales.name(wallet)[:9]}→{dest[:4]}"
+            added, _ = self.whales.add(dest, name, source="linked")
+            if not added:
+                continue
+            self.db.run("update whales set note=? where address=?",
+                        (f"funded by {wallet} with {sol:.1f} SOL", dest))
+            followed.append(dest)
+            if self.refresh_wallets:
+                self.refresh_wallets()
+            await self.notify(f"🧬 <b>Funding path: {esc(self.whales.name(wallet))} sent {sol:,.1f} SOL to a fresh wallet</b>\n"
+                              f"{len(sigs)} transaction{'s' if len(sigs) != 1 else ''} in its history — likely a split before "
+                              f"its next buy. Now watching it as <b>{esc(name)}</b> (watch-only for "
+                              f"{self.cfg.get('NEW_WHALE_WATCH_DAYS'):.0f} days; its buys count for stacking and hype).\n"
+                              f"<code>{dest}</code>", silent=True, kind="AUTO",
+                              buttons=[[("Unfollow", None, f"untrack:{dest}"), ("GMGN", messages.whale_link(dest), None)]])
+        return followed
+
+    def watching(self, whale: dict, now: float | None = None) -> bool:
+        """A new auto-found or linked wallet in its watch period: 'buy nothing for a week, just watch — especially
+        the sells'. It graduates early once its copies are winning (4+, average above 0%) or its playbook works."""
+        days = self.cfg.get("NEW_WHALE_WATCH_DAYS")
+        added = int(whale.get("added_ts") or 0)
+        if days <= 0 or whale.get("source") not in ("auto", "linked", "picks") or not added:
+            return False
+        now = now or time.time()
+        if now - added >= days * 86400:
+            return False
+        trial = self.whales.trial(whale["address"], added)
+        if trial and trial[0] >= 4 and trial[1] > 0:
+            return False
+        return not ((self.profiles.get(whale["address"]) or {}).get("playbook") or {}).get("ok")
 
     def _retry_later(self, wallet: str, signature: str, source: str) -> None:
         """A whale trade whose details didn't load (rate limit, not indexed yet): try again in 5s, 15s, 30s, 60s
@@ -338,6 +393,9 @@ class Engine:
         after = self.whales.aftermath(wallet)
         micro = self._micro_stats(c["trade_mc"], info)
         setup = self.runner_setup(c, info)
+        created = num(info.get("pair_created_ts"))
+        age_days = (time.time() - created) / 86400 if created else 0.0
+        stacking = len(self._confluence(mint, c["ts"])) >= 2 and age_days >= self.cfg.get("STACK_MIN_AGE_DAYS")
         scalp = dumps(after) or micro is not None or setup
         grade, reasons = grade_buy(
             status=stats["status"], stats=stats, confluence=len(confluence), chase=chase, safety=safety, rug=rug,
@@ -360,6 +418,11 @@ class Engine:
         if c.get("accum") and grade != "SKIP":
             reasons.insert(0, (True, f"🐋 Accumulating: {c['accum'][0]} buys, ${c['accum'][1]:,.0f} in total over the "
                                      f"last {ACCUMULATE_WINDOW // 3600}h — building a position, not testing"))
+        if stacking and grade != "SKIP":
+            names = ", ".join(w["name"] for w in self._confluence(mint, c["ts"])[:4])
+            reasons.insert(0, (True, f"🎯 Smart money stacking: {len(self._confluence(mint, c['ts']))} of your wallets "
+                                     f"bought this {age_days:.0f}-day-old coin within "
+                                     f"{self.cfg.get('CONFLUENCE_HOURS'):g}h ({names}) — it survived its first wave"))
         if setup and grade != "SKIP":
             reasons.insert(0, (True, "🚀 RUNNER SETUP: whale put $1K+ into a just-graduated coin at $40K-250K MC — "
                                      "in your history 27% of these hit 10x (vs 6% of other buys), peaking ~50 min in. "
@@ -396,6 +459,9 @@ class Engine:
         if not self.whales.is_alerting(whale):
             status("muted")
             return
+        if self.watching(whale) and not setup and not stacking:
+            status("watching")
+            return  # a new wallet in its watch period: scored and counted for stacking / hype, not sent yet
         if self.cfg.flag("QUALITY_GATE") and not setup and grade == "C":
             status("low_quality")
             return  # grade C lost even with the exit plan in your data (0.93x avg over 22 buys)
@@ -409,7 +475,7 @@ class Engine:
                                "Use a smaller size and take half at 2x"))
         prof = self.profiles.get(wallet)
         send_ok, _ = profiles.verdict(prof, self.cfg.get("MIN_COPY_SCORE"))
-        if not send_ok and self.cfg.flag("BLOCK_FLIPPERS") and not setup:
+        if not send_ok and self.cfg.flag("BLOCK_FLIPPERS") and not setup and not stacking:
             status("flipper" if (prof or {}).get("style") in ("FLIPPER", "BOT") else "weak_whale")
             return  # pumps and dumps within minutes, or copying it at your speed loses: tracked, not sent
         if not self.cfg.flag("ALERTS_ENABLED"):
@@ -436,7 +502,10 @@ class Engine:
                     ("🐋 Whales in coin", None, f"coin:{mint}")],
                    [("🎯 Ping me at 2x", None, f"x2:{mint}")]]
         if setup:
-            text = "🚀 <b>RUNNER SETUP</b>\n" + text
+            text = ("🚀 <b>RUNNER SETUP</b>\n" + text + "\n💼 Size: shot — keep it small; the coin is under 2 hours old")
+        elif stacking:
+            text = (f"🎯 <b>SMART MONEY STACKING · {len(self._confluence(mint, c['ts']))} wallets · coin {age_days:.0f}d old</b>\n"
+                    + text + "\n💼 Size: normal — older coin, several of your wallets building the same position")
         elif hyped and alertable(hyped, self.cfg):
             text = f"🔥🐋 <b>WHALE + HYPE · score {hyped['score']}</b>\n" + text
         silent = grade == "C" and self.cfg.flag("QUIET_LOW_GRADE") and not setup

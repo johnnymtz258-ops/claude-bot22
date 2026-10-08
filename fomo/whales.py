@@ -99,6 +99,18 @@ class Whales:
             (address,))]
         return statistics.median(values) if len(values) >= 3 else 0.0
 
+    def trial(self, address: str, since: int) -> tuple[int, float] | None:
+        """(copies, average %) of a whale's copies since `since` (when it was followed), open ones at today's price."""
+        rows = self.db.rows("select * from copies where whale=? and open_ts>=?", (address, since))
+        fee = self.cfg.get("COPY_FEE_PCT")
+        rets = []
+        for c in rows:
+            if c["status"] == "closed":
+                rets.append(num(c["return_pct"]))
+            elif num(c["entry_price"]) > 0 and num(c["last_price"]) > 0:
+                rets.append((num(c["last_price"]) / num(c["entry_price"]) - 1) * 100 - 2 * fee)
+        return (len(rets), sum(min(r, 300) for r in rets) / len(rets)) if rets else None
+
     # -- scoring ------------------------------------------------------------------------------
     def stats(self, address: str, days: int = 30, fresh: bool = False) -> dict:
         hit = self._stats_cache.get(address)

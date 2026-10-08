@@ -235,6 +235,10 @@ class HypeScanner:
                          f"{rec['hit_2x'] * 100:.0f}% reached 2x")
         else:
             lines.append("Hype alerts are new — their record is being measured (/hype). Start small.")
+        age_d = (now - created) / 86400 if created else 0
+        lines.append("💼 Size: shot — keep it small (a slice of your ~15% shots bucket); on a coin this young, devs, "
+                     "insiders and bots are ahead of you" if age_d < 14 else
+                     "💼 Size: normal — the coin survived its first weeks")
         lines.append(f"Plan: take half at 2x ({mc(mcap * 2)} MC), rest out if it falls 35% from its top, "
                      f"-{self.cfg.get('STOP_LOSS_PCT'):.0f}% stop.")
         lines.append(f"<code>{mint}</code>")

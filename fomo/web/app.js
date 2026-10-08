@@ -376,6 +376,8 @@
     if (!p) return "—";
     if (p.style === "NEW") return el("span", {}, el("b", {}, STYLE.NEW), el("br"), el("span", { class: "muted" }, `${p.trips} trades so far — profiling`));
     const copy = p.copy_n >= 3 ? `${p.copy_avg.toFixed(2)}x avg · ${Math.round(p.copy_win * 100)}% won (${p.copy_n})` : "not enough coins yet";
+    if (w.watching) return el("span", { title: w.note || "" }, el("b", {}, STYLE[p.style] || p.style), " · 👀 watching",
+      el("br"), el("span", { class: "muted" }, `new wallet — buys not sent yet; counts for stacking & hype${w.note ? " · " + w.note : ""}`));
     return el("span", { title: w.blocked_why || "" }, el("b", {}, STYLE[p.style] || p.style), w.blocked ? " · 🚫 blocked" : (p.playbook && p.playbook.ok ? el("span", { title: p.playbook.label }, ` · 📘 playbook: ${p.playbook.plan === "quick" ? "all out at 2x" : "half at 2x, ride the rest"} (${p.playbook.avg.toFixed(2)}x avg)`) : ""),
       el("br"), el("span", { class: "muted" }, `sells ~${dur(p.median_hold_s)} in · copy ${copy}`));
   }

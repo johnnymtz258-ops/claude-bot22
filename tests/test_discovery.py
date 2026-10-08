@@ -98,3 +98,28 @@ def test_verdicts():
     assert verdict({**base, "buys_per_day": 200})[0].startswith("🤖")
     assert verdict({**base, "pnl_sol": -1})[0].startswith("❌")
     assert verdict({**base, "trips": 2})[0].startswith("🆕")
+
+
+PRE = "PrePumpBuyer11111111111111111111111111111111"[:44]
+LAUNCHBIG = "LaunchBig111111111111111111111111111111111111"[:44]
+
+
+def test_buyers_right_before_the_pump_outrank_launch_buyers(bot):
+    """The article's method: ignore the launch rush; the wallets that matter bought in the minutes before the pump."""
+    t0 = int(time.time()) - 86400
+    events = [(0, DEV, 1.0, 30_000_000), (1, SNIPER, 2.0, 50_000_000), (5, LAUNCHBIG, 8.0, 160_000_000),
+              (7200, PRE, 3.0, 60_000_000),                                   # quiet for 2h, then positioned
+              (7500, LATE, 20.0, 30_000_000), (9000, LATE, 10.0, 10_000_000)]  # the pump and the peak
+    rows = []
+    for i, (dt, wallet, sol, tokens) in enumerate(events):
+        tx = pump_buy(wallet=wallet, mint=MINT, sol=sol, tokens=tokens, block_time=t0 + dt)
+        tx["slot"] = 1000 + dt
+        sig = f"pp{i:03d}" + "x" * 30
+        bot.rpc.txs[sig] = tx
+        rows.append({"signature": sig, "err": None, "blockTime": t0 + dt, "slot": 1000 + dt})
+    bot.rpc.sigs[MINT] = list(reversed(rows))
+    bot.market.set_pair(mint=MINT, price=0.0006, mc=600_000)
+    coin = bot.run(Discovery(bot.rpc, bot.market, bot.db, bot.cfg).research_coin(MINT))
+    top = coin["candidates"][0]
+    assert top["wallet"] == PRE and top["pre_pump"]
+    assert next(c for c in coin["candidates"] if c["wallet"] == LAUNCHBIG)["launch_phase"]

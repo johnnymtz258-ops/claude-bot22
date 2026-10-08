@@ -172,6 +172,7 @@ class App:
             self.runners = RunnerScanner(cfg, self.db, self.market, self.engine, self.whales, self.notify)
             self.hype = HypeScanner(cfg, self.db, self.market, self.engine, self.whales, self.notify)
             self.runners.hype = self.engine.hype = self.hype
+            self.engine.refresh_wallets = self.refresh_wallets
             self.engine.profiles.discovery = self.discovery
             self.scout = WhaleScout(cfg, self.db, self.rpc, self.market, self.whales, self.runners, self.notify,
                                     self.refresh_wallets, self.engine.profiles)
