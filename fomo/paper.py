@@ -67,6 +67,17 @@ class PaperTrader:
                 "best": max(pnl) if pnl else 0.0, "worst": min(pnl) if pnl else 0.0,
                 "since_ts": int(num(self.db.get_meta("paper_start_ts", "0")))}
 
+    def by_type(self, days: int = 7) -> list[dict]:
+        """Closed paper trades over the last `days`, split by alert type: which alerts actually make the money."""
+        out = []
+        for kind, label, cond in (("hype", "🔥 Hype alerts", "whale='hype'"), ("whales", "🐋 Whale alerts", "whale<>'hype'")):
+            rows = self.db.rows(f"""select size_usd, proceeds_usd from paper_trades where status='closed' and {cond}
+                and close_ts>=?""", (int(time.time()) - days * 86400,))
+            pnl = [num(r["proceeds_usd"]) - num(r["size_usd"]) for r in rows]
+            out.append({"kind": kind, "label": label, "n": len(pnl), "won": sum(p > 0 for p in pnl), "pnl": sum(pnl),
+                        "avg": sum(pnl) / len(pnl) if pnl else 0.0})
+        return out
+
     def _slip(self) -> float:
         return self.cfg.get("PAPER_SLIPPAGE_PCT") / 100
 
@@ -88,7 +99,7 @@ class PaperTrader:
                                   (alert_id, mint, whale, symbol, int(ts or time.time()), entry, mc_usd, size,
                                    size / entry, 1.0, 0.0, 1.0, price, "open"))
         if trade_id and self.live and self.live.ready()[0]:
-            self.live.spawn(self.live.buy(trade_id, mint, symbol))
+            self.live.spawn(self.live.buy(trade_id, mint, symbol, whale))
         return trade_id
 
     def _accept(self, t: dict, price: float, now: int) -> float | None:

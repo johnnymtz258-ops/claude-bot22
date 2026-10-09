@@ -24,12 +24,17 @@ from datetime import datetime
 
 import aiohttp
 
-from .swaps import WSOL
+from .swaps import TOKEN_2022_PROGRAM, TOKEN_PROGRAM, WSOL
 from .util import esc, num
 
 JUPITER = "https://lite-api.jup.ag/swap/v1"
 FEE_RESERVE_SOL = 0.02
 CONFIRM_TIMEOUT = 60
+RETRY_EVERY = 60          # a live coin the paper autopilot already sold is retried at most once a minute…
+MAX_RETRIES = 15          # …and after this many failed tries you're told to sell it yourself
+TOKEN_PROGRAMS = (TOKEN_PROGRAM, TOKEN_2022_PROGRAM)
+PROFIT_DAYS = 7
+PROFIT_MIN_TRADES = 15
 
 
 def load_keypair():
@@ -166,9 +171,37 @@ class LiveTrader:
         return False
 
     # -- trading --------------------------------------------------------------------------------
-    async def buy(self, paper_id: int, mint: str, symbol: str) -> int:
+    def paper_record(self, kind: str, days: int = PROFIT_DAYS) -> dict:
+        """The paper autopilot's closed trades for one alert type ('hype' or 'whales') over the last `days`."""
+        cond = "whale='hype'" if kind == "hype" else "whale<>'hype'"
+        rows = self.db.rows(f"""select size_usd, proceeds_usd from paper_trades where status='closed' and {cond}
+            and close_ts>=?""", (int(time.time()) - days * 86400,))
+        pnl = [num(r["proceeds_usd"]) - num(r["size_usd"]) for r in rows]
+        return {"n": len(pnl), "pnl": sum(pnl), "won": sum(p > 0 for p in pnl)}
+
+    def type_allowed(self, whale: str) -> tuple[bool, str]:
+        """LIVE_PROFITABLE_ONLY: real money only follows alert types that are making money on paper right now."""
+        if not self.cfg.flag("LIVE_PROFITABLE_ONLY"):
+            return True, ""
+        kind = "hype" if whale == "hype" else "whales"
+        rec = self.paper_record(kind)
+        if rec["n"] >= PROFIT_MIN_TRADES and rec["pnl"] <= 0:
+            return False, (f"{'hype' if kind == 'hype' else 'whale'} alerts lost ${-rec['pnl']:.2f} on paper over the last "
+                           f"{PROFIT_DAYS} days ({rec['n']} trades) — the paper autopilot keeps testing them")
+        return True, ""
+
+    async def buy(self, paper_id: int, mint: str, symbol: str, whale: str = "") -> int:
         ok, why = self.ready()
         if not ok:
+            return 0
+        allowed, why = self.type_allowed(whale)
+        if not allowed:
+            day = datetime.now().strftime("%Y-%m-%d")
+            key = f"live_type_skip:{'hype' if whale == 'hype' else 'whales'}"
+            if self.db.get_meta(key) != day:
+                self.db.set_meta(key, day)
+                await self.notify(f"⏸ <b>Live autopilot skipping these for now</b>\n{esc(why)}. Real buys resume "
+                                  "automatically once they're profitable on paper again.", silent=True, kind="LIVE")
             return 0
         async with self._lock:
             if self.db.scalar("select 1 from live_trades where mint=? and status='open'", (mint,)):
@@ -250,10 +283,13 @@ class LiveTrader:
                     got = (sol_after - sol_before) if sol_after is not None and sol_before is not None else int(q["outAmount"]) / 1e9
             else:
                 sig, got = "", 0.0
+            rent = 0.0
+            if closing and not trade["dry"]:
+                rent = await self.close_empty_accounts(mint)   # get the ~0.002 SOL token-account rent back
             self.db.run("""update live_trades set sol_out=sol_out+?, tokens_raw=tokens_raw-?, status=?, close_ts=?,
-                    close_reason=?, sell_sigs=trim(coalesce(sell_sigs,'')||' '||?) where id=?""",
-                        (got, amount, "closed" if closing else "open", int(time.time()) if closing else None,
-                         reason if closing else trade["close_reason"], sig, trade["id"]))
+                    close_reason=?, sell_sigs=trim(coalesce(sell_sigs,'')||' '||?), rent_back=rent_back+? where id=?""",
+                        (got + rent, amount, "closed" if closing else "open", int(time.time()) if closing else None,
+                         reason if closing else trade["close_reason"], sig, rent, trade["id"]))
             t = self.db.row("select * from live_trades where id=?", (trade["id"],))
             head = "🧪 Dry run: would sell" if trade["dry"] else "🔴 Live: sold"
             line = f"<b>{head} {'all' if closing else f'{share * 100:.0f}%'} of ${esc(trade['symbol'])}</b>\n{esc(reason)} · {got:.3f} SOL"
@@ -295,6 +331,68 @@ class LiveTrader:
             await self.notify(f"<b>🔴 Sold {share * 100:.0f}% of ${esc(symbol or mint[:4])}</b>\n{esc(reason)} · {got:.3f} SOL · "
                               f'<a href="https://solscan.io/tx/{sig}">transaction</a>\n<code>{mint}</code>', mint=mint, kind="LIVE")
             return True, f"sold for {got:.3f} SOL"
+
+    async def close_empty_accounts(self, mint: str) -> float:
+        """Close the wallet's now-empty token account(s) for `mint` and get the rent back (~0.002 SOL each). Every buy
+        of a new coin opens one; left open, that's ~4% of a 0.05 SOL trade lost on every coin."""
+        try:
+            res = await self.rpc.call("getTokenAccountsByOwner", [self.wallet, {"mint": mint}, {"encoding": "jsonParsed"}])
+            empty = []
+            for item in (res or {}).get("value") or []:
+                acct = item.get("account") or {}
+                info = (((acct.get("data") or {}).get("parsed") or {}).get("info") or {})
+                if int((info.get("tokenAmount") or {}).get("amount") or 0) == 0 and acct.get("owner") in TOKEN_PROGRAMS:
+                    empty.append((item["pubkey"], acct["owner"], int(acct.get("lamports") or 0)))
+            if not empty:
+                return 0.0
+            bh = await self.rpc.call("getLatestBlockhash", [{"commitment": "confirmed"}])
+            blockhash = ((bh or {}).get("value") or {}).get("blockhash")
+            if not blockhash:
+                return 0.0
+            tx_b64 = self.close_tx(empty, blockhash)
+            sent = await self.rpc.call("sendTransaction", [tx_b64, {"encoding": "base64", "maxRetries": 3}], attempts=1)
+            return sum(lamports for _, _, lamports in empty) / 1e9 if sent else 0.0
+        except Exception as exc:   # never let rent recovery break a sell
+            self.last_error = f"{time.strftime('%H:%M:%S')} rent recovery: {type(exc).__name__}: {exc}"
+            return 0.0
+
+    def close_tx(self, accounts: list[tuple[str, str, int]], blockhash: str) -> str:
+        """A signed transaction closing token accounts (SPL Token CloseAccount = instruction 9), rent to the wallet."""
+        from solders.hash import Hash
+        from solders.instruction import AccountMeta, Instruction
+        from solders.message import MessageV0
+        from solders.pubkey import Pubkey
+        from solders.transaction import VersionedTransaction
+        owner = self.keypair.pubkey()
+        ixs = [Instruction(Pubkey.from_string(program), bytes([9]),
+                           [AccountMeta(Pubkey.from_string(acct), is_signer=False, is_writable=True),
+                            AccountMeta(owner, is_signer=False, is_writable=True),
+                            AccountMeta(owner, is_signer=True, is_writable=False)])
+               for acct, program, _ in accounts]
+        msg = MessageV0.try_compile(owner, ixs, [], Hash.from_string(blockhash))
+        return base64.b64encode(bytes(VersionedTransaction(msg, [self.keypair]))).decode()
+
+    async def reconcile(self, now: int | None = None) -> list[str]:
+        """Catch-up selling: a live coin whose paper trade already closed (a sell that didn't confirm, no route for a
+        moment) is sold again, at most once a minute — so nothing sits in your wallet unwatched overnight."""
+        now = int(now or time.time())
+        done = []
+        for t in self.open_trades():
+            paper = self.db.row("select status, close_reason from paper_trades where id=?", (t["paper_id"],))
+            if paper and paper["status"] != "closed":
+                continue
+            if int(t["retries"] or 0) >= MAX_RETRIES or now - int(t["retry_ts"] or 0) < RETRY_EVERY:
+                continue
+            self.db.run("update live_trades set retries=retries+1, retry_ts=? where id=?", (now, t["id"]))
+            reason = f"catching up: the plan already sold it ({(paper or {}).get('close_reason') or 'paper trade closed'})"
+            if await self.sell(t["mint"], 1.0, reason):
+                done.append(t["mint"])
+            elif int(t["retries"] or 0) + 1 >= MAX_RETRIES:
+                await self.notify(f"🆘 <b>Couldn't sell ${esc(t['symbol'])} after {MAX_RETRIES} tries</b>\n"
+                                  "Probably no liquidity left (rugged) or no route. Check it and sell it yourself — "
+                                  "/sellnow or the dashboard.\n"
+                                  f"<code>{t['mint']}</code>", mint=t["mint"], kind="LIVE")
+        return done
 
     async def sell_all(self, reason: str = "you sold everything (/sellall)") -> int:
         n = 0

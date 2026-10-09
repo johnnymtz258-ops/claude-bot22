@@ -522,6 +522,11 @@
     renderLiveTrading().catch(() => {});
     const d = await api("/api/paper");
     const s = d.summary;
+    table($("paper-types"), ["Alert type", { label: "Trades", num: 1 }, { label: "Won", num: 1 }, { label: "P/L", num: 1 }, { label: "Per trade", num: 1 }, "Live trading"],
+      (d.types || []).map((t) => el("tr", {}, td(t.label), td(String(t.n), "num"),
+        td(t.n ? `${Math.round((t.won / t.n) * 100)}%` : "—", "num"), td(usd(t.pnl, true), `num ${signClass(t.pnl)}`),
+        td(t.n ? usd(t.avg, true) : "—", `num ${signClass(t.avg)}`),
+        td(t.live_ok ? "✅ copies these" : `⏸ paused — ${t.live_why}`, "wrap"))), "No closed paper trades in the last 7 days.");
     $("paper-tiles").replaceChildren(
       tile("Paper balance", usd(s.equity), `${pct(s.return_pct)} from ${usd(s.start)}`, signClass(s.equity - s.start), true),
       tile("Closed trades", String(s.closed), s.closed ? `${s.won} won · ${Math.round((s.won / s.closed) * 100)}%` : "none yet"),
@@ -530,7 +535,8 @@
     lineChart($("paper-curve"), d.curve, (v) => usd(v), { base: s.start, label: "Paper balance over time",
       empty: "The balance line starts once the autopilot has traded for a few minutes." });
     $("paper-note").textContent = d.curve.length ? "every 5 minutes, open trades at market" : "";
-    $("paper-rules").textContent = `${usd(d.rules.size)} a trade · ${d.rules.slippage}% slippage each way · half at 2x · out at -${d.rules.trail}% from top or -${d.rules.stop}%`;
+    const he = d.hype_exit || {};
+    $("paper-rules").textContent = `${usd(d.rules.size)} a trade · ${d.rules.slippage}% slippage each way · hype: all out at +${he.tp}%, -${he.stop}% stop, ${he.minutes} min · whales: half at 2x, out at -${d.rules.trail}% from top or -${d.rules.stop}%`;
     table($("paper-open"), ["Coin", { label: "Now", num: 1 }, { label: "Value left", num: 1 }, { label: "Top", num: 1 }, "Half sold", "Opened", ""],
       s.open.map((t) => el("tr", { class: "click", onclick: () => openCoin(t.mint) },
         td(coinCell(t.symbol, "", t.mint)), td(mult(t.multiple), `num ${signClass(t.multiple - 1)}`), td(usd(t.value), "num"),

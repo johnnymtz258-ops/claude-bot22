@@ -114,7 +114,13 @@ class Dashboard:
         s = a.engine.paper.summary()
         curve = [[r["ts"], r["equity"]] for r in a.db.rows("select ts, equity from paper_equity order by ts")]
         closed = a.db.rows("select * from paper_trades where status='closed' order by close_ts desc limit 60")
+        types = a.engine.paper.by_type()
+        live = getattr(a, "live", None)
+        for t in types:
+            t["live_ok"], t["live_why"] = live.type_allowed("hype" if t["kind"] == "hype" else "") if live else (True, "")
         return _json({"summary": s, "curve": curve, "closed": closed, "enabled": a.cfg.flag("PAPER_TRADING"),
+                      "types": types, "hype_exit": {"tp": a.cfg.get("HYPE_TP_PCT"), "stop": a.cfg.get("HYPE_STOP_PCT"),
+                                                    "minutes": a.cfg.get("HYPE_MAX_MINUTES")},
                       "rules": {"size": a.cfg.get("PAPER_TRADE_USD"), "slippage": a.cfg.get("PAPER_SLIPPAGE_PCT"),
                                 "trail": a.cfg.get("PROTECT_TRAIL_PCT"), "stop": a.cfg.get("STOP_LOSS_PCT")}})
 

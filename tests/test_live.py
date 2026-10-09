@@ -33,6 +33,7 @@ class ChainStub:
     def __init__(self, sol=1.0):
         self.sol, self.tokens, self.sent, self.pending = sol, 0, [], None
         self.last_error = ""
+        self.accounts = []   # token accounts getTokenAccountsByOwner returns (for rent recovery)
 
     async def sol_balance(self, owner):
         return self.sol
@@ -43,8 +44,14 @@ class ChainStub:
     async def call(self, method, params, **kw):
         if method == "sendTransaction":
             self.sent.append(params[0])
-            self.sol, self.tokens = self.pending(self.sol, self.tokens)
+            if self.pending:   # a swap; a close-account transaction has no pending swap
+                self.sol, self.tokens = self.pending(self.sol, self.tokens)
+                self.pending = None
             return "sig"
+        if method == "getTokenAccountsByOwner":
+            return {"value": self.accounts}
+        if method == "getLatestBlockhash":
+            return {"value": {"blockhash": str(Hash.default())}}
         if method == "getSignatureStatuses":
             return {"value": [{"confirmationStatus": "confirmed", "err": None}]}
         return None
@@ -182,3 +189,66 @@ def test_paper_trade_can_be_closed_by_hand_and_live_follows(bot):
     assert trade["status"] == "closed" and trade["close_reason"] == "closed by you"
     assert bot.db.row("select status from live_trades")["status"] == "closed"
     assert bot.run(bot.engine.paper.close(t["id"])) is None
+
+
+EMPTY_ATA = "EmptyAta111111111111111111111111111111111111"[:44]
+
+
+def test_close_account_transaction_is_signed_and_correct(bot):
+    live, chain, quotes, kp, msg = live_bot(bot, dry=False)
+    from fomo.swaps import TOKEN_PROGRAM
+    from solders.message import to_bytes_versioned
+    tx = VersionedTransaction.from_bytes(base64.b64decode(live.close_tx([(EMPTY_ATA, TOKEN_PROGRAM, 2039280)],
+                                                                       str(Hash.default()))))
+    keys = [str(k) for k in tx.message.account_keys]
+    ix = tx.message.instructions[0]
+    assert keys[ix.program_id_index] == TOKEN_PROGRAM and bytes(ix.data) == bytes([9])          # CloseAccount
+    assert [keys[i] for i in ix.accounts] == [EMPTY_ATA, str(kp.pubkey()), str(kp.pubkey())]   # account, rent to, owner
+    assert tx.signatures[0] == kp.sign_message(to_bytes_versioned(tx.message))
+
+
+def test_selling_out_gets_the_token_account_rent_back(bot):
+    from fomo.swaps import TOKEN_PROGRAM
+    live, chain, quotes, kp, msg = live_bot(bot, dry=False)
+    alert(bot)
+    chain.accounts = [{"pubkey": EMPTY_ATA, "account": {"owner": TOKEN_PROGRAM, "lamports": 2039280,
+                       "data": {"parsed": {"info": {"tokenAmount": {"amount": "0", "decimals": 6}}}}}}]
+    bot.run(live.sell_all())
+    t = bot.db.row("select * from live_trades")
+    assert t["status"] == "closed" and t["rent_back"] == pytest.approx(0.00203928)
+    assert t["sol_out"] == pytest.approx(0.1 + 0.00203928)
+    assert len(chain.sent) == 3                                      # buy, sell, close account
+
+
+def test_a_failed_live_sell_is_caught_up_after_paper_closes(bot):
+    live, chain, quotes, kp, msg = live_bot(bot, dry=False)
+    alert(bot)
+    real_execute = live.execute
+    calls = {"n": 0}
+
+    async def flaky(q):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("blockhash expired")                  # the plan's sell doesn't land
+        return await real_execute(q)
+
+    live.execute = flaky
+    t = bot.db.row("select * from paper_trades")
+    bot.run(bot.engine.paper.close(t["id"]))
+    bot.run(asyncio.sleep(0.05))
+    assert bot.db.row("select status from live_trades")["status"] == "open"   # still holding for real
+    done = bot.run(live.reconcile())
+    assert done and bot.db.row("select status, close_reason from live_trades")["status"] == "closed"
+    assert bot.run(live.reconcile()) == []                                   # nothing left to catch up
+
+
+def test_live_only_follows_alert_types_that_make_money_on_paper(bot):
+    import time as _t
+    live, chain, quotes, kp, msg = live_bot(bot, dry=False)
+    now = int(_t.time())
+    for i in range(16):
+        bot.db.run("""insert into paper_trades(mint,whale,symbol,open_ts,entry_price,size_usd,tokens,remaining,proceeds_usd,
+            status,close_ts) values(?,?,?,?,1,50,50,0,30,'closed',?)""", (f"L{i}" + "1" * 40, "hype", "L", now - 3600, now - 60))
+    assert bot.run(live.buy(0, "Hyped" + "1" * 39, "HYPED", "hype")) == 0
+    assert any("skipping" in m["text"] for m in bot.notes.sent)
+    assert live.type_allowed("SomeWhale")[0]                                 # whale alerts aren't losing: allowed

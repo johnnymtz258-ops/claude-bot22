@@ -113,6 +113,9 @@ class Tracker:
         await self._step("outcomes", self._update_outcomes, outcomes, infos, now)
         await self._step("alert reports", self._alert_reports)
         await self._step("paper autopilot", self.engine.paper.tick, infos, now)
+        live = getattr(self.engine.paper, "live", None)
+        if live and live.keypair and self.cfg.flag("LIVE_TRADING"):
+            await self._step("live catch-up", live.reconcile, now)
         if tracked:
             await self._step("tracked coins", self.engine.coins.tick, infos, now)
         if now - self._last_balance_check >= WHALE_BALANCE_CHECK_EVERY:

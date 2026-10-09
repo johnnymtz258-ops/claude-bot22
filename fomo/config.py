@@ -88,6 +88,7 @@ TUNABLES = {t.name: t for t in (
     Tunable("LIVE_TRADE_SOL", 0.05, "Live autopilot: SOL spent per buy", 0.001, 100),
     Tunable("LIVE_MAX_OPEN", 3, "Live autopilot: most coins held at once", 1, 20),
     Tunable("LIVE_DAILY_LOSS_SOL", 0.3, "Live autopilot: stop buying for the day once realized loss reaches this (0 = no limit)", 0, 1000),
+    Tunable("LIVE_PROFITABLE_ONLY", 1, "Live autopilot: only trade the alert types (hype / whales) whose paper trades made money over the last 7 days — the paper autopilot keeps testing all of them (1 = on)", 0, 1, True),
     Tunable("LIVE_SLIPPAGE_BPS", 1500, "Live autopilot: max slippage in basis points (1500 = 15%; memecoins move fast)", 50, 5000),
     Tunable("LIVE_PRIORITY_LAMPORTS", 300_000, "Live autopilot: max priority fee per swap in lamports (300000 = 0.0003 SOL)", 0, 50_000_000),
     Tunable("WHALE_PICKS", 1, "Send you profitable wallets found in today's runners, with Follow buttons (1 = on)", 0, 1, True),

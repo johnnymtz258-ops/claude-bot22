@@ -11,7 +11,8 @@ import zipfile
 from pathlib import Path
 
 DAYS = 10
-FULL = ("alerts", "copies", "whales", "tokens", "my_trades", "watches", "position_notes", "whale_candidates")
+FULL = ("alerts", "copies", "whales", "tokens", "my_trades", "watches", "position_notes", "whale_candidates",
+        "paper_trades", "paper_equity", "live_trades")
 
 
 def build_review_zip(db_path: Path, out_zip: Path, days: int = DAYS) -> Path:

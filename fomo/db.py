@@ -140,6 +140,11 @@ class Database:
         for name, kind in (("chain", "text default 'solana'"), ("pair", "text default ''")):
             if name not in coin_cols:
                 self.conn.execute(f"alter table coins add column {name} {kind}")
+        live_cols = {r[1] for r in self.conn.execute("pragma table_info(live_trades)")}
+        for name, kind in (("retries", "integer default 0"), ("retry_ts", "integer default 0"),
+                           ("rent_back", "real default 0")):
+            if name not in live_cols:
+                self.conn.execute(f"alter table live_trades add column {name} {kind}")
         # what the coin did after the alert (peak and price 1h / 6h / 24h later), and whether it was a scalp
         for name, kind in (("scalp", "integer default 0"), ("peak_price", "real default 0"), ("peak_ts", "integer default 0"),
                            ("p1h", "real"), ("p6h", "real"), ("p24h", "real"),
