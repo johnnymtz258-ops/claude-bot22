@@ -41,7 +41,13 @@ async def online_checks(cfg):
                                 "plan may be used up, or the link/key is wrong")
                     continue
                 ok = "result" in data
-                line(ok, f"{name} answering" if ok else f"{name} error (HTTP {status}): {str(data.get('error'))[:120]}")
+                err = str(data.get("error"))
+                if not ok and ("ETH_" in err or "eth-mainnet" in url or "not available on the" in err):
+                    # Alchemy (and others) give every app an Ethereum link first: the Solana one is a different address
+                    line(False, f"{name}: this link is for another blockchain, not Solana — copy the Solana Mainnet link "
+                                "(for Alchemy: https://solana-mainnet.g.alchemy.com/v2/YOUR-KEY)")
+                    continue
+                line(ok, f"{name} answering" if ok else f"{name} error (HTTP {status}): {err[:120]}")
             except Exception as exc:
                 line(False, f"{name} unreachable ({type(exc).__name__})")
         await stream_check(cfg)
