@@ -42,7 +42,9 @@ WATCH_HOURS = 48
 LABELS = {"rush": "🚀 buy rush", "pressure": "🟢 buy pressure", "volume": "💰 volume surge", "momentum": "📈 momentum",
           "whales": "🐋 your whales", "boost": "📣 paid boost", "profile": "🧾 profile/socials", "trending": "🔥 trending",
           "early": "🌱 survived launch", "loading": "🧲 loading", "reload": "♻️ second leg",
-          "survivor": "🛡 survivor", "spread": "👥 spread supply", "bundle": "⚠️ bundled supply", "fresh": "🍼 brand-new"}
+          "survivor": "🛡 survivor", "spread": "👥 spread supply", "bundle": "⚠️ bundled supply", "fresh": "🍼 brand-new",
+          "organic": "🌿 real buyers", "bots": "🤖 bot volume", "smartct": "𝕏 smart CT likes", "serialdev": "🏭 serial dev",
+          "sus": "⚠️ Jupiter: suspicious"}
 
 
 BURST = {"rush", "volume", "loading", "pressure"}   # the same burst of buying seen four ways: one shared budget
@@ -104,8 +106,9 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
         sig.append(("profile", "🧾 community takeover on DexScreener", 0))
     elif mint in lists.get("profiles", ()) or (num(info.get("socials_count")) >= 2 and info.get("x_url")):
         sig.append(("profile", "🧾 X / Telegram / site listed", 0))
-    if mint in lists.get("trending", ()):
-        sig.append(("trending", "🔥 trending on GeckoTerminal", 8))
+    if mint in lists.get("trending", ()) or mint in lists.get("jup_trending", ()):
+        where = " / ".join(n for n, k in (("GeckoTerminal", "trending"), ("Jupiter", "jup_trending")) if mint in lists.get(k, ()))
+        sig.append(("trending", f"🔥 trending on {where}", 8))
     # age: in your 32 alerts brand-new pairs did as well as any (41% won) and 1h-3d-old ones worst — no age points
     top10 = num((holders or {}).get("top10_pct"), -1)
     if top10 > 35:
@@ -115,6 +118,21 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
     if b5 >= 10 and b5 >= 1.5 * pace and v5 >= 2 * vpace and v5 >= 2_000 and -5 <= m5 <= 8:
         sig.append(("loading", f"🧲 buyers loading before the price moves: {int(b5)} buys, {usd(v5)} in 5 min "
                                f"({v5 / vpace:.1f}x the hour's volume pace), price only {pct(m5)}", 20))
+    jup = info.get("jup") or {}
+    if jup:   # Jupiter's view of the same buying: real people, or bots?
+        org = num(jup.get("organic"), -1)
+        buyers = max(int(num(jup.get("organic_buyers_1h"))), int(num(jup.get("organic_buyers_5m"))))
+        pushing = any(k in ("rush", "volume", "loading") for k, _, _ in sig)
+        if org >= 60 and buyers >= 10:
+            sig.append(("organic", f"🌿 real buyers: Jupiter organic score {org:.0f}, {buyers} organic buyers in the hour", 10))
+        elif 0 <= org < 25 and pushing:
+            sig.append(("bots", f"🤖 mostly bots / wash trading: Jupiter organic score {org:.0f}", -20))
+        if num(jup.get("smart_ct_likes")) >= 3:
+            sig.append(("smartct", f"𝕏 {int(num(jup.get('smart_ct_likes')))} smart Crypto-Twitter accounts liked it (Jupiter)", 10))
+        if num(jup.get("dev_mints")) >= 20:
+            sig.append(("serialdev", f"🏭 its dev has minted {int(num(jup.get('dev_mints')))} coins — a launch factory", -10))
+        if jup.get("sus"):
+            sig.append(("sus", "⚠️ Jupiter's audit flags this token as suspicious", -25))
     keys = {k for k, _, _ in sig}
     if peak_mc >= 2.5 * mcap and keys & {"loading", "rush", "volume"}:
         sig.append(("reload", f"♻️ second leg: peaked at {mc(peak_mc)} in the last 2 days, now {mc(mcap)} — "

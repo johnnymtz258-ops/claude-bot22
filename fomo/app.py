@@ -194,10 +194,10 @@ class App:
         connector = aiohttp.TCPConnector(ssl=_ssl_context(), limit=60)
         headers = {"User-Agent": f"FomoBotWhaleCopy/{VERSION}"}
         async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
-            # Helius free plan allows ~10 requests/second; stay just under it so bursts
+            # free private plans allow ~10-25 requests/second; stay just under 10 so bursts
             # (like rebuilding your positions at startup) don't get rate limited.
-            self.rpc = SolanaRPC(session, cfg.rpc_http, concurrency=6 if cfg.uses_helius else 3,
-                                 min_interval=0.11 if cfg.uses_helius else 0.15)
+            self.rpc = SolanaRPC(session, cfg.rpc_http, concurrency=6 if cfg.fast_rpc else 3,
+                                 min_interval=0.11 if cfg.fast_rpc else 0.15)
             self.market = Market(session, self.rpc, self.db)
             self.telegram = Telegram(session, cfg.telegram_token, cfg.telegram_chat_id)
             self.notify = Notifier(self.telegram, self.db)
@@ -249,8 +249,12 @@ class App:
                                                                    if imported else "")]
         lines.append("Your wallet: synced (exact P/L)" if self.cfg.my_wallets
                      else "Your wallet: not synced — add MY_WALLETS=your_address to .env for exact P/L")
-        if not self.cfg.uses_helius:
-            lines.append("⚠️ No HELIUS_API_KEY: public RPC is slower and can miss the first seconds.")
+        if not self.cfg.fast_rpc:
+            lines.append("⚠️ No private RPC: the public Solana RPC is slow and can miss the first seconds. Add a free one "
+                         "(SOLANA_RPC_HTTP in .env — see FREE_RPC.txt).")
+        else:
+            lines.append(f"RPC: {esc(self.cfg.rpc_name)}" + (f" (+{len(self.cfg.rpc_http) - 2} backup)"
+                                                             if len(self.cfg.rpc_http) > 2 else ""))
         if self.cfg.dashboard_enabled:
             lines.append(f"Dashboard: http://localhost:{self.cfg.dashboard_port}")
         for symbol in getattr(self, "coins_moved", []):

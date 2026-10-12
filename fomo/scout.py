@@ -27,7 +27,7 @@ MIN_TRIPS = 5
 MIN_PNL_SOL = 0.5
 MIN_WIN_RATE = 0.40
 MAX_IDLE_DAYS = 4
-RUN_CALL_BUDGET = 2500       # Helius calls one scanner run may use; live whale tracking always has the rest
+RUN_CALL_BUDGET = 2500       # RPC calls one scanner run may use; live whale tracking always has the rest
 MIN_TYPICAL_BUY_USD = 100    # dust-sized buyers (bots, testers) aren't worth following
 TRIAL_MIN_COPIES = 4
 TRIAL_DROP_AVG = -25.0       # a new whale whose first copies average worse than this is dropped
@@ -92,7 +92,7 @@ class WhaleScout:
         self.notify = notify
         self.refresh_wallets = refresh_wallets
         self.discovery = Discovery(rpc, market, db, cfg)
-        self.discovery.budget = dict(SMALL_BUDGET if cfg.uses_helius else
+        self.discovery.budget = dict(SMALL_BUDGET if cfg.fast_rpc else
                                      {"pages": 10, "samples": 30, "dense": 120, "holders": 6, "wallet_txs": 80})
         self.profiler = profiler or profiles.Profiler(db, cfg, market, self.discovery)
         if self.profiler.discovery is None:
@@ -114,8 +114,8 @@ class WhaleScout:
             try:
                 active = self.cfg.flag("WHALE_PICKS") or self.cfg.flag("AUTO_WHALES")
                 if self.rpc_out():
-                    self.paused = "Helius isn't answering (credits used up?) — scanner paused so the public RPC " \
-                                  "serves your live whale trades"
+                    self.paused = (f"{self.cfg.rpc_name} isn't answering (free plan used up?) — scanner paused so "
+                                   "the public RPC serves your live whale trades")
                 elif active and time.time() - self.last_run >= self.cfg.get("AUTO_SCOUT_HOURS") * 3600:
                     self.paused = ""
                     await self.scout()
@@ -130,7 +130,7 @@ class WhaleScout:
             await asyncio.sleep(600)
 
     def rpc_out(self) -> bool:
-        """The main RPC (Helius) is down and calls are going to the slow public fallback."""
+        """Every private RPC is down and calls are going to the slow public fallback."""
         rpc = getattr(self.discovery, "rpc", None)
         check = getattr(rpc, "primary_down", None)
         return bool(check and check())

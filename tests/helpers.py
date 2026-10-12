@@ -199,6 +199,23 @@ class FakeRPC:
         return {"calls": 0, "errors": 0, "rate_limited": 0, "last_error": "", "last_ok_ts": 0}
 
 
+class FakeJupiter:
+    """Jupiter's token API with canned answers: lists by name, and per-coin stats (organic score etc.)."""
+
+    def __init__(self):
+        self.listed: dict[str, list] = {}
+        self.data: dict[str, dict] = {}
+        self.calls = 0
+        self.last_error = ""
+
+    async def lists(self):
+        return {k: list(v) for k, v in self.listed.items()}
+
+    async def stats(self, mints):
+        self.calls += 1
+        return {m: self.data[m] for m in mints if m in self.data}
+
+
 class FakeMarket(Market):
     """Real Market logic with canned HTTP responses."""
 
@@ -211,6 +228,7 @@ class FakeMarket(Market):
         self.gecko_every = 0.0
         self.other_pairs: dict[str, list] = {}   # chain -> DexScreener pairs on chains other than Solana
         self.paths: dict[str, list] = {}   # mint -> [(ts, price)] served as GeckoTerminal candles
+        self.jup = FakeJupiter()
 
     async def price_path(self, mint, start_ts, end_ts):
         return [(t, p) for t, p in self.paths.get(mint, []) if start_ts <= t <= end_ts]

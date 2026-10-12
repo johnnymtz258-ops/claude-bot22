@@ -911,7 +911,7 @@ def format_status(app) -> str:
              + f" · stream {'connected' if stream and stream.connected else 'reconnecting'}"
              + (f" ({stream.subscribed} subscriptions)" if stream else ""),
              f"Last trade seen: {ago(last) + ' ago' if last else 'none yet'} · {app.engine.events} trades since start",
-             f"RPC: {'Helius' if app.cfg.uses_helius else 'public (slow — add HELIUS_API_KEY)'} · "
+             f"RPC: {esc(app.cfg.rpc_name) if app.cfg.fast_rpc else 'public (slow — add SOLANA_RPC_HTTP, see FREE_RPC.txt)'} · "
              f"{rpc['calls']:,} calls · {rpc['errors']} errors",
              f"SOL {usd(num(app.db.get_meta('sol_usd')))} · alerts {'ON' if app.cfg.flag('ALERTS_ENABLED') else 'PAUSED'}"]
     funnel = reports.alert_funnel(app.db)

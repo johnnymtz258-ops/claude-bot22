@@ -85,11 +85,26 @@ class RunnerScanner:
         # coins your whales bought in the last 2 hours: the whale alert system feeds the hype score
         mints += [r["mint"] for r in self.db.rows("""select distinct mint from swaps where side='BUY' and is_me=0
             and ts>=?""", (now - 2 * 3600,))]
+        jup = getattr(self.market, "jup", None)
+        if jup:
+            try:   # trending and top-organic on Jupiter: a third source next to DexScreener and GeckoTerminal
+                lists.update(await jup.lists())
+            except Exception:
+                pass
+            mints += lists.get("jup_trending", []) + lists.get("jup_organic", [])
         hype = getattr(self, "hype", None)
         if hype:
             mints += hype.watch_mints(now)   # coins hot in the last 48h: catch the second leg at its start
         mints = list(dict.fromkeys(mints))
         infos = await self.market.tokens(mints, max_age=50) if mints else {}
+        if jup and infos and hype:
+            try:   # how much of the buying is real (organic score), and who the dev is — for the busiest 100 coins
+                busiest = sorted(infos, key=lambda m: -num(infos[m].get("buys_m5")))[:100]
+                for mint, st in (await jup.stats(busiest)).items():
+                    if mint in infos:
+                        infos[mint] = {**infos[mint], "jup": st}
+            except Exception:
+                pass
         self.universe = infos
         if hype:
             try:

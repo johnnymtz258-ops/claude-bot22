@@ -223,8 +223,9 @@ class Tracker:
             extra = f" ({j['chase_pct']:+.0f}% already)" if j["status"] == "chased" else ""
             lines.append(f"• skipped ${esc(j['symbol'] or '?')} from {esc(j['name'] or '?')}: {why[j['status']]}{extra}")
         if getattr(self.rpc, "primary_down", lambda: False)():
-            lines.append("⚠️ Helius isn't answering (credits used up?) — running on the public Solana RPC: slower, "
-                         "whale scanner paused until Helius is back.")
+            lines.append(f"⚠️ {esc(self.cfg.rpc_name)} isn't answering (free plan used up?) — running on the public "
+                         "Solana RPC: slower, whale scanner paused until it's back. A second free RPC avoids this "
+                         "(FREE_RPC.txt).")
         last_scan = int(num(self.db.get_meta("scout_last_run", "0")))
         if last_scan:
             nxt = last_scan + int(self.cfg.get("AUTO_SCOUT_HOURS") * 3600) - now
@@ -434,7 +435,7 @@ class Tracker:
     # -- backup polling ------------------------------------------------------------------------
     async def run_poller(self) -> None:
         """Re-check each wallet's latest signatures so a dropped WebSocket never loses a trade."""
-        every = 45 if self.cfg.uses_helius else 120
+        every = 45 if self.cfg.fast_rpc else 120
         await self.backfill_my_wallets()
         while True:
             await asyncio.sleep(every)
@@ -459,7 +460,7 @@ class Tracker:
 
         Already-processed transactions are skipped, so only the first start reads the full window.
         """
-        limit = limit or (600 if self.cfg.uses_helius else 200)
+        limit = limit or (600 if self.cfg.fast_rpc else 200)
         for attempt in range(3):  # anything that failed (e.g. rate limited) is retried on the next pass
             for wallet in sorted(self.engine.my_wallets):
                 for s in await self.rpc.signatures(wallet, limit=limit):

@@ -40,7 +40,7 @@ def test_rpc_fails_over_and_waits_for_new_transactions():
             apps.append(srv)
         async with aiohttp.ClientSession() as session:
             rpc = SolanaRPC(session, [str(apps[0].make_url("/")), str(apps[1].make_url("/"))])
-            assert await rpc.call("getSlot", []) == 123
+            assert await rpc.call("getSlot", [], priority=True) == 123   # live work: first node, then the next
             assert rpc.rate_limited == 1
             assert await rpc.transaction("sig", wait=3) == {"slot": 1}
             assert await rpc.call("bad", []) is None          # a definite error isn't retried forever
@@ -122,6 +122,7 @@ def test_config_loads_env_and_validates(tmp_path, monkeypatch):
     cfg = config.load(env)
     assert cfg.my_wallets == [WHALE]                     # old key still works
     assert cfg.uses_helius and cfg.rpc_http[0].endswith("api-key=abc") and "helius" in cfg.rpc_wss
+    assert cfg.fast_rpc and cfg.rpc_name == "Helius"
     assert cfg.get("MIN_WHALE_BUY_USD") == 250
     assert cfg.db_path == tmp_path / "whales.db"
     assert cfg.set("quiet_low_grade", "off") == 0 and not cfg.flag("QUIET_LOW_GRADE")
@@ -277,7 +278,7 @@ def test_out_of_credits_rests_the_node_without_slowing_the_others():
         async with aiohttp.ClientSession() as session:
             rpc = SolanaRPC(session, [str(servers[0].make_url("/")), str(servers[1].make_url("/"))], min_interval=0.01)
             for _ in range(5):
-                assert await rpc.call("getSlot", []) == 5
+                assert await rpc.call("getSlot", [], priority=True) == 5
             assert hits["helius"] == 1                      # asked once, then rested for 30 minutes
             assert rpc.rate_limited == 0 and rpc.min_interval == 0.01 and not rpc.strained()
             assert rpc.primary_down()
@@ -342,3 +343,72 @@ def test_a_mac_env_on_a_linux_server_uses_the_servers_folder(monkeypatch, tmp_pa
     assert str(config.load(missing).db_path).endswith(".local/share/FomoBot/whales.db")
     monkeypatch.setattr(config.sys, "platform", "darwin")
     assert "Library/Application Support/FomoBot" in str(config.load(missing).db_path)
+
+
+
+def test_one_free_rpc_link_replaces_helius(monkeypatch, tmp_path):
+    for key in ("HELIUS_API_KEY", "SOLANA_RPC_HTTP", "SOLANA_RPC_WSS", "SOLANA_RPC_FALLBACKS"):
+        monkeypatch.delenv(key, raising=False)
+    missing = tmp_path / "no.env"
+    monkeypatch.setenv("HELIUS_API_KEY", "used-up")
+    monkeypatch.setenv("SOLANA_RPC_HTTP", "https://solana-mainnet.core.chainstack.com/KEY")
+    cfg = config.load(missing)
+    assert cfg.rpc_http[0] == "https://solana-mainnet.core.chainstack.com/KEY"      # yours first…
+    assert "helius" in cfg.rpc_http[1] and cfg.rpc_http[-1] == config.PUBLIC_RPC    # …Helius as a backup, public last
+    assert cfg.rpc_wss == "wss://solana-mainnet.core.chainstack.com/KEY"            # websocket worked out from the link
+    assert cfg.rpc_wss_fallback == config.PUBLIC_WSS
+    assert cfg.fast_rpc and cfg.rpc_name == "Chainstack"
+    monkeypatch.delenv("HELIUS_API_KEY")
+    monkeypatch.setenv("SOLANA_RPC_HTTP", "https://lb.drpc.org/ogrpc?network=solana&dkey=K")
+    assert config.load(missing).rpc_wss == "wss://lb.drpc.org/ogws?network=solana&dkey=K"
+    monkeypatch.delenv("SOLANA_RPC_HTTP")
+    cfg = config.load(missing)
+    assert not cfg.fast_rpc and cfg.rpc_http == [config.PUBLIC_RPC] and cfg.rpc_wss == config.PUBLIC_WSS
+
+
+def test_background_calls_use_the_second_free_rpc_and_refused_or_used_up_nodes_are_skipped():
+    from aiohttp.test_utils import TestServer
+    hits = {"a": [], "b": [], "c": []}
+
+    def node(name, reply):
+        async def handler(request):
+            body = await request.json()
+            hits[name].append(body["method"])
+            return reply(body)
+        return handler
+
+    used_up = node("a", lambda b: web.json_response(
+        {"jsonrpc": "2.0", "id": 1, "error": {"code": -32000, "message": "Monthly capacity limit exceeded"}})
+        if b["method"] == "getBalance" else web.json_response({"jsonrpc": "2.0", "id": 1, "result": "a"}))
+    refused = node("b", lambda b: web.Response(status=403, text="forbidden: invalid api key")
+                   if b["method"] == "getSlot" else web.json_response({"jsonrpc": "2.0", "id": 1, "result": "b"}))
+    public = node("c", lambda b: web.json_response({"jsonrpc": "2.0", "id": 1, "result": "c"}))
+
+    async def run():
+        servers = []
+        for fn in (used_up, refused, public):
+            app = web.Application()
+            app.router.add_post("/", fn)
+            srv = TestServer(app)
+            await srv.start_server()
+            servers.append(srv)
+        async with aiohttp.ClientSession() as session:
+            urls = [str(s.make_url("/")) for s in servers]
+            rpc = SolanaRPC(session, urls)
+            rpc_public = rpc.urls[2]
+            import fomo.rpc as rpcmod
+            rpcmod_public = rpcmod._public
+            rpcmod._public = lambda u: u == rpc_public          # the third test node plays the public RPC
+            try:
+                assert await rpc.call("getHealth", [], priority=True) == "a"      # live work: your first RPC
+                assert await rpc.call("getHealth", []) == "b"                     # background: the second one
+                assert await rpc.call("getSlot", []) == "a"                       # 403 there: rested, next node
+                assert not rpc.primary_down()
+                assert await rpc.call("getBalance", [], priority=True) == "c"     # "limit exceeded": next node
+                assert rpc.primary_down()                                          # both private ones resting now
+            finally:
+                rpcmod._public = rpcmod_public
+        for srv in servers:
+            await srv.close()
+
+    asyncio.run(run())

@@ -117,6 +117,20 @@ on boot and restarts by itself. `open_server_dashboard.command` opens its dashbo
 `server_log.command` shows its log. Telegram works exactly as before. If two copies ever run at once (the Mac and the
 server), the bot says so and holds real-money buys until one stops.
 
+## Free RPC instead of Helius
+
+Paste any provider's link into `SOLANA_RPC_HTTP=` (Chainstack, Alchemy, dRPC, QuickNode…) — `FREE_RPC.txt` shows the
+3-minute Chainstack setup. The websocket is worked out from the link, Helius (if set) becomes the backup, and a second
+link in `SOLANA_RPC_FALLBACKS=` takes the background work so the first plan's allowance lasts for live whale trades.
+A provider that says its limit is used up (or refuses the key) is rested for 30 minutes and the next one takes over.
+
+## Jupiter token data (free)
+
+Jupiter's trending and top-organic lists feed the hype scanner, and for the busiest 100 coins each minute the bot reads
+Jupiter's organic score (how much of the trading is real people vs bots / wash trading), organic buyers, the dev's
+mint count and Jupiter's audit flag: 🌿 real buyers (+10), 🤖 bot volume (−20), 🏭 serial dev (−10), ⚠️ suspicious
+(−25). "Which signals have worked" on the Hype tab measures them like every other signal.
+
 ## Self-tuning hype filter (`/tuning`)
 
 Each hype rule (the $30K–100K zone, paid profiles, "already up too much this hour", the score threshold) is measured on

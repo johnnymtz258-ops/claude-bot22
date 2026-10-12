@@ -1,0 +1,47 @@
+REPLACE HELIUS WITH A FREE RPC (3 minutes)
+==========================================
+The bot needs one private Solana RPC link. Free plans that work:
+
+  Chainstack  ★ easiest — 3 million requests a month, ~25 a second, websocket included, no card
+  Alchemy       30 million compute units a month, ~25 requests a second
+  dRPC          large free allowance (Jupiter / dRPC numbers change — check their pricing page)
+  Helius        1 million credits a month (the one that ran out)
+
+FASTEST WAY (Chainstack)
+  1. Go to https://chainstack.com → Start for free → sign up (Google or GitHub works, no card).
+  2. Create a project (any name) → add a node: Solana → Mainnet → the free "Global node".
+  3. Open the node → Access / credentials → copy the HTTPS endpoint.
+     It looks like  https://solana-mainnet.core.chainstack.com/0123abcd…
+  4. Open .env in the bot folder (TextEdit is fine) and paste it on this line:
+         SOLANA_RPC_HTTP=https://solana-mainnet.core.chainstack.com/0123abcd…
+     (no spaces, no quotes). Leave HELIUS_API_KEY as it is — it becomes the backup — or empty it.
+  5. Restart the bot:
+       on the Mac:    Control+C in the bot window, then double-click start_mac.command
+       on a server:   double-click send_to_server.command (it copies the new .env and restarts the bot)
+     The self-check at startup should show:
+         ✅ RPC: Chainstack (fast)
+         ✅ Chainstack answering
+         ✅ Chainstack live wallet stream (websocket) working
+     Telegram's startup message says "RPC: Chainstack".
+
+The websocket for the live wallet stream is worked out from the link (wss://… same address). Only if the self-check
+says the websocket isn't reachable, copy the WSS endpoint from the same Chainstack page into SOLANA_RPC_WSS=.
+
+RECOMMENDED: ADD A SECOND FREE ONE (so you never run out)
+  Put a second provider's link in SOLANA_RPC_FALLBACKS=. With two, the bot sends background work (whale scanner,
+  coin checks) to the second one, so the first one's allowance lasts for your live whale trades; if one runs out
+  or refuses, the other takes over at full speed.
+    Alchemy: https://www.alchemy.com → sign up → Create new app → Solana, Mainnet → copy the HTTPS URL
+             (https://solana-mainnet.g.alchemy.com/v2/YOUR-KEY)
+    dRPC:    https://drpc.org → sign up → Keys → copy the key into
+             https://lb.drpc.org/ogrpc?network=solana&dkey=YOUR-KEY
+  Example:
+    SOLANA_RPC_HTTP=https://solana-mainnet.core.chainstack.com/0123abcd…
+    SOLANA_RPC_FALLBACKS=https://solana-mainnet.g.alchemy.com/v2/YOUR-KEY
+
+WHAT IF ONE RUNS OUT
+  The bot notices ("limit exceeded", HTTP 401/402/403, credits used up), rests that RPC for 30 minutes and uses the
+  next one. If every private RPC is out, it falls back to the public Solana RPC (slow but working), pauses the whale
+  scanner, and the Telegram card says so. Free plans reset every month.
+
+KEEP THESE LINKS PRIVATE: the key is part of the link. Don't post screenshots of .env.

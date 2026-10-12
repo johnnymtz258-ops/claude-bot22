@@ -104,6 +104,8 @@ class Market:
         self._gecko_lock = asyncio.Lock()
         self._gecko_last = 0.0
         self.gecko_every = GECKO_EVERY
+        from .jupiter import JupiterTokens
+        self.jup = JupiterTokens(session)   # organic score / real buyers / dev audit, and Jupiter's trending lists
 
     async def _get(self, url: str, timeout: float = 8.0):
         try:

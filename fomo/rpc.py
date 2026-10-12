@@ -14,7 +14,16 @@ from .util import is_address
 RETRYABLE_RPC_CODES = {-32004, -32005, -32007, -32009, -32014, -32016, 429}
 
 
-OUT_OF_CREDITS = ("max usage", "credit", "quota", "exceeded your", "upgrade your plan")
+OUT_OF_CREDITS = ("max usage", "credit", "quota", "exceeded your", "upgrade your", "capacity limit", "monthly",
+                  "limit exceeded", "payment required", "insufficient balance", "plan limit")
+# the same, said inside a normal JSON-RPC answer (stricter: "credit" alone also appears in transaction errors)
+QUOTA_WORDS = ("max usage", "quota", "exceeded your", "upgrade your", "capacity limit", "monthly", "limit exceeded",
+               "payment required", "plan limit", "out of credits", "credits exhausted", "insufficient credits")
+REFUSED = (401, 402, 403)   # key wrong, plan used up or not allowed: that node can't help — rest it, use the next
+
+
+def _public(url: str) -> bool:
+    return "api.mainnet-beta.solana.com" in url
 
 
 class SolanaRPC:
@@ -39,9 +48,14 @@ class SolanaRPC:
         self.tx_version = 1   # newest transaction format the bot asks for; adjusted if a node names another
         self.last_ok_ts = 0.0
 
-    def _ordered(self) -> list[str]:
+    def _ordered(self, background: bool = False) -> list[str]:
         now = time.monotonic()
         healthy = [u for u in self.urls if self._cool_until[u] <= now]
+        private = [u for u in healthy if not _public(u)]
+        if background and len(private) >= 2:
+            # two private RPCs (e.g. two free plans): background work (scanner, coin checks) uses the second, so the
+            # first one's monthly allowance is kept for your live whale trades
+            healthy = [private[1]] + [u for u in healthy if u != private[1]]
         return healthy + [u for u in self.urls if u not in healthy]
 
     async def _pace(self) -> None:
@@ -77,7 +91,7 @@ class SolanaRPC:
         payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
         before = self.last_error
         for attempt in range(attempts):
-            for url in self._ordered():
+            for url in self._ordered(background=not priority):
                 waited = 0
                 while not priority and self._priority > 0 and waited < 100:   # live trades go first
                     await asyncio.sleep(0.1)
@@ -99,6 +113,11 @@ class SolanaRPC:
                                 self._slow_down()
                                 self._note_error(url, f"{method}: rate limited", 2.0)
                                 continue
+                            if resp.status in REFUSED:
+                                body = (await resp.text())[:200]
+                                self._note_error(url, f"{method}: HTTP {resp.status} — wrong key, or the free plan's "
+                                                      f"limit is used up ({body.strip()[:80]!r})", 1800.0)
+                                continue
                             if resp.status >= 500:
                                 self._note_error(url, f"{method}: HTTP {resp.status}", 5.0)
                                 continue
@@ -119,6 +138,13 @@ class SolanaRPC:
                     code = err.get("code") if isinstance(err, dict) else None
                     if code in RETRYABLE_RPC_CODES:
                         self._note_error(url, f"{method}: {err.get('message', code)}", 1.0)
+                        continue
+                    text = str(err.get("message") if isinstance(err, dict) else err).lower()
+                    if method not in ("sendTransaction", "simulateTransaction") and (
+                            any(w in text for w in QUOTA_WORDS) or "rate limit" in text or "too many requests" in text):
+                        # a provider saying "limit reached" inside a normal answer: not about this call — next node
+                        out = not ("rate limit" in text or "too many requests" in text)
+                        self._note_error(url, f"{method}: {text[:80]}", 1800.0 if out else 2.0)
                         continue
                     self.last_error = f"{time.strftime('%H:%M:%S')} {method}: {err}"
                     self.last_rpc_error = err if isinstance(err, dict) else {"message": str(err)}
@@ -248,8 +274,13 @@ class SolanaRPC:
                 "primary_down": self.primary_down()}
 
     def primary_down(self) -> bool:
-        """The first (preferred) node is cooling off after failures and calls are going to a fallback."""
-        return len(self.urls) > 1 and self._cool_until.get(self.urls[0], 0) > time.monotonic()
+        """Every private RPC is cooling off after failures (monthly limit used up, outage): calls go to the slow
+        public one."""
+        now = time.monotonic()
+        private = [u for u in self.urls if not _public(u)]
+        if not private or len(private) == len(self.urls):
+            return len(self.urls) > 1 and self._cool_until.get(self.urls[0], 0) > now
+        return all(self._cool_until.get(u, 0) > now for u in private)
 
 
 class WalletStream:

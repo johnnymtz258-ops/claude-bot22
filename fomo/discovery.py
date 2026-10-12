@@ -49,13 +49,13 @@ class Discovery:
         self.market = market
         self.db = db
         self.cfg = cfg
-        self.budget = _budget(cfg.uses_helius)
+        self.budget = _budget(cfg.fast_rpc)
 
     async def _parse_many(self, sigs: list[dict], parse, progress=None, label="") -> list:
         """Fetch + parse transactions with bounded concurrency. `parse(tx, sigrow)` -> item or None."""
         out: list = []
         done = 0
-        sem = asyncio.Semaphore(8 if self.cfg.uses_helius else 3)
+        sem = asyncio.Semaphore(8 if self.cfg.fast_rpc else 3)
 
         async def one(row):
             nonlocal done

@@ -138,3 +138,23 @@ def test_paid_profile_coins_and_the_dump_zone_are_held_back_unless_your_whales_a
     assert "zone" in score(info_of(mc=60_000, liq=15_000), bot.cfg, now=NOW)["blocked"]
     assert not score(info_of(mc=25_000, liq=8_000), bot.cfg, now=NOW, )["blocked"].startswith("$25")
     assert not score(info_of(mc=60_000, liq=15_000), bot.cfg, now=NOW, whales=whales)["blocked"]
+
+
+def test_jupiter_tells_real_buyers_from_bots(bot):
+    real = {"organic": 78, "organic_buyers_1h": 40, "dev_mints": 1}
+    r = score({**info_of(), "jup": real}, bot.cfg, now=NOW)
+    assert "organic" in [k for k, _, _ in r["signals"]]
+    bots = score({**info_of(), "jup": {"organic": 9, "organic_buyers_1h": 2, "dev_mints": 35, "sus": True}}, bot.cfg, now=NOW)
+    keys = dict((k, p) for k, _, p in bots["signals"])
+    assert keys["bots"] < 0 and keys["serialdev"] < 0 and keys["sus"] < 0
+    assert bots["score"] < r["score"] - 50 and not alertable(bots, bot.cfg)
+
+
+def test_jupiter_trending_coins_are_scanned_and_its_data_reaches_the_alert(bot):
+    bot.market.set_pair(**hot_pair())
+    bot.market.jup.listed = {"jup_trending": [MINT]}                      # found only through Jupiter
+    bot.market.jup.data = {MINT: {"organic": 81, "organic_buyers_1h": 55}}
+    bot.run(bot.runners.tick(int(NOW)))
+    assert bot.notes.kinds() == ["HYPE"]
+    text = bot.notes.sent[0]["text"]
+    assert "trending on Jupiter" in text and "real buyers: Jupiter organic score 81" in text

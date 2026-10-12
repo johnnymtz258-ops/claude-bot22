@@ -135,6 +135,15 @@ class Config:
     def uses_helius(self) -> bool:
         return bool(self.helius_key)
 
+    @property
+    def fast_rpc(self) -> bool:
+        """A private RPC is set (Helius, Chainstack, Alchemy, dRPC…): full speed. Otherwise only the slow public one."""
+        return any(u != PUBLIC_RPC for u in self.rpc_http)
+
+    @property
+    def rpc_name(self) -> str:
+        return provider_name(self.rpc_http[0]) if self.rpc_http else "none"
+
     def get(self, name: str) -> float:
         return self.values.get(name, TUNABLES[name].default)
 
@@ -167,6 +176,27 @@ PUBLIC_RPC = "https://api.mainnet-beta.solana.com"
 PUBLIC_WSS = "wss://api.mainnet-beta.solana.com"
 
 
+PROVIDERS = (("helius", "Helius"), ("chainstack", "Chainstack"), ("alchemy", "Alchemy"), ("drpc", "dRPC"),
+             ("quiknode", "QuickNode"), ("ankr", "Ankr"), ("syndica", "Syndica"), ("mainnet-beta.solana.com", "public Solana RPC"))
+
+
+def provider_name(url: str) -> str:
+    host = url.split("://", 1)[-1].split("/", 1)[0].split("?", 1)[0]
+    return next((name for key, name in PROVIDERS if key in host), host or "RPC")
+
+
+def wss_for(url: str) -> str:
+    """The websocket address that goes with an RPC link (same address with wss://, except where a provider differs)."""
+    if not url.startswith(("https://", "http://")):
+        return ""
+    ws = "wss://" + url[8:] if url.startswith("https://") else "ws://" + url[7:]
+    if "drpc.org" in ws:
+        ws = ws.replace("/ogrpc", "/ogws")
+    if "rpc.ankr.com/solana/" in ws and "/solana/ws/" not in ws:
+        ws = ws.replace("rpc.ankr.com/solana/", "rpc.ankr.com/solana/ws/")
+    return ws
+
+
 def default_state_dir() -> str:
     """Where whales and history live (outside the bot folder, so updates never touch them)."""
     if sys.platform == "darwin":
@@ -182,17 +212,19 @@ def load(env_file: Path | None = None) -> Config:
         pass
 
     helius = _env("HELIUS_API_KEY")
+    helius_http = f"https://mainnet.helius-rpc.com/?api-key={helius}" if helius else ""
+    own = _env("SOLANA_RPC_HTTP")   # any provider's full link (Chainstack, Alchemy, dRPC…): it goes first, Helius after it
     rpc_http = []
-    if helius:
-        rpc_http.append(f"https://mainnet.helius-rpc.com/?api-key={helius}")
-    for url in [_env("SOLANA_RPC_HTTP")] + _env("SOLANA_RPC_FALLBACKS").split(","):
+    for url in [own, helius_http] + _env("SOLANA_RPC_FALLBACKS").split(","):
         url = url.strip()
         if url and url not in rpc_http:
             rpc_http.append(url)
     if PUBLIC_RPC not in rpc_http:
-        rpc_http.append(PUBLIC_RPC)   # last resort: if Helius stops answering (credits used up, outage), keep working
-    rpc_wss = (f"wss://mainnet.helius-rpc.com/?api-key={helius}" if helius
-               else _env("SOLANA_RPC_WSS") or PUBLIC_WSS)
+        rpc_http.append(PUBLIC_RPC)   # last resort: if every private RPC stops answering, keep working
+    # live wallet stream: your provider's websocket, else Helius', else the public one; the public one is the backup
+    rpc_wss = (_env("SOLANA_RPC_WSS") or wss_for(own)
+               or (f"wss://mainnet.helius-rpc.com/?api-key={helius}" if helius else "") or PUBLIC_WSS)
+    rpc_wss_fallback = PUBLIC_WSS if rpc_wss != PUBLIC_WSS else ""
 
     wallets_text = _env("MY_WALLETS") or _env("PUBLIC_SOLANA_WALLET_ADDRESS")
     my_wallets = [w.strip() for w in wallets_text.replace(";", ",").split(",") if is_address(w.strip())]
@@ -217,8 +249,7 @@ def load(env_file: Path | None = None) -> Config:
         helius_key=helius,
         rpc_http=rpc_http,
         rpc_wss=rpc_wss,
-        rpc_wss_fallback=(_env("SOLANA_RPC_WSS") if helius and _env("SOLANA_RPC_WSS") else
-                          PUBLIC_WSS if rpc_wss != PUBLIC_WSS else ""),
+        rpc_wss_fallback=rpc_wss_fallback,
         my_wallets=my_wallets,
         state_dir=state_dir,
         db_path=db_path,

@@ -27,7 +27,8 @@ import aiohttp
 from .swaps import TOKEN_2022_PROGRAM, TOKEN_PROGRAM, WSOL
 from .util import esc, num
 
-JUPITER = "https://lite-api.jup.ag/swap/v1"
+JUPITER = "https://lite-api.jup.ag/swap/v1"            # free, no key — Jupiter is phasing it out…
+JUPITER_KEYED = "https://api.jup.ag/swap/v1"           # …for this one: free key at developers.jup.ag (or keyless, slower)
 FEE_RESERVE_SOL = 0.02
 CONFIRM_TIMEOUT = 60
 RETRY_EVERY = 60          # a live coin the paper autopilot already sold is retried at most once a minute…
@@ -71,8 +72,9 @@ class LiveTrader:
             keypair, key_problem = load_keypair()
         self.keypair = keypair
         self.key_problem = key_problem
-        self.jupiter = os.environ.get("JUPITER_API", "").strip().rstrip("/") or JUPITER
         self.jupiter_key = os.environ.get("JUPITER_API_KEY", "").strip()
+        self.jupiter = (os.environ.get("JUPITER_API", "").strip().rstrip("/")
+                        or (JUPITER_KEYED if self.jupiter_key else JUPITER))
         self.last_error = ""
         self.set_setting = None   # App.set_setting: lets calibrate() store the measured slippage
         self.hold_until = 0.0     # set while a second copy of the bot is running: no real buys (they'd double)
@@ -112,21 +114,32 @@ class LiveTrader:
     def _headers(self) -> dict:
         return {"accept": "application/json", **({"x-api-key": self.jupiter_key} if self.jupiter_key else {})}
 
+    def _bases(self) -> list[str]:
+        # the free lite-api is being phased out: if it stops answering, the same call goes to api.jup.ag
+        return [self.jupiter] + ([JUPITER_KEYED] if self.jupiter == JUPITER else [])
+
+    async def _jup(self, verb: str, path: str, **kw):
+        problem = None
+        for base in self._bases():
+            try:
+                async with self.session.request(verb, f"{base}{path}", headers=self._headers(),
+                                                timeout=aiohttp.ClientTimeout(total=15 if verb == "POST" else 10),
+                                                **kw) as resp:
+                    data = await resp.json(content_type=None)
+                    if resp.status == 200:
+                        return data
+                    problem = RuntimeError(f"Jupiter {path} HTTP {resp.status}: {str(data)[:160]}")
+                    if resp.status == 400:   # a real "no" about this swap (bad amount, no route): don't retry it
+                        break
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+                problem = RuntimeError(f"Jupiter {path}: {type(exc).__name__}")
+        raise problem or RuntimeError(f"Jupiter {path} failed")
+
     async def _jup_get(self, path: str, params: dict):
-        async with self.session.get(f"{self.jupiter}{path}", params=params, headers=self._headers(),
-                                    timeout=aiohttp.ClientTimeout(total=10)) as resp:
-            data = await resp.json(content_type=None)
-            if resp.status != 200:
-                raise RuntimeError(f"Jupiter {path} HTTP {resp.status}: {str(data)[:160]}")
-            return data
+        return await self._jup("GET", path, params=params)
 
     async def _jup_post(self, path: str, body: dict):
-        async with self.session.post(f"{self.jupiter}{path}", json=body, headers=self._headers(),
-                                     timeout=aiohttp.ClientTimeout(total=15)) as resp:
-            data = await resp.json(content_type=None)
-            if resp.status != 200:
-                raise RuntimeError(f"Jupiter {path} HTTP {resp.status}: {str(data)[:160]}")
-            return data
+        return await self._jup("POST", path, json=body)
 
     async def quote(self, input_mint: str, output_mint: str, amount: int) -> dict:
         q = await self._jup_get("/quote", {"inputMint": input_mint, "outputMint": output_mint, "amount": str(int(amount)),

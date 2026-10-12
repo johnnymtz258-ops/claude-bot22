@@ -11,7 +11,7 @@ def main() -> None:
     values = {
         "TELEGRAM_BOT_TOKEN": getpass.getpass("Telegram bot token (from @BotFather, hidden): ").strip(),
         "TELEGRAM_CHAT_ID": input("Your Telegram chat id (Enter if unknown — the bot will tell you): ").strip(),
-        "HELIUS_API_KEY": getpass.getpass("Helius API key (free at helius.dev, recommended, hidden): ").strip(),
+        "SOLANA_RPC_HTTP": getpass.getpass("Solana RPC link (free — see FREE_RPC.txt; recommended, hidden): ").strip(),
         "MY_WALLETS": input("Your PUBLIC wallet address for exact P/L (optional): ").strip(),
     }
     lines = []

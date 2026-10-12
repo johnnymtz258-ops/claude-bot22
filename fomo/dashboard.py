@@ -68,7 +68,7 @@ class Dashboard:
             "version": VERSION, "uptime": int(time.time() - a.started),
             "stream": {"connected": bool(stream and stream.connected), "subs": stream.subscribed if stream else 0,
                        "error": stream.last_error if stream else ""},
-            "rpc": a.rpc.health(), "helius": a.cfg.uses_helius, "sol_usd": num(a.db.get_meta("sol_usd")),
+            "rpc": a.rpc.health(), "helius": a.cfg.fast_rpc, "rpc_name": a.cfg.rpc_name, "sol_usd": num(a.db.get_meta("sol_usd")),
             "whales": a.whales.count(), "wallet_synced": bool(a.cfg.my_wallets),
             "alerts_on": a.cfg.flag("ALERTS_ENABLED"), "last_trade_ts": a.engine.last_event_ts,
             "alerts_24h": a.db.scalar("select count(*) from alerts where kind='BUY' and grade<>'SKIP' and ts>=?",

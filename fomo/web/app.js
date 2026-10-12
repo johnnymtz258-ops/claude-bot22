@@ -292,6 +292,7 @@
     pills.push(el("span", { class: "pill" }, `SOL ${usd(o.sol_usd)}`));
     pills.push(el("span", { class: "pill" }, `last trade ${ago(o.last_trade_ts)}`));
     if (!o.helius) pills.push(el("span", { class: "pill warn" }, el("span", { class: "dot" }), "Public RPC (slow)"));
+    else if (o.rpc.primary_down) pills.push(el("span", { class: "pill warn" }, el("span", { class: "dot" }), `${o.rpc_name} not answering`));
     $("status").replaceChildren(...pills);
     return o;
   }
@@ -330,7 +331,8 @@
 
   const HYPE_LABELS = { rush: "🚀 buy rush", pressure: "🟢 buy pressure", volume: "💰 volume surge", momentum: "📈 momentum",
     whales: "🐋 your whales", boost: "📣 paid boost", profile: "🧾 profile/socials", trending: "🔥 trending", early: "🌱 survived launch", loading: "🧲 loading", reload: "♻️ second leg",
-    survivor: "🛡 survivor", spread: "👥 spread supply", bundle: "⚠️ bundled supply", fresh: "🍼 brand-new" };
+    survivor: "🛡 survivor", spread: "👥 spread supply", bundle: "⚠️ bundled supply", fresh: "🍼 brand-new",
+    organic: "🌿 real buyers", bots: "🤖 bot volume", smartct: "𝕏 smart CT likes", serialdev: "🏭 serial dev", sus: "⚠️ Jupiter: suspicious" };
   async function renderHype() {
     const h = await api("/api/hype");
     $("hype-meta").textContent = h.enabled ? `alerts at score ${h.min_score}+ · scanned ${h.last_scan ? ago(h.last_scan) : "—"}` : "alerts off (/set HYPE_ALERTS on)";
@@ -685,7 +687,7 @@
       return [...head, el("div", { class: "settings-row" }, el("div", {}, el("div", { class: "name" }, s.name), el("div", { class: "help" }, s.help), msg), input)];
     }));
     const h = [["Version", o.version], ["Up for", dur(o.uptime)], ["Wallet stream", o.stream.connected ? `connected (${o.stream.subs} subscriptions)` : `reconnecting ${o.stream.error || ""}`],
-      ["RPC", `${o.helius ? (o.rpc.primary_down ? "⚠️ Helius not answering — using the public RPC" : "Helius") : "public"} · ${o.rpc.calls.toLocaleString()} calls · ${(o.rpc.errors - o.rpc.rate_limited).toLocaleString()} failed · ${o.rpc.rate_limited.toLocaleString()} slowed down by the plan's rate limit (retried)`],
+      ["RPC", `${o.helius ? (o.rpc.primary_down ? `⚠️ ${o.rpc_name} not answering — using the public RPC` : o.rpc_name) : "public (slow)"} · ${o.rpc.calls.toLocaleString()} calls · ${(o.rpc.errors - o.rpc.rate_limited).toLocaleString()} failed · ${o.rpc.rate_limited.toLocaleString()} slowed down by the plan's rate limit (retried)`],
       ["Your wallet", o.wallet_synced ? "synced" : "not synced (MY_WALLETS in .env)"], ["Recent issues", o.errors.join(" | ") || "none"]];
     $("health").replaceChildren(...h.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]));
   }

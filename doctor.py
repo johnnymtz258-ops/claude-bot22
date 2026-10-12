@@ -27,31 +27,49 @@ async def online_checks(cfg):
                      f"Telegram token rejected: {data.get('description')}")
             except Exception as exc:
                 line(False, f"Telegram unreachable ({type(exc).__name__})")
-        for i, url in enumerate(cfg.rpc_http[:2]):
-            name = "Helius" if "helius" in url else "Public Solana RPC"
+        from fomo.config import provider_name
+        private = [u for u in cfg.rpc_http if u != config.PUBLIC_RPC]
+        for url in (private or cfg.rpc_http)[:3]:
+            name = provider_name(url)
             try:
                 async with s.post(url, json={"jsonrpc": "2.0", "id": 1, "method": "getSlot"}) as r:
                     status, body = r.status, await r.text()
                 try:
                     data = json.loads(body)
                 except ValueError:
-                    hint = (" — your Helius credits may be used up (check dashboard.helius.dev) or it's rate limiting you"
-                            if "helius" in url else "")
-                    line(False, f"{name} answered HTTP {status} with a non-JSON page: {body.strip()[:80]!r}{hint}")
+                    line(False, f"{name} answered HTTP {status} with a non-JSON page: {body.strip()[:80]!r} — the free "
+                                "plan may be used up, or the link/key is wrong")
                     continue
                 ok = "result" in data
-                line(ok, f"{name} answering" if ok else f"{name} error: {str(data.get('error'))[:120]}")
-                if ok and i == 0:
-                    break   # the main node works: no need to test the fallback
+                line(ok, f"{name} answering" if ok else f"{name} error (HTTP {status}): {str(data.get('error'))[:120]}")
             except Exception as exc:
                 line(False, f"{name} unreachable ({type(exc).__name__})")
-        if len(cfg.rpc_http) > 1:
-            print("   (if Helius fails, the bot switches to the public Solana RPC automatically — slower, but it keeps working)")
+        await stream_check(cfg)
+        if private:
+            print("   (if they all fail, the bot switches to the public Solana RPC automatically — slower, but it keeps working)")
         try:
             async with s.get("https://api.dexscreener.com/tokens/v1/solana/So11111111111111111111111111111111111111112") as r:
                 line(r.status == 200, "DexScreener prices" if r.status == 200 else f"DexScreener HTTP {r.status}")
         except Exception as exc:
             line(False, f"DexScreener unreachable ({type(exc).__name__})")
+
+
+async def stream_check(cfg):
+    """The live wallet stream: can it subscribe to a wallet on this websocket?"""
+    from fomo.config import provider_name
+    name = provider_name(cfg.rpc_wss.replace("wss://", "https://").replace("/ogws", "/ogrpc"))
+    try:
+        import websockets
+        async with websockets.connect(cfg.rpc_wss, open_timeout=8, close_timeout=2) as ws:
+            await ws.send(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "logsSubscribe", "params": [
+                {"mentions": ["11111111111111111111111111111111"]}, {"commitment": "confirmed"}]}))
+            reply = json.loads(await asyncio.wait_for(ws.recv(), 8))
+        ok = "result" in reply
+        line(ok, f"{name} live wallet stream (websocket) working" if ok else
+             f"{name} websocket refused the wallet stream: {str(reply.get('error'))[:100]} — set SOLANA_RPC_WSS")
+    except Exception as exc:
+        line(False, f"{name} websocket not reachable ({type(exc).__name__}) — the bot uses the public stream instead; "
+                    "check SOLANA_RPC_WSS")
 
 
 def main():
@@ -72,8 +90,8 @@ def main():
          "TELEGRAM_BOT_TOKEN missing — alerts will only print in this window")
     line(bool(cfg.telegram_chat_id), "Telegram chat id set" if cfg.telegram_chat_id else
          "TELEGRAM_CHAT_ID missing — message your bot once and it will tell you the id")
-    line(True if cfg.uses_helius else False, "Helius RPC (fast)" if cfg.uses_helius else
-         "No HELIUS_API_KEY — using public RPC (slower alerts; /find is slow). Free key: helius.dev")
+    line(True if cfg.fast_rpc else False, f"RPC: {cfg.rpc_name} (fast)" if cfg.fast_rpc else
+         "No private RPC — using the public one (slower alerts; /find is slow). Free: see FREE_RPC.txt")
     line(True if cfg.my_wallets else None, f"Wallet sync on for {len(cfg.my_wallets)} wallet(s) — exact P/L"
          if cfg.my_wallets else "Wallet sync off — set MY_WALLETS=your public address for exact P/L")
     try:
