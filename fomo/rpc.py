@@ -14,6 +14,9 @@ from .util import is_address
 RETRYABLE_RPC_CODES = {-32004, -32005, -32007, -32009, -32014, -32016, 429}
 
 
+OUT_OF_CREDITS = ("max usage", "credit", "quota", "exceeded your", "upgrade your plan")
+
+
 class SolanaRPC:
     def __init__(self, session: aiohttp.ClientSession, urls: list[str], *, concurrency: int = 6,
                  min_interval: float = 0.0):
@@ -86,6 +89,12 @@ class SolanaRPC:
                         async with self.session.post(url, json=payload,
                                                      timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
                             if resp.status == 429:
+                                body = (await resp.text())[:300].lower()
+                                if any(w in body for w in OUT_OF_CREDITS):
+                                    # the plan's monthly credits are used up: not a rate limit — rest this node for
+                                    # 30 minutes and let the others work at full speed
+                                    self._note_error(url, f"{method}: out of credits (max usage reached)", 1800.0)
+                                    continue
                                 self.rate_limited += 1
                                 self._slow_down()
                                 self._note_error(url, f"{method}: rate limited", 2.0)

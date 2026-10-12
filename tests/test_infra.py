@@ -253,3 +253,35 @@ def test_scanner_pauses_while_helius_is_out(bot, monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         bot.run(bot.scout.run())
     assert calls == [] and "scanner paused" in bot.scout.paused
+
+
+def test_out_of_credits_rests_the_node_without_slowing_the_others():
+    hits = {"helius": 0, "backup": 0}
+
+    async def helius(request):
+        hits["helius"] += 1
+        return web.Response(status=429, text="max usage reached")
+
+    async def backup(request):
+        hits["backup"] += 1
+        return web.json_response({"jsonrpc": "2.0", "id": 1, "result": 5})
+
+    async def run():
+        servers = []
+        for fn in (helius, backup):
+            app = web.Application()
+            app.router.add_post("/", fn)
+            srv = TestServer(app)
+            await srv.start_server()
+            servers.append(srv)
+        async with aiohttp.ClientSession() as session:
+            rpc = SolanaRPC(session, [str(servers[0].make_url("/")), str(servers[1].make_url("/"))], min_interval=0.01)
+            for _ in range(5):
+                assert await rpc.call("getSlot", []) == 5
+            assert hits["helius"] == 1                      # asked once, then rested for 30 minutes
+            assert rpc.rate_limited == 0 and rpc.min_interval == 0.01 and not rpc.strained()
+            assert rpc.primary_down()
+        for srv in servers:
+            await srv.close()
+
+    asyncio.run(run())
