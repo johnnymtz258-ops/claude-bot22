@@ -27,13 +27,13 @@ def main() -> int:
         return 0
     candidates = [p for p in ROOT.parent.glob("*/.env") if p.parent.resolve() != ROOT]
     candidates += [p for p in ROOT.parent.glob("*/*/.env") if p.parent.resolve() != ROOT]
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    for old in candidates:
-        values = read_env(old)
-        if values.get("TELEGRAM_BOT_TOKEN"):
-            break
-    else:
+    # the newest .env that has your RPC link wins (an older version's folder can be newer on disk after it ran)
+    found = [(old, read_env(old)) for old in candidates]
+    found = [(old, v) for old, v in found if v.get("TELEGRAM_BOT_TOKEN")]
+    if not found:
         return 2
+    found.sort(key=lambda ov: (bool(ov[1].get("SOLANA_RPC_HTTP")), ov[0].stat().st_mtime), reverse=True)
+    old, values = found[0]
     if not values.get("MY_WALLETS") and values.get("PUBLIC_SOLANA_WALLET_ADDRESS"):
         values["MY_WALLETS"] = values["PUBLIC_SOLANA_WALLET_ADDRESS"]
     values.pop("PUBLIC_SOLANA_WALLET_ADDRESS", None)
