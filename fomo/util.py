@@ -26,6 +26,18 @@ def num(value, default: float = 0.0) -> float:
     return x if math.isfinite(x) else float(default)
 
 
+def prune_cache(cache: dict, max_items: int = 20_000, max_age: float = 3600) -> None:
+    """Keep a {key: (timestamp, value)} cache from growing for weeks on a 24/7 server."""
+    if len(cache) <= max_items:
+        return
+    now = __import__("time").time()
+    for key in [k for k, v in cache.items() if now - v[0] > max_age]:
+        cache.pop(key, None)
+    if len(cache) > max_items:   # still too big: drop the oldest half
+        for key, _ in sorted(cache.items(), key=lambda kv: kv[1][0])[:len(cache) // 2]:
+            cache.pop(key, None)
+
+
 def is_address(value) -> bool:
     s = str(value or "").strip()
     return 32 <= len(s) <= 44 and all(ch in BASE58 for ch in s)

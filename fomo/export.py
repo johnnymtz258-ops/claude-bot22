@@ -38,7 +38,7 @@ def build_review_zip(db_path: Path, out_zip: Path, days: int = DAYS) -> Path:
                     (since, since - 86400) + ((since - 86400,) if shadows else ()))
         # your settings and what the self-tuner changed (no keys or tokens live in this table)
         con.execute("""create table out.settings as select key, value from main.meta
-            where key like 'setting:%' or key like 'tune:%'""")
+            where key like 'setting:%' or key like 'tune:%' or key like 'health:%'""")
         con.commit()
         con.execute("detach database out")
     finally:

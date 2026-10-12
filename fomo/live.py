@@ -24,13 +24,19 @@ from datetime import datetime
 
 import aiohttp
 
-from .swaps import TOKEN_2022_PROGRAM, TOKEN_PROGRAM, WSOL
+from collections import deque
+
+from .scam import roundtrip
+from .swaps import TOKEN_2022_PROGRAM, TOKEN_PROGRAM, WSOL, account_keys
 from .util import esc, num
 
 JUPITER = "https://lite-api.jup.ag/swap/v1"            # free, no key — Jupiter is phasing it out…
 JUPITER_KEYED = "https://api.jup.ag/swap/v1"           # …for this one: free key at developers.jup.ag (or keyless, slower)
 FEE_RESERVE_SOL = 0.02
 CONFIRM_TIMEOUT = 60
+JITO_URL = "https://mainnet.block-engine.jito.wtf/api/v1/transactions"   # private: no public mempool, no sandwich
+JITO_WAIT = 20            # not landed through Jito in this long: the same signed swap goes out through the RPC
+AUDIT_EVERY = 300         # how often open real positions are checked against the wallet's actual token balance
 RETRY_EVERY = 60          # a live coin the paper autopilot already sold is retried at most once a minute…
 MAX_RETRIES = 15          # …and after this many failed tries you're told to sell it yourself
 TOKEN_PROGRAMS = (TOKEN_PROGRAM, TOKEN_2022_PROGRAM)
@@ -61,6 +67,20 @@ def load_keypair():
         return None, "TRADING_PRIVATE_KEY isn't a valid Solana private key"
 
 
+def sol_delta(tx: dict | None, wallet: str) -> float | None:
+    """SOL the wallet gained (or lost) in a transaction, from its own pre/post balances."""
+    if not tx:
+        return None
+    keys, meta = account_keys(tx), tx.get("meta") or {}
+    if wallet not in keys:
+        return None
+    i = keys.index(wallet)
+    pre, post = meta.get("preBalances") or [], meta.get("postBalances") or []
+    if i >= len(pre) or i >= len(post):
+        return None
+    return (int(post[i]) - int(pre[i])) / 1e9
+
+
 class LiveTrader:
     def __init__(self, cfg, db, rpc, session, notify, keypair=None, key_problem: str = ""):
         self.cfg = cfg
@@ -78,6 +98,14 @@ class LiveTrader:
         self.last_error = ""
         self.set_setting = None   # App.set_setting: lets calibrate() store the measured slippage
         self.hold_until = 0.0     # set while a second copy of the bot is running: no real buys (they'd double)
+        self.market = None        # set by the app: SOL price for sizing by pool liquidity
+        self.stream = None        # set by the app: no real buys while the live wallet stream is down
+        self.fail_streak = 0      # failed transactions in a row (the kill switch)
+        self.halted_until = 0.0
+        self.halted_why = ""
+        self._last_audit = 0
+        self.exec = {"sent": 0, "jito": 0, "rpc": 0, "rpc_fallback": 0, "failed": 0, "skipped": 0,
+                     "confirm_s": deque(maxlen=50)}   # telemetry: how swaps land
         self._lock = asyncio.Lock()
         self._tasks: set = set()
 
@@ -141,9 +169,10 @@ class LiveTrader:
     async def _jup_post(self, path: str, body: dict):
         return await self._jup("POST", path, json=body)
 
-    async def quote(self, input_mint: str, output_mint: str, amount: int) -> dict:
+    async def quote(self, input_mint: str, output_mint: str, amount: int, slippage_bps: int | None = None) -> dict:
+        bps = int(slippage_bps or self.cfg.get("LIVE_SLIPPAGE_BPS"))
         q = await self._jup_get("/quote", {"inputMint": input_mint, "outputMint": output_mint, "amount": str(int(amount)),
-                                           "slippageBps": str(int(self.cfg.get("LIVE_SLIPPAGE_BPS")))})
+                                           "slippageBps": str(bps)})
         if not isinstance(q, dict) or not q.get("outAmount"):
             raise RuntimeError(f"no route: {str(q)[:160]}")
         return q
@@ -156,11 +185,17 @@ class LiveTrader:
         return base64.b64encode(bytes(signed)).decode(), str(signed.signatures[0])
 
     async def execute(self, quote: dict) -> tuple[str, bool]:
-        """Build, sign and (unless dry run) send a swap. Returns (signature, confirmed)."""
+        """Build, sign and (unless dry run) send a swap. Returns (signature, confirmed).
+
+        With LIVE_JITO the swap carries a Jito tip and goes to Jito's block engine: it never sits where sandwich bots
+        can see it. If it hasn't landed in JITO_WAIT seconds, the SAME signed transaction is sent through the RPC —
+        same signature, so it can never execute twice."""
+        jito = self.cfg.flag("LIVE_JITO")
+        fee = ({"jitoTipLamports": int(self.cfg.get("LIVE_JITO_TIP_LAMPORTS"))} if jito else
+               {"priorityLevelWithMaxLamports": {"maxLamports": int(self.cfg.get("LIVE_PRIORITY_LAMPORTS")),
+                                                 "priorityLevel": "veryHigh"}})
         body = {"quoteResponse": quote, "userPublicKey": self.wallet, "wrapAndUnwrapSol": True,
-                "dynamicComputeUnitLimit": True,
-                "prioritizationFeeLamports": {"priorityLevelWithMaxLamports": {
-                    "maxLamports": int(self.cfg.get("LIVE_PRIORITY_LAMPORTS")), "priorityLevel": "veryHigh"}}}
+                "dynamicComputeUnitLimit": True, "prioritizationFeeLamports": fee}
         swap = await self._jup_post("/swap", body)
         tx_b64 = (swap or {}).get("swapTransaction")
         if not tx_b64:
@@ -168,14 +203,37 @@ class LiveTrader:
         signed_b64, sig = self.sign(tx_b64)
         if self.dry_run:
             return sig, False
+        started = time.monotonic()
+        self.exec["sent"] += 1
+        if jito and await self._send_jito(signed_b64):
+            if await self._confirm(sig, JITO_WAIT):
+                self.exec["jito"] += 1
+                self.exec["confirm_s"].append(time.monotonic() - started)
+                return sig, True
+            self.exec["rpc_fallback"] += 1
         sent = await self.rpc.call("sendTransaction", [signed_b64, {"encoding": "base64", "skipPreflight": True,
                                                                     "maxRetries": 3}], attempts=1)
         if not sent:
             raise RuntimeError(f"RPC didn't accept the transaction ({self.rpc.last_error})")
-        return sig, await self._confirm(sig)
+        ok = await self._confirm(sig)
+        if ok:
+            self.exec["rpc"] += 1
+            self.exec["confirm_s"].append(time.monotonic() - started)
+        return sig, ok
 
-    async def _confirm(self, sig: str) -> bool:
-        deadline = time.monotonic() + CONFIRM_TIMEOUT
+    async def _send_jito(self, signed_b64: str) -> bool:
+        """Hand the signed swap to Jito's block engine. False (→ the RPC sends it) on any problem."""
+        try:
+            async with self.session.post(JITO_URL, json={"jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
+                                                         "params": [signed_b64, {"encoding": "base64"}]},
+                                         timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                data = await resp.json(content_type=None)
+            return resp.status == 200 and isinstance(data, dict) and bool(data.get("result"))
+        except Exception:
+            return False
+
+    async def _confirm(self, sig: str, timeout: float = CONFIRM_TIMEOUT) -> bool:
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             res = await self.rpc.call("getSignatureStatuses", [[sig], {"searchTransactionHistory": False}], attempts=1)
             status = ((res or {}).get("value") or [None])[0] if isinstance(res, dict) else None
@@ -207,11 +265,102 @@ class LiveTrader:
                            f"{PROFIT_DAYS} days ({rec['n']} trades) — the paper autopilot keeps testing them")
         return True, ""
 
-    async def buy(self, paper_id: int, mint: str, symbol: str, whale: str = "") -> int:
+    # -- kill switch, sizing, slippage -------------------------------------------------------------
+    def halt_reason(self, now: float | None = None) -> str:
+        """Why new real buys are halted right now ('' = they aren't). Selling and the exit plan never stop."""
+        now = now or time.time()
+        if now < self.hold_until:
+            return "two copies of the bot are running"
+        if now < self.halted_until:
+            return self.halted_why
+        down = getattr(self.rpc, "primary_down", None)
+        if callable(down) and down():
+            return "every private RPC is down — not trading on the slow public one"
+        if self.stream is not None and not getattr(self.stream, "connected", True):
+            return "the live wallet stream is reconnecting"
+        return ""
+
+    async def _record_tx(self, ok: bool, why: str = "") -> None:
+        """Count failed transactions in a row; LIVE_KILL_FAILS of them halt new buys for LIVE_KILL_MINUTES."""
+        if ok:
+            self.fail_streak = 0
+            return
+        self.fail_streak += 1
+        self.exec["failed"] += 1
+        if self.fail_streak >= int(self.cfg.get("LIVE_KILL_FAILS")) and time.time() >= self.halted_until:
+            minutes = self.cfg.get("LIVE_KILL_MINUTES")
+            self.halted_until = time.time() + minutes * 60
+            self.halted_why = f"{self.fail_streak} failed transactions in a row (last: {why[:80]})"
+            await self.notify(f"🛑 <b>Live autopilot: new buys halted for {minutes:.0f} min</b>\n{esc(self.halted_why)}.\n"
+                              "Open positions are still watched and sold by the exit plan. /live shows the state.",
+                              kind="LIVE")
+
+    def loss_streak(self) -> int:
+        n = 0
+        for t in self.db.rows("""select sol_in, sol_out from live_trades where status='closed' and dry=0
+                order by close_ts desc limit 10"""):
+            if num(t["sol_out"]) >= num(t["sol_in"]):
+                break
+            n += 1
+        return n
+
+    async def size_for(self, info: dict | None, signal: dict | None) -> tuple[float, str]:
+        """SOL for this buy: LIVE_TRADE_SOL, x1.5 on a strong signal (grade A / hype 70+), x0.5 on a weak one (grade C),
+        x0.5 after 3 losses in a row, and never more than LIVE_MAX_LIQ_PCT of the pool."""
+        base = self.cfg.get("LIVE_TRADE_SOL")
+        if not self.cfg.flag("LIVE_DYNAMIC_SIZE"):
+            return base, ""
+        signal, info = signal or {}, info or {}
+        grade, score = signal.get("grade"), signal.get("score")
+        mult, why = 1.0, []
+        if grade == "A" or num(score) >= 70:
+            mult, why = 1.5, ["strong signal ×1.5"]
+        elif grade == "C":
+            mult, why = 0.5, ["grade C ×0.5"]
+        streak = self.loss_streak()
+        if streak >= 3:
+            mult *= 0.5
+            why.append(f"{streak} losses in a row ×0.5")
+        size = base * mult
+        liq_usd = num(info.get("liquidity_usd"))
+        sol_usd = await self.market.sol_usd() if self.market else 0.0
+        if liq_usd > 0 and sol_usd > 0:
+            cap = liq_usd / sol_usd * self.cfg.get("LIVE_MAX_LIQ_PCT") / 100
+            if size > cap:
+                size = cap
+                why.append(f"capped at {self.cfg.get('LIVE_MAX_LIQ_PCT'):g}% of the pool")
+        return round(size, 4), ", ".join(why)
+
+    async def buy_slippage(self, info: dict | None, size_sol: float) -> int:
+        """Slippage for a buy: the floor, plus twice the expected price impact (trade vs pool depth), plus how fast the
+        coin is moving — capped at LIVE_SLIPPAGE_BPS. Tight where it can be, so a bad fill can't take 15%."""
+        info = info or {}
+        lo, hi = self.cfg.get("LIVE_MIN_SLIPPAGE_BPS"), self.cfg.get("LIVE_SLIPPAGE_BPS")
+        sol_usd = await self.market.sol_usd() if self.market else 0.0
+        liq = num(info.get("liquidity_usd"))
+        impact_bps = (2 * size_sol * sol_usd / liq * 10_000) if liq > 0 and sol_usd > 0 else hi / 2
+        moving_bps = 25 * abs(num(info.get("change_m5")))
+        return int(min(hi, max(lo, lo + 2 * impact_bps + moving_bps)))
+
+    async def _skip(self, symbol: str, mint: str, why: str) -> None:
+        """A buy the checks refused: protective, not a failure (doesn't count toward the kill switch)."""
+        self.exec["skipped"] += 1
+        self.last_error = f"{time.strftime('%H:%M:%S')} {symbol}: skipped — {why}"
+        await self.notify(f"🛡 <b>Live autopilot skipped ${esc(symbol)}</b>\n{esc(why)}\n<code>{mint}</code>", mint=mint,
+                          silent=True, kind="LIVE")
+
+    async def buy(self, paper_id: int, mint: str, symbol: str, whale: str = "", info: dict | None = None,
+                  signal: dict | None = None) -> int:
         ok, why = self.ready()
         if not ok:
             return 0
-        if time.time() < self.hold_until:
+        halted = self.halt_reason()
+        if halted:
+            hour = time.strftime("%Y-%m-%d %H")
+            if self.db.get_meta("live_halt_note") != hour:
+                self.db.set_meta("live_halt_note", hour)
+                await self.notify(f"⏸ <b>Live autopilot: not buying ${esc(symbol)}</b>\n{esc(halted)}. Paper keeps trading; "
+                                  "open real positions are still managed.", silent=True, kind="LIVE")
             return 0
         allowed, why = self.type_allowed(whale)
         if not allowed:
@@ -234,24 +383,59 @@ class LiveTrader:
                     await self.notify(f"🛑 <b>Live autopilot paused for today</b>\nRealized loss today reached "
                                       f"{limit:g} SOL (LIVE_DAILY_LOSS_SOL). It starts again tomorrow.", kind="LIVE")
                 return 0
-            size = self.cfg.get("LIVE_TRADE_SOL")
+            size, size_note = await self.size_for(info, signal)
+            if size < 0.25 * self.cfg.get("LIVE_TRADE_SOL"):
+                await self._skip(symbol, mint, f"the pool is too thin for a real buy ({size:.4f} SOL would be "
+                                               f"{self.cfg.get('LIVE_MAX_LIQ_PCT'):g}% of it)")
+                return 0
             sol_before = await self.rpc.sol_balance(self.wallet)
+            if not self.dry_run and sol_before is not None and size > 0.25 * (sol_before - FEE_RESERVE_SOL) \
+                    and sol_before - FEE_RESERVE_SOL > 0:
+                size = round(min(size, max(self.cfg.get("LIVE_TRADE_SOL"), 0.25 * (sol_before - FEE_RESERVE_SOL))), 4)
             if not self.dry_run and (sol_before is None or sol_before < size + FEE_RESERVE_SOL):
-                await self._fail(symbol, mint, f"not enough SOL in the trading wallet ({num(sol_before):.3f} SOL)")
+                await self._fail(symbol, mint, f"not enough SOL in the trading wallet ({num(sol_before):.3f} SOL)",
+                                 count=False)
                 return 0
             tokens_before = (await self.rpc.token_balance_raw(self.wallet, mint)) or 0
+            lamports = int(size * 1e9)
+            slip = await self.buy_slippage(info, size)
+            # pre-trade checks, at once: the buy quote and the coin's mint account (Token-2022 traps)
+            mint_info = getattr(self.rpc, "mint_info", None)
+            q, minted = await asyncio.gather(self.quote(WSOL, mint, lamports, slip),
+                                             mint_info(mint) if callable(mint_info) else asyncio.sleep(0),
+                                             return_exceptions=True)
+            if isinstance(q, Exception):
+                await self._fail(symbol, mint, str(q))
+                return 0
+            if isinstance(minted, dict) and minted.get("traps"):
+                await self._skip(symbol, mint, "token trap: " + "; ".join(minted["traps"]))
+                return 0
+            try:   # honeypot / hidden tax / no liquidity: what would selling straight back return?
+                back = await self.quote(mint, WSOL, int(q["outAmount"]))
+                rt = roundtrip(lamports, int(back["outAmount"]))
+            except Exception as exc:
+                await self._skip(symbol, mint, f"can't get a quote to sell it back ({exc}) — possible honeypot")
+                return 0
+            max_loss = self.cfg.get("LIVE_MAX_ROUNDTRIP_LOSS_PCT")
+            if rt < 1 - max_loss / 100:
+                await self._skip(symbol, mint, f"selling straight back would return only {rt * 100:.0f}% of the SOL "
+                                               f"(more than {max_loss:g}% lost) — honeypot, hidden tax or no liquidity")
+                return 0
+            plan = (f"{size:g} SOL{f' ({size_note})' if size_note else ''} · slippage {slip / 100:g}% · "
+                    f"sell-back check {rt * 100:.0f}%")
             try:
-                q = await self.quote(WSOL, mint, int(size * 1e9))
                 sig, confirmed = await self.execute(q)
             except Exception as exc:
                 await self._fail(symbol, mint, str(exc))
                 return 0
             if self.dry_run:
                 trade_id = self.db.insert("""insert into live_trades(paper_id,mint,symbol,open_ts,sol_in,tokens_raw,
-                        buy_sig,status,dry) values(?,?,?,?,?,?,?,?,1)""",
-                                          (paper_id, mint, symbol, int(time.time()), size, int(q["outAmount"]), sig, "open"))
+                        buy_sig,status,dry,size_note) values(?,?,?,?,?,?,?,?,1,?)""",
+                                          (paper_id, mint, symbol, int(time.time()), size, int(q["outAmount"]), sig, "open",
+                                           plan))
                 await self.notify(f"🧪 <b>Dry run: would buy {size:g} SOL of ${esc(symbol)}</b>\nJupiter quote: "
                                   f"{int(q['outAmount']):,} tokens · price impact {num(q.get('priceImpactPct')) * 100:.1f}% · "
+                                  f"{esc(plan)} · {'Jito (private)' if self.cfg.flag('LIVE_JITO') else 'RPC'} · "
                                   "signed but not sent. /live dry off to trade for real.\n"
                                   f"<code>{mint}</code>", mint=mint, silent=True, kind="LIVE")
                 return trade_id
@@ -260,11 +444,13 @@ class LiveTrader:
             if not confirmed and got <= 0:
                 await self._fail(symbol, mint, f"swap not confirmed ({sig[:12]}…)")
                 return 0
+            await self._record_tx(True)
             sol_after = await self.rpc.sol_balance(self.wallet)
             spent = (sol_before - sol_after) if sol_before is not None and sol_after is not None else size
             trade_id = self.db.insert("""insert into live_trades(paper_id,mint,symbol,open_ts,sol_in,tokens_raw,buy_sig,
-                    status,dry) values(?,?,?,?,?,?,?,?,0)""", (paper_id, mint, symbol, int(time.time()), spent, got, sig, "open"))
-            await self.notify(f"🟢 <b>Live: bought ${esc(symbol)} for {spent:.3f} SOL</b>\n"
+                    status,dry,size_note) values(?,?,?,?,?,?,?,?,0,?)""",
+                                      (paper_id, mint, symbol, int(time.time()), spent, got, sig, "open", plan))
+            await self.notify(f"🟢 <b>Live: bought ${esc(symbol)} for {spent:.3f} SOL</b>\n{esc(plan)}\n"
                               f"<a href=\"https://solscan.io/tx/{sig}\">transaction</a> · the exit plan runs automatically"
                               f"\n<code>{mint}</code>", buttons=[[("🔴 Sell now", None, f"livesell:{mint}")]],
                               mint=mint, kind="LIVE")
@@ -296,8 +482,12 @@ class LiveTrader:
                     got = int(q["outAmount"]) / 1e9
                 else:
                     if not confirmed:
+                        # it may still land: remember it, so the catch-up checks it before selling again
+                        self.db.run("update live_trades set pending_sig=? where id=?", (f"{sig}|{int(time.time())}",
+                                                                                       trade["id"]))
                         await self._fail(trade["symbol"], mint, f"sell not confirmed ({sig[:12]}…) — will retry")
                         return False
+                    await self._record_tx(True)
                     sol_after = await self.rpc.sol_balance(self.wallet)
                     got = (sol_after - sol_before) if sol_after is not None and sol_before is not None else int(q["outAmount"]) / 1e9
             else:
@@ -391,12 +581,73 @@ class LiveTrader:
         msg = MessageV0.try_compile(owner, ixs, [], Hash.from_string(blockhash))
         return base64.b64encode(bytes(VersionedTransaction(msg, [self.keypair]))).decode()
 
+    async def _landed(self, sig: str) -> str:
+        """'landed', 'failed' or '' (unknown yet) for a transaction signature."""
+        res = await self.rpc.call("getSignatureStatuses", [[sig], {"searchTransactionHistory": True}], attempts=1)
+        status = ((res or {}).get("value") or [None])[0] if isinstance(res, dict) else None
+        if not status:
+            return ""
+        if status.get("err"):
+            return "failed"
+        return "landed" if status.get("confirmationStatus") in ("confirmed", "finalized") else ""
+
+    async def _settle_pending(self, t: dict, now: int) -> bool:
+        """A sell that didn't confirm in time: did it land after all? Book what it really got (from the transaction's
+        own balances) instead of selling again or losing track. True when the trade is settled."""
+        sig, _, since = str(t["pending_sig"]).partition("|")
+        state = await self._landed(sig)
+        if state == "landed":
+            tx = await self.rpc.transaction(sig) if hasattr(self.rpc, "transaction") else None
+            got = max(0.0, sol_delta(tx, self.wallet) or 0.0)
+            held = await self.rpc.token_balance_raw(self.wallet, t["mint"])
+            closing = held == 0
+            self.db.run("""update live_trades set sol_out=sol_out+?, pending_sig='', status=?, close_ts=?, close_reason=?,
+                    sell_sigs=trim(coalesce(sell_sigs,'')||' '||?) where id=?""",
+                        (got, "closed" if closing else "open", now if closing else None,
+                         "the sell that didn't confirm in time landed" if closing else t["close_reason"], sig, t["id"]))
+            await self._record_tx(True)
+            if closing:
+                rec = self.db.row("select * from live_trades where id=?", (t["id"],))
+                await self.notify(f"✅ <b>Live: the earlier sell of ${esc(t['symbol'])} did land</b>\n{got:.3f} SOL · trade "
+                                  f"{rec['sol_out'] - rec['sol_in']:+.3f} SOL\n<code>{t['mint']}</code>", mint=t["mint"],
+                                  silent=True, kind="LIVE")
+            return closing
+        if state == "failed" or now - int(num(since)) > 120:   # failed, or expired (blockhash) without landing
+            self.db.run("update live_trades set pending_sig='' where id=?", (t["id"],))
+        return False
+
+    async def audit_balances(self, now: int | None = None) -> list[str]:
+        """Every 5 minutes: does the wallet still hold each open real position? A position with no tokens left (sold in
+        another app, or by hand) is closed here instead of being 'open' forever."""
+        now = int(now or time.time())
+        if now - self._last_audit < AUDIT_EVERY or not self.keypair:
+            return []
+        self._last_audit = now
+        closed = []
+        for t in self.open_trades():
+            if t["dry"] or t["pending_sig"] or now - int(t["open_ts"]) < 60:
+                continue
+            held = await self.rpc.token_balance_raw(self.wallet, t["mint"])
+            if held == 0:
+                self.db.run("""update live_trades set status='closed', close_ts=?, close_reason=? where id=?""",
+                            (now, "no tokens left in the trading wallet (sold outside the bot?)", t["id"]))
+                closed.append(t["mint"])
+                await self.notify(f"🔎 <b>Live: ${esc(t['symbol'])} is no longer in the trading wallet</b>\nClosed it here "
+                                  "(sold in another app or by hand?) — what it sold for isn't known to the bot.\n"
+                                  f"<code>{t['mint']}</code>", mint=t["mint"], silent=True, kind="LIVE")
+        return closed
+
     async def reconcile(self, now: int | None = None) -> list[str]:
         """Catch-up selling: a live coin whose paper trade already closed (a sell that didn't confirm, no route for a
-        moment) is sold again, at most once a minute — so nothing sits in your wallet unwatched overnight."""
+        moment) is sold again, at most once a minute — so nothing sits in your wallet unwatched overnight.
+        A sell that didn't confirm in time is checked first: if it landed late, it's booked, not sold twice."""
         now = int(now or time.time())
         done = []
         for t in self.open_trades():
+            if t.get("pending_sig") and not t["dry"]:
+                if await self._settle_pending(t, now):
+                    done.append(t["mint"])
+                continue
             paper = self.db.row("select status, close_reason from paper_trades where id=?", (t["paper_id"],))
             if paper and paper["status"] != "closed":
                 continue
@@ -411,6 +662,7 @@ class LiveTrader:
                                   "Probably no liquidity left (rugged) or no route. Check it and sell it yourself — "
                                   "/sellnow or the dashboard.\n"
                                   f"<code>{t['mint']}</code>", mint=t["mint"], kind="LIVE")
+        await self.audit_balances(now)
         return done
 
     async def sell_all(self, reason: str = "you sold everything (/sellall)") -> int:
@@ -419,8 +671,12 @@ class LiveTrader:
             n += bool(await self.sell(t["mint"], 1.0, reason))
         return n
 
-    async def _fail(self, symbol: str, mint: str, why: str) -> None:
+    async def _fail(self, symbol: str, mint: str, why: str, count: bool = True) -> None:
         self.last_error = f"{time.strftime('%H:%M:%S')} {symbol}: {why}"
+        # only transactions that failed count toward the kill switch — "no route" for a rugged coin is the coin's
+        # problem, not the bot's, and its catch-up retries mustn't keep halting new buys
+        if count and "no route" not in why and "/quote" not in why:
+            await self._record_tx(False, why)
         await self.notify(f"⚠️ <b>Live autopilot: ${esc(symbol)}</b>\n{esc(why)}\n<code>{mint}</code>", mint=mint,
                           silent=True, kind="LIVE")
 
@@ -483,7 +739,14 @@ class LiveTrader:
                 "problem": self.ready()[1], "open": [t for t in trades if t["status"] == "open"],
                 "closed": len(closed), "won": sum(p > 0 for p in pnl), "realized_sol": sum(pnl),
                 "today_sol": self.today_realized_sol(), "recent": self._with_paper(trades[:20]), "error": self.last_error,
-                "fills": {k: v for k, v in self.fills().items() if k != "rows"}}
+                "fills": {k: v for k, v in self.fills().items() if k != "rows"}, "halt": self.halt_reason(),
+                "exec": self.exec_stats()}
+
+    def exec_stats(self) -> dict:
+        times = sorted(self.exec["confirm_s"])
+        return {**{k: v for k, v in self.exec.items() if k != "confirm_s"}, "fail_streak": self.fail_streak,
+                "median_confirm_s": round(times[len(times) // 2], 1) if times else None,
+                "jito_on": self.cfg.flag("LIVE_JITO")}
 
     def _with_paper(self, trades: list[dict]) -> list[dict]:
         for t in trades:

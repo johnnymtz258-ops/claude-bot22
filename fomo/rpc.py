@@ -8,6 +8,7 @@ import time
 
 import aiohttp
 
+from .scam import token_traps
 from .util import is_address
 
 # JSON-RPC errors that mean "this node can't answer right now" -> try the next node / later.
@@ -37,6 +38,7 @@ class SolanaRPC:
         self._next = 0.0
         self._pace_lock = asyncio.Lock()
         self._cool_until = {u: 0.0 for u in self.urls}
+        self.node = {u: {"calls": 0, "errors": 0, "ms": 0.0, "ok": 0} for u in self.urls}   # telemetry per RPC
         self.calls = 0
         self.errors = 0
         self.rate_limited = 0
@@ -84,6 +86,8 @@ class SolanaRPC:
         self.errors += 1
         self.last_transient = f"{time.strftime('%H:%M:%S')} {text}"
         self._cool_until[url] = time.monotonic() + cool
+        if url in self.node:
+            self.node[url]["errors"] += 1
 
     async def call(self, method: str, params: list, *, timeout: float = 12, attempts: int = 2,
                    priority: bool = False):
@@ -99,6 +103,9 @@ class SolanaRPC:
                 await self._pace()
                 async with self.sem:
                     self.calls += 1
+                    started = time.monotonic()
+                    if url in self.node:
+                        self.node[url]["calls"] += 1
                     try:
                         async with self.session.post(url, json=payload,
                                                      timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
@@ -150,6 +157,9 @@ class SolanaRPC:
                     self.last_rpc_error = err if isinstance(err, dict) else {"message": str(err)}
                     return None  # a definite answer (bad params etc.) — other nodes would agree
                 self.last_ok_ts = time.time()
+                if url in self.node:
+                    self.node[url]["ok"] += 1
+                    self.node[url]["ms"] += (time.monotonic() - started) * 1000
                 if self.last_error != before:
                     self.last_error = before   # a retry got through (rate limit, network blip): nothing was lost
                 if self.min_interval > self.base_interval:   # recover speed gradually after a rate limit
@@ -227,6 +237,7 @@ class SolanaRPC:
             "decimals": decimals,
             "supply": int(info.get("supply") or 0) / 10 ** decimals,
             "program": str(value.get("owner") or ""),
+            "traps": token_traps(info),   # Token-2022 extensions that exist to trap buyers
         }
 
     async def token_balance(self, owner: str, mint: str) -> float | None:
@@ -269,9 +280,15 @@ class SolanaRPC:
         return None
 
     def health(self) -> dict:
+        from .config import provider_name   # names only: an RPC link carries its key
+        now = time.monotonic()
         return {"calls": self.calls, "errors": self.errors, "rate_limited": self.rate_limited,
                 "last_error": self.last_error, "last_ok_ts": int(self.last_ok_ts),
-                "primary_down": self.primary_down()}
+                "primary_down": self.primary_down(),
+                "nodes": [{"name": provider_name(u), "calls": n["calls"], "errors": n["errors"],
+                           "avg_ms": round(n["ms"] / n["ok"]) if n["ok"] else None,
+                           "resting_s": max(0, int(self._cool_until.get(u, 0) - now))}
+                          for u, n in self.node.items()]}
 
     def primary_down(self) -> bool:
         """Every private RPC is cooling off after failures (monthly limit used up, outage): calls go to the slow
@@ -286,7 +303,8 @@ class SolanaRPC:
 class WalletStream:
     """Subscribes to every watched wallet with `logsSubscribe` and reports new signatures.
 
-    `on_signature(wallet, signature)` must be quick (it should just enqueue work).
+    `on_signature(wallet, signature, logs=[...])` must be quick (it should just enqueue work). The logs come with
+    every notification: pump.fun buys are read straight from them (no RPC call).
     """
 
     def __init__(self, url: str, on_signature, fallback: str = ""):
@@ -297,6 +315,7 @@ class WalletStream:
         self._fallback_until = 0.0
         self.on_signature = on_signature
         self.wanted: set[str] = set()
+        self._stale: list[int] = []
         self.sub_of: dict[str, int] = {}
         self.wallet_of: dict[int, str] = {}
         self.pending: dict[int, tuple[str, str]] = {}
@@ -307,9 +326,23 @@ class WalletStream:
         self._ws = None
         self._req = 0
         self._changed = asyncio.Event()
+        self._last_sync = 0.0
+        self.notifications = 0
+        self.failed_subs = 0
+        self.resubscribed = 0
+        self.connected_since = 0.0
 
     def set_wallets(self, wallets) -> None:
         self.wanted = {w for w in wallets if w}
+        self._changed.set()
+
+    def resubscribe(self, wallet: str) -> None:
+        """Drop and redo one wallet's subscription (a provider can silently stop delivering one)."""
+        sub = self.sub_of.pop(wallet, None)
+        if sub is not None:
+            self.wallet_of.pop(sub, None)
+            self._stale.append(sub)
+        self.resubscribed += 1
         self._changed.set()
 
     @property
@@ -323,8 +356,13 @@ class WalletStream:
 
     async def _sync(self) -> None:
         self._changed.clear()
+        self._last_sync = time.time()
+        while self._stale:
+            await self._send("logsUnsubscribe", [self._stale.pop()], "", "unsub")
         in_flight = {w for w, kind in self.pending.values() if kind == "sub"}
-        for wallet in sorted(self.wanted - set(self.sub_of) - in_flight):
+        for i, wallet in enumerate(sorted(self.wanted - set(self.sub_of) - in_flight)):
+            if i:
+                await asyncio.sleep(0.05)   # paced: a burst of 50 subscriptions can trip a provider's limit
             await self._send("logsSubscribe", [{"mentions": [wallet]}, {"commitment": "confirmed"}], wallet, "sub")
         for wallet in list(set(self.sub_of) - self.wanted):
             sub = self.sub_of.pop(wallet)
@@ -339,7 +377,8 @@ class WalletStream:
                 if isinstance(msg.get("result"), int):
                     self.sub_of[wallet] = msg["result"]
                     self.wallet_of[msg["result"]] = wallet
-                else:
+                else:   # retried by the 30-second check in run()
+                    self.failed_subs += 1
                     self.last_error = f"subscribe {wallet[:6]}: {msg.get('error')}"
             return
         if msg.get("method") != "logsNotification":
@@ -349,7 +388,8 @@ class WalletStream:
         value = ((params.get("result") or {}).get("value") or {})
         signature = str(value.get("signature") or "")
         if wallet and signature and value.get("err") is None:
-            await self.on_signature(wallet, signature)
+            self.notifications += 1
+            await self.on_signature(wallet, signature, logs=value.get("logs"))
 
     async def run(self) -> None:
         import websockets  # imported here so the rest of the package works without it in tests
@@ -371,9 +411,11 @@ class WalletStream:
                     self.sub_of.clear(); self.wallet_of.clear(); self.pending.clear()
                     backoff = 1.0
                     await self._sync()
+                    self.connected_since = time.time()
                     while True:
-                        if self._changed.is_set():
-                            await self._sync()
+                        missing = self.wanted - set(self.sub_of) - {w for w, k in self.pending.values() if k == "sub"}
+                        if self._changed.is_set() or (missing and time.time() - self._last_sync >= 30):
+                            await self._sync()   # new wallets, or subscriptions that failed: (re)subscribe
                         try:
                             raw = await asyncio.wait_for(ws.recv(), timeout=2)
                         except asyncio.TimeoutError:

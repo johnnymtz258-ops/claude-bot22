@@ -126,7 +126,7 @@ class RunnerScanner:
                               (mint, now - COOLDOWN, now - 6 * 3600)):
                 continue  # already alerted as a runner today, or a whale alert already covered it
             safety = await self.market.safety(mint)
-            if not safety.get("ok") or safety.get("freeze_authority"):
+            if not safety.get("ok") or safety.get("freeze_authority") or safety.get("traps"):
                 continue
             community = await self.engine.community.check(mint, info)
             if community["label"] != "STRONG":

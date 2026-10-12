@@ -140,12 +140,19 @@ class Database:
         for name, kind in (("chain", "text default 'solana'"), ("pair", "text default ''")):
             if name not in coin_cols:
                 self.conn.execute(f"alter table coins add column {name} {kind}")
+        token_cols = {r[1] for r in self.conn.execute("pragma table_info(tokens)")}
+        if "traps" not in token_cols:   # Token-2022 traps: re-check every coin's mint account once
+            self.conn.execute("alter table tokens add column traps text default ''")
+            self.conn.execute("update tokens set safety_ts=0")
         paper_cols = {r[1] for r in self.conn.execute("pragma table_info(paper_trades)")}
         if "interrupted" not in paper_cols:   # open while the bot was asleep/stopped: unmanaged, kept out of strategy stats
             self.conn.execute("alter table paper_trades add column interrupted integer default 0")
+        if "entry_liq" not in paper_cols:     # pool liquidity at entry: a pull of most of it is an emergency exit
+            self.conn.execute("alter table paper_trades add column entry_liq real default 0")
         live_cols = {r[1] for r in self.conn.execute("pragma table_info(live_trades)")}
         for name, kind in (("retries", "integer default 0"), ("retry_ts", "integer default 0"),
-                           ("rent_back", "real default 0")):
+                           ("rent_back", "real default 0"), ("pending_sig", "text default ''"),
+                           ("route", "text default ''"), ("size_note", "text default ''")):
             if name not in live_cols:
                 self.conn.execute(f"alter table live_trades add column {name} {kind}")
         # what the coin did after the alert (peak and price 1h / 6h / 24h later), and whether it was a scalp
@@ -198,6 +205,8 @@ class Database:
         self.run("delete from processed where ts<?", (cutoff,))
         self.run("delete from price_marks where ts<?", (int(time.time()) - 45 * 86400,))
         self.run("delete from tg_messages where ts<?", (int(time.time()) - 60 * 86400,))
+        if self.scalar("select 1 from sqlite_master where name='hype_watch'"):
+            self.run("delete from hype_watch where hot_ts<?", (int(time.time()) - 7 * 86400,))
 
 
 def backup(db_path: Path | str, folder: Path | str, keep: int = 3, day: str | None = None) -> Path | None:

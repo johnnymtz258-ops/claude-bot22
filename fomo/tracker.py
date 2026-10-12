@@ -433,12 +433,21 @@ class Tracker:
             self._protect_pending.pop(mint, None)
 
     # -- backup polling ------------------------------------------------------------------------
+    def poll_every(self) -> int:
+        """Seconds between backup checks: every 15s while the live stream is down or missing trades, else 45s
+        (120s on the slow public RPC)."""
+        stream = getattr(self, "stream", None)
+        now = time.time()
+        misses = sum(1 for v in getattr(self.engine, "stream_misses", {}).values() for t in v if now - t < 1800)
+        if stream is not None and (not stream.connected or misses):
+            return 15
+        return 45 if self.cfg.fast_rpc else 120
+
     async def run_poller(self) -> None:
         """Re-check each wallet's latest signatures so a dropped WebSocket never loses a trade."""
-        every = 45 if self.cfg.fast_rpc else 120
         await self.backfill_my_wallets()
         while True:
-            await asyncio.sleep(every)
+            await asyncio.sleep(self.poll_every())
             try:
                 await self.poll_once()
             except Exception as exc:

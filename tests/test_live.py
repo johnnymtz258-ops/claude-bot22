@@ -68,13 +68,18 @@ def live_bot(bot, dry=True, sol=1.0):
         quotes.append(params)
         amount = int(params["amount"])
         if params["inputMint"] == WSOL:   # buying: 1 SOL buys 1e12 raw tokens
-            chain.pending = lambda s, t: (s - amount / 1e9 - 0.001, t + amount * 1000)
-            return {"outAmount": str(amount * 1000), "priceImpactPct": "0.02"}
-        chain.pending = lambda s, t: (s + amount / 1000 / 1e9 * 2.0, t - amount)   # selling at 2x
-        return {"outAmount": str(int(amount / 1000 * 2.0)), "priceImpactPct": "0.01"}
+            return {"outAmount": str(amount * 1000), "priceImpactPct": "0.02", "inputMint": WSOL, "inAmount": str(amount)}
+        return {"outAmount": str(int(amount / 1000 * 2.0)), "priceImpactPct": "0.01",   # selling at 2x
+                "inputMint": params["inputMint"], "inAmount": str(amount)}
 
     async def jup_post(path, body):
         assert body["userPublicKey"] == str(kp.pubkey()) and body["wrapAndUnwrapSol"]
+        q = body["quoteResponse"]          # the swap that gets signed is the quote that was passed in
+        amount = int(q["inAmount"])
+        if q["inputMint"] == WSOL:
+            chain.pending = lambda s, t: (s - amount / 1e9 - 0.001, t + amount * 1000)
+        else:
+            chain.pending = lambda s, t: (s + amount / 1000 / 1e9 * 2.0, t - amount)
         return {"swapTransaction": tx_b64}
 
     live._jup_get, live._jup_post = jup_get, jup_post
@@ -293,3 +298,125 @@ def test_calibration_waits_for_enough_real_trades_and_respects_your_setting(bot)
     bot.db.set_meta("live_calibrated", "")
     bot.db.set_meta("tune:manual:PAPER_SLIPPAGE_PCT", now - 3600)
     assert bot.run(live.calibrate(now)) == "" and bot.cfg.get("PAPER_SLIPPAGE_PCT") == 3
+
+
+def test_a_honeypot_or_taxed_coin_is_skipped_before_any_money_moves(bot):
+    live, chain, quotes, kp, msg = live_bot(bot, dry=False)
+    real_get = live._jup_get
+
+    async def honeypot(path, params):
+        q = await real_get(path, params)
+        if params["inputMint"] != WSOL:                       # selling back returns 60%: a 40% "tax"
+            q["outAmount"] = str(int(int(params["amount"]) / 1000 * 0.6))
+        return q
+    live._jup_get = honeypot
+    alert(bot)
+    assert chain.sent == [] and bot.db.scalar("select count(*) from live_trades") == 0
+    assert any("honeypot" in m["text"] and "skipped" in m["text"] for m in bot.notes.sent)
+    assert live.fail_streak == 0                               # a protective skip isn't a failure
+
+
+def test_a_token_trap_is_never_bought(bot):
+    live, chain, quotes, kp, msg = live_bot(bot, dry=False)
+
+    async def mint_info(mint):
+        return {"traps": ["permanent delegate: the dev can take tokens out of any wallet"]}
+    chain.mint_info = mint_info
+    alert(bot)
+    assert chain.sent == [] and any("permanent delegate" in m["text"] for m in bot.notes.sent)
+
+
+def test_three_failed_transactions_halt_new_buys_but_not_selling(bot):
+    import time as _t
+    live, chain, quotes, kp, msg = live_bot(bot, dry=False)
+
+    async def broken(q):
+        raise RuntimeError("blockhash not found")
+    live.execute = broken
+    for _ in range(3):
+        bot.run(live.buy(1, MINT, "CASHED", "w"))
+    assert live.fail_streak == 3 and live.halt_reason()
+    assert any("new buys halted" in m["text"] for m in bot.notes.sent)
+    sent_before = len(quotes)
+    assert bot.run(live.buy(2, MINT, "CASHED", "w")) == 0 and len(quotes) == sent_before   # halted: not even quoted
+    live.halted_until = _t.time() - 1
+    assert live.halt_reason() == ""
+
+
+def test_size_follows_signal_strength_losing_streaks_and_pool_depth(bot):
+    import time as _t
+    live, chain, quotes, kp, msg = live_bot(bot)
+
+    class Mkt:
+        async def sol_usd(self):
+            return 150.0
+    live.market = Mkt()
+    deep = {"liquidity_usd": 500_000}
+    assert bot.run(live.size_for(deep, {"grade": "A"}))[0] == 0.075
+    assert bot.run(live.size_for(deep, {"grade": "C"}))[0] == 0.025
+    assert bot.run(live.size_for(deep, {"score": 80}))[0] == 0.075
+    assert bot.run(live.size_for({"liquidity_usd": 600}, {"grade": "A"}))[0] == 0.04       # 1% of a $600 pool
+    now = int(_t.time())
+    for i in range(3):
+        bot.db.run("""insert into live_trades(paper_id,mint,symbol,open_ts,sol_in,sol_out,status,close_ts,dry)
+            values(0,?,?,?,0.1,0.05,'closed',?,0)""", (f"L{i}" + "1" * 40, "L", now - 100, now - i))
+    size, why = bot.run(live.size_for(deep, {"grade": "B"}))
+    assert size == 0.025 and "3 losses in a row" in why
+    assert 300 <= bot.run(live.buy_slippage({"liquidity_usd": 500_000, "change_m5": 2}, 0.05)) < 500
+    assert bot.run(live.buy_slippage({"liquidity_usd": 5_000, "change_m5": 30}, 0.05)) == 1110   # thin pool, moving fast
+    assert bot.run(live.buy_slippage({"liquidity_usd": 5_000, "change_m5": 60}, 0.05)) == 1500   # capped
+
+
+def test_swaps_go_through_jito_and_fall_back_to_the_rpc(bot):
+    live, chain, quotes, kp, msg = live_bot(bot, dry=False)
+    jito = []
+
+    async def accept(signed):
+        jito.append(signed)
+        chain.sent.append(signed)                        # Jito lands it
+        if chain.pending:
+            chain.sol, chain.tokens = chain.pending(chain.sol, chain.tokens)
+            chain.pending = None
+        return True
+    live._send_jito = accept
+    alert(bot)
+    t = bot.db.row("select * from live_trades")
+    assert len(jito) == 1 and t["status"] == "open" and live.exec["jito"] == 1 and live.exec["rpc"] == 0
+    assert "slippage" in t["size_note"] and "sell-back check" in t["size_note"]
+
+
+def test_a_sell_that_lands_late_is_booked_not_sold_twice(bot):
+    import time as _t
+    live, chain, quotes, kp, msg = live_bot(bot, dry=False)
+    alert(bot)
+    t = bot.db.row("select * from live_trades")
+    bot.db.run("update live_trades set pending_sig=? where id=?", (f"latesig|{int(_t.time())}", t["id"]))
+    chain.tokens = 0                                          # it did go through
+    wallet = str(kp.pubkey())
+
+    async def transaction(sig, **kw):
+        return {"transaction": {"message": {"accountKeys": [{"pubkey": wallet}]}},
+                "meta": {"preBalances": [1_000_000_000], "postBalances": [1_090_000_000]}}
+    chain.transaction = transaction
+    bot.db.run("update paper_trades set status='closed'")
+    done = bot.run(live.reconcile())
+    t = bot.db.row("select * from live_trades")
+    assert done and t["status"] == "closed" and abs(t["sol_out"] - 0.09) < 1e-9 and t["pending_sig"] == ""
+    assert not any("sendTransaction" in str(x) for x in chain.sent[1:])   # not sold a second time
+
+
+def test_a_position_sold_outside_the_bot_is_closed_by_the_balance_check(bot):
+    live, chain, quotes, kp, msg = live_bot(bot, dry=False)
+    alert(bot)
+    chain.tokens = 0
+    bot.db.run("update live_trades set open_ts=open_ts-600")
+    assert bot.run(live.audit_balances()) == [MINT]
+    assert bot.db.row("select status from live_trades")["status"] == "closed"
+    assert bot.run(live.audit_balances()) == []                     # every 5 minutes, not every tick
+
+
+def test_a_rugged_coin_with_no_route_does_not_trip_the_kill_switch(bot):
+    live, chain, quotes, kp, msg = live_bot(bot, dry=False)
+    for _ in range(5):
+        bot.run(live._fail("RUG", MINT, "sell failed: no route: {'error': 'no liquidity'}"))
+    assert live.fail_streak == 0 and not live.halt_reason()

@@ -27,6 +27,7 @@ class PaperTrader:
         self.cfg = cfg
         self.notify = notify
         self._pending: dict[int, tuple[float, int]] = {}
+        self._liq_seen: dict[int, int] = {}   # trade id -> first reading with the pool mostly emptied
         self._last_equity = 0
         self.live = None   # LiveTrader: makes these trades for real when LIVE_TRADING is on
 
@@ -88,7 +89,7 @@ class PaperTrader:
 
     # -- trading --------------------------------------------------------------------------------
     def open(self, *, alert_id: int, mint: str, whale: str, symbol: str, price: float, mc_usd: float,
-             ts: int | None = None) -> int:
+             ts: int | None = None, info: dict | None = None, signal: dict | None = None) -> int:
         if not (self.cfg.flag("PAPER_TRADING") or self.cfg.flag("LIVE_TRADING")) or price <= 0:
             return 0
         if self.db.scalar("select 1 from paper_trades where mint=? and status='open'", (mint,)):
@@ -100,11 +101,11 @@ class PaperTrader:
             return 0
         entry = price * (1 + self._slip())
         trade_id = self.db.insert("""insert into paper_trades(alert_id,mint,whale,symbol,open_ts,entry_price,entry_mc,
-                size_usd,tokens,remaining,proceeds_usd,peak_x,last_price,status) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                size_usd,tokens,remaining,proceeds_usd,peak_x,last_price,status,entry_liq) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                                   (alert_id, mint, whale, symbol, int(ts or time.time()), entry, mc_usd, size,
-                                   size / entry, 1.0, 0.0, 1.0, price, "open"))
+                                   size / entry, 1.0, 0.0, 1.0, price, "open", num((info or {}).get("liquidity_usd"))))
         if trade_id and self.live and self.live.ready()[0]:
-            self.live.spawn(self.live.buy(trade_id, mint, symbol, whale))
+            self.live.spawn(self.live.buy(trade_id, mint, symbol, whale, info=info, signal=signal))
         return trade_id
 
     def _accept(self, t: dict, price: float, now: int) -> float | None:
@@ -122,6 +123,16 @@ class PaperTrader:
             return None
         self._pending.pop(t["id"], None)
         return price
+
+    def _liquidity_pulled(self, t: dict, liq: float, now: int) -> bool:
+        """Most of the pool's liquidity gone since entry (RUG_LIQUIDITY_DROP_PCT, seen on two readings 10s+ apart):
+        the dev or insiders are pulling it — the price can't be sold into much longer."""
+        entry = num(t.get("entry_liq"))
+        if entry <= 0 or liq < 0 or liq > entry * (1 - self.cfg.get("RUG_LIQUIDITY_DROP_PCT") / 100):
+            self._liq_seen.pop(t["id"], None)
+            return False
+        first = self._liq_seen.setdefault(t["id"], now)
+        return now - first >= 10
 
     def _whale_half_out(self, whale: str, mint: str, since: int) -> bool:
         peak = num(self.db.scalar("select max(max(holding_after), max(pre_holding)) from swaps where wallet=? and mint=?",
@@ -148,6 +159,11 @@ class PaperTrader:
                     done.append(self._sell(t, 1.0, num(t["last_price"]), "time limit (no fresh price)", now))
                 continue
             x = price / t["entry_price"]
+            liq = num((infos.get(t["mint"]) or {}).get("liquidity_usd"), -1)
+            if self._liquidity_pulled(t, liq, now):   # the pool is being emptied: out now, whatever the plan says
+                done.append(self._sell(t, 1.0, price, f"liquidity pulled ({liq:,.0f}$ left of {num(t['entry_liq']):,.0f}$)",
+                                       now))
+                continue
             peak = max(num(t["peak_x"]), x)
             self.db.run("update paper_trades set last_price=?, peak_x=? where id=?", (price, peak, t["id"]))
             t.update(last_price=price, peak_x=peak)
@@ -160,8 +176,9 @@ class PaperTrader:
                 why = "hype take-profit" if t["whale"] == "hype" else "whale's playbook"
                 done.append(self._sell(t, 1.0, price, f"all out at {plan['tp']:g}x ({why})", now))
                 continue
-            if not t["half_taken"] and x >= 2:
-                done.append(self._sell(t, 0.5, price, "half at 2x", now))
+            half_at = plan["tp"] if plan and plan["half"] else 2.0
+            if not t["half_taken"] and x >= half_at:
+                done.append(self._sell(t, 0.5, price, f"half at {half_at:g}x", now))
                 t = self.db.row("select * from paper_trades where id=?", (t["id"],))
             stop_pct = (1 - plan["stop"]) * 100 if plan else stop
             reason = ""
@@ -192,7 +209,7 @@ class PaperTrader:
         remaining = t["remaining"] - part
         proceeds = num(t["proceeds_usd"]) + got
         closed = remaining <= 1e-9
-        self.db.run("""update paper_trades set remaining=?, proceeds_usd=?, half_taken=case when ?='half at 2x'
+        self.db.run("""update paper_trades set remaining=?, proceeds_usd=?, half_taken=case when ? like 'half at %'
                 then 1 else half_taken end, status=?, close_ts=?, close_reason=? where id=?""",
                     (0.0 if closed else remaining, proceeds, reason, "closed" if closed else "open",
                      now if closed else None, reason if closed else t.get("close_reason"), t["id"]))

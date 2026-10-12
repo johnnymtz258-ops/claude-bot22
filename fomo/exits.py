@@ -61,6 +61,9 @@ class MarkRecorder:
                 return False
         self._pending.pop(mint, None)
         self._last[mint] = (ts, price)
+        if len(self._last) > 20_000:   # 24/7: forget coins not priced for a day
+            self._last = {m: v for m, v in self._last.items() if ts - v[0] < 86400}
+            self._pending = {}
         self.db.run("insert or ignore into price_marks(mint,ts,price) values(?,?,?)", (mint, ts, price))
         return True
 

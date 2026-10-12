@@ -23,6 +23,7 @@ buyers vs sellers, volume surge, your whales, paid boosts, socials, trending, ea
 lines up gets a 🔥 HYPE alert; a whale buy into a hyped coin is marked 🔥🐋 WHALE + HYPE.
 /hype — hottest coins right now and which signals have worked
 /tuning — what each hype rule blocked, what those coins would have made, what the filter changed by itself
+/health — live stream, RPC providers, how fast whale trades arrive, live-trading safety state
 
 <b>🎯 Insider framework</b>
 New wallets the scanner finds are 👀 watched for 7 days before their buys are sent (they graduate early once their
@@ -447,6 +448,11 @@ class Commands:
                              f"{r['hit_2x'] * 100:.0f}% hit 2x")
         await self.say("\n".join(lines))
 
+    async def cmd_health(self, args, reply_mint):
+        """/health — is every part of the bot working, and how fast whale trades reach it."""
+        from .health import format_health, report
+        await self.say(format_health(report(self.app)))
+
     async def cmd_tuning(self, args, reply_mint):
         """/tuning — what each hype-filter rule blocked, what those coins would have made, and what the tuner changed."""
         tuner = getattr(self.app, "tuner", None) or getattr(getattr(self.app, "hype", None), "tuner", None)
@@ -695,7 +701,7 @@ class Commands:
 
 
 ALIASES = {"start": "help", "pos": "positions", "p": "positions", "w": "whales", "track": "add", "follow": "add",
-           "unfollow": "remove", "buy": "bought", "sell": "sold", "health": "status", "leaderboard": "whales"}
+           "unfollow": "remove", "buy": "bought", "sell": "sold", "leaderboard": "whales"}
 
 
 def _is_number_word(text: str) -> bool:
@@ -750,6 +756,19 @@ def format_live(app) -> str:
              f"{s['realized_sol']:+.3f} SOL · today {s['today_sol']:+.3f} SOL"]
     for t in s["open"]:
         lines.append(f"• ${esc(t['symbol'])} open · {t['sol_in']:.3f} SOL in")
+    if s.get("halt") and s["enabled"]:
+        lines.append(f"⏸ New buys halted: {esc(s['halt'])} (selling and the exit plan keep running)")
+    ex = s.get("exec") or {}
+    lines.append(f"Protection: {'Jito private send + ' if ex.get('jito_on') else ''}sell-back check (max "
+                 f"{cfg.get('LIVE_MAX_ROUNDTRIP_LOSS_PCT'):g}% loss) · token-trap check · slippage "
+                 f"{cfg.get('LIVE_MIN_SLIPPAGE_BPS') / 100:g}–{cfg.get('LIVE_SLIPPAGE_BPS') / 100:g}% by price impact · "
+                 f"halts after {cfg.get('LIVE_KILL_FAILS'):g} failed transactions"
+                 + (" · size by signal & pool" if cfg.flag("LIVE_DYNAMIC_SIZE") else ""))
+    if ex.get("sent") or ex.get("skipped"):
+        lines.append(f"Since start: {ex.get('sent', 0)} sent ({ex.get('jito', 0)} via Jito, {ex.get('rpc', 0)} via RPC, "
+                     f"{ex.get('rpc_fallback', 0)} Jito→RPC fallbacks) · {ex.get('failed', 0)} failed · "
+                     f"{ex.get('skipped', 0)} skipped by the checks"
+                     + (f" · confirms in ~{ex['median_confirm_s']}s" if ex.get("median_confirm_s") else ""))
     f = s.get("fills") or {}
     if f.get("n"):
         lines.append(f"📏 Real vs paper on the same {f['n']} trades: real {f['live_avg']:.2f}x · paper {f['paper_avg']:.2f}x a trade"

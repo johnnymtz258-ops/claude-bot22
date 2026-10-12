@@ -98,6 +98,10 @@ class Dashboard:
                       "last_scan": hype.last_scan,
                       "tuning": hype.tuner.current() if getattr(hype, "tuner", None) else {}})
 
+    async def health(self, request):
+        from .health import report
+        return _json(report(self.app))
+
     async def hot(self, request):
         hours = num(request.query.get("hours"), 24) or 24
         return _json(reports.hot_coins(self.app.db, self.app.market, self.app.whales, hours=hours))
@@ -440,6 +444,7 @@ class Dashboard:
         r.add_post("/api/find", self.start_find)
         r.add_post("/api/analyze", self.analyze)
         r.add_post("/api/settings", self.set_setting)
+        r.add_get("/api/health", self.health)
         r.add_post("/api/trades", self.trade)
         r.add_post("/api/trades/undo", self.undo)
 
@@ -469,7 +474,7 @@ GROUP_ORDER = ["Automation", "Live trading (real money)", "Which buys get sent",
 _GROUPS = {
     "Automation": ("HYPE_", "AUTO_", "WHALE_PICKS", "PAPER_", "LIVE_CARD", "RUNNER_ALERTS"),
     "Live trading (real money)": ("LIVE_TRADING", "LIVE_DRY_RUN", "LIVE_TRADE", "LIVE_MAX", "LIVE_DAILY", "LIVE_SLIP",
-                                  "LIVE_PRIO"),
+                                  "LIVE_PRIO", "LIVE_MIN_SLIP", "LIVE_JITO", "LIVE_DYNAMIC", "LIVE_KILL", "LIVE_PROFITABLE"),
     "Which buys get sent": ("MIN_WHALE", "MAX_ENTRY", "CONFIRM_", "LATE_CHASE", "DUMP_GATE", "BLOCK_FLIPPERS",
                             "MIN_COPY", "MICRO_", "HIDE_", "QUIET_", "ALERTS_ENABLED", "REPEAT_", "CONFLUENCE",
                             "MIN_SELL", "REBUY", "RUNNER_"),

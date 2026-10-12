@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import time
 
-from .util import num
+from .util import num, prune_cache
 
 _B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 _P = 2 ** 255 - 19
@@ -111,4 +111,5 @@ class CommunityChecker:
             supply = mcap / price if price > 0 and mcap > 0 else num((await self.market.safety(mint)).get("supply"))
             conc = await holder_concentration(self.rpc, mint, supply)
             self._cache[mint] = (time.time(), conc)
+            prune_cache(self._cache, max_items=5000)
         return assess(info, conc)

@@ -132,7 +132,7 @@ def test_the_exit_plan_moves_to_what_worked_on_your_alerts(bot):
     seen(bot, "alert", 25, run_then_fade, mc=200_000)
     notes = bot.run(bot.tuner.tick(NOW))
     assert (bot.cfg.get("HYPE_TP_PCT"), bot.cfg.get("HYPE_STOP_PCT"), bot.cfg.get("HYPE_MAX_MINUTES")) == (50, 25, 60)
-    assert any("Hype exit plan: +50%" in n for n in notes)
+    assert any("Hype exit plan: all out at +50%" in n for n in notes)
 
 
 def test_tuning_command_and_dashboard(chat):
@@ -178,3 +178,36 @@ def test_past_hype_alerts_are_brought_in_once_if_todays_filter_would_send_them(b
     assert keys == ["rush,pressure", "whales,rush"]                            # zone and profile coins weren't
     bot.db.set_meta("tune:backfilled", "0")
     assert t.backfill() == 0                                                   # never twice
+
+
+def test_a_half_and_ride_ladder_wins_when_coins_keep_running():
+    from fomo.tuner import replay
+    path = [(60 * j, 1 + 0.02 * j) for j in range(1, 121)]          # +2%/min for two hours: up to 3.4x
+    all_out = replay(1.0, path, 0, {"tp": 1.3, "stop": 0.75, "hold": 7200}, 0.0)
+    ladder = replay(1.0, path, 0, {"tp": 1.3, "stop": 0.75, "hold": 7200, "half": True}, 0.0)
+    assert abs(all_out - 1.3) < 0.03 and ladder > 2.0                 # half at 1.3x, the rest rode to the time limit
+    dump = [(60, 1.32), (120, 1.0), (180, 0.7)]
+    assert abs(replay(1.0, dump, 0, {"tp": 1.3, "stop": 0.75, "hold": 7200, "half": True}, 0.0) - (0.66 + 0.35)) < 0.01
+
+
+def test_paper_hype_ladder_and_liquidity_pull_exit(bot):
+    from tests.test_hype import hot_pair
+    bot.cfg.set("PAPER_SLIPPAGE_PCT", "0")
+    bot.cfg.set("HYPE_HALF_AT_TP", "1")
+    bot.market.set_pair(**hot_pair())
+    bot.market.boosted = [MINT]
+    bot.run(bot.runners.tick(NOW))
+    assert "sell half at +30%" in bot.notes.sent[0]["text"] and "ride the rest" in bot.notes.sent[0]["text"]
+    bot.market.set_pair(**hot_pair(price=0.0002 * 1.35, mc=270_000))
+    bot.market._cache.clear()
+    bot.run(bot.tracker.tick(NOW + 60))
+    t = bot.db.row("select * from paper_trades where whale='hype'")
+    assert t["status"] == "open" and t["half_taken"] == 1 and t["remaining"] == 0.5
+    bot.market.set_pair(**hot_pair(price=0.0002 * 1.4, mc=280_000, liq=6_000))      # pool emptied 85%
+    bot.market._cache.clear()
+    bot.run(bot.tracker.tick(NOW + 120))
+    assert bot.db.row("select status from paper_trades where whale='hype'")["status"] == "open"   # seen once: wait
+    bot.market._cache.clear()
+    bot.run(bot.tracker.tick(NOW + 135))
+    t = bot.db.row("select * from paper_trades where whale='hype'")
+    assert t["status"] == "closed" and "liquidity pulled" in t["close_reason"]

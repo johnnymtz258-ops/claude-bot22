@@ -63,6 +63,8 @@ class App:
             cfg.set("RUNNER_ALERTS", 0)
             self.db.set_meta("runner_alerts_off_v22_4", "1")
         self.stream: WalletStream | None = None
+        self.crashes: dict[str, int] = {}
+        self.last_crash = ""
         self.find_task: asyncio.Task | None = None
         self.last_find: dict | None = None
         self._jobs: set = set()
@@ -177,6 +179,12 @@ class App:
             hour = int(self.cfg.get("DAILY_SUMMARY_HOUR"))
             now = datetime.now()
             today = now.strftime("%Y-%m-%d")
+            if int(time.time()) % 600 < 60:   # every 10 minutes: a health snapshot (it goes into /export)
+                try:
+                    from .health import report
+                    self.db.set_meta("health:last", json.dumps(report(self)))
+                except Exception as exc:
+                    print(f"[health] {type(exc).__name__}: {exc}")
             if self.db.get_meta("backup_day") != today:
                 self.db.set_meta("backup_day", today)
                 try:   # a daily copy of the database (in its own thread: a big file must not stall alerts)
@@ -218,6 +226,8 @@ class App:
                                     self.refresh_wallets, self.engine.profiles)
             self.commands = Commands(self)
             self.stream = WalletStream(cfg.rpc_wss, self.engine.enqueue, cfg.rpc_wss_fallback)
+            self.engine.on_stream_miss = self.stream.resubscribe
+            self.tracker.stream = self.stream
 
             imported = import_legacy_whales(self.db, cfg.legacy_db_path,
                                             [config.ROOT / "tracked_wallets.json",
@@ -229,18 +239,40 @@ class App:
             self.live = LiveTrader(cfg, self.db, self.rpc, session, self.notify)
             self.engine.paper.live = self.live
             self.live.set_setting = lambda name, value: self.set_setting(name, value, by_tuner=True)
+            self.live.market, self.live.stream = self.market, self.stream
             self.card = LiveCard(self)
-            tasks = [self.stream.run(), self.tracker.run_prices(), self.tracker.run_poller(),
-                     self.telegram_loop(), self.daily_loop(), self.runners.run(),
-                     self.scout.run(), self.card.run()]
-            tasks += [self.engine.worker() for _ in range(3)]
+            loops = [("wallet stream", self.stream.run), ("prices", self.tracker.run_prices),
+                     ("backup poller", self.tracker.run_poller), ("telegram", self.telegram_loop),
+                     ("daily", self.daily_loop), ("hype scanner", self.runners.run), ("whale scanner", self.scout.run),
+                     ("live card", self.card.run)]
+            loops += [(f"worker {i + 1}", self.engine.worker) for i in range(3)]
             if cfg.dashboard_enabled:
                 from .dashboard import start_dashboard
-                tasks.append(start_dashboard(self))
+                loops.append(("dashboard", lambda: start_dashboard(self)))
             await self.market.sol_usd()
             self.coins_moved = await self.move_coin_whales()
             await self.notify(self.startup_text(imported), silent=True, kind="INFO")
-            await asyncio.gather(*tasks)
+            await asyncio.gather(*(self.supervise(name, start) for name, start in loops))
+
+    async def supervise(self, name: str, start) -> None:
+        """Run one of the bot's loops for good: if it crashes, note it and restart it (2s, 4s … at most a minute
+        apart) — one bad response can't take the whole bot down, and the rest keeps running meanwhile."""
+        delay = 2.0
+        while True:
+            began = time.monotonic()
+            try:
+                await start()
+                return   # finished on purpose (e.g. the dashboard couldn't get its port)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.crashes[name] = self.crashes.get(name, 0) + 1
+                self.last_crash = f"{time.strftime('%H:%M:%S')} {name}: {type(exc).__name__}: {str(exc)[:120]}"
+                print(f"[{name}] crashed ({type(exc).__name__}: {exc}) — restarting in {delay:.0f}s")
+                if time.monotonic() - began > 300:
+                    delay = 2.0   # it had been running fine for a while: restart quickly
+                await asyncio.sleep(delay)
+                delay = min(60.0, delay * 2)
 
     def startup_text(self, imported: int) -> str:
         n = self.whales.count()

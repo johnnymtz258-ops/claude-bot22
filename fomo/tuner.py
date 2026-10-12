@@ -10,7 +10,7 @@ Every 6 hours, over the last 14 days:
     loosened one step. If the coins it then lets in lose (12+ trades, avg -3% or worse), it's tightened back.
   • the score threshold moves 5 points down when coins just under it would have won, and 5 up when alerts just over
     it lose.
-  • the exit plan (take-profit / stop / time limit) is replayed on every hype alert under 36 combinations; one that
+  • the exit plan (take-profit / stop / time limit) is replayed on every hype alert under 72 combinations (all-out or half-and-ride); one that
     beats the current plan by 2%+ a trade (not counting the single best coin) replaces it.
 Each setting changes at most once every 3 days and stays inside fixed bounds, and every change comes with a Telegram
 note saying why. A setting you change yourself (/set or the dashboard) is left alone for 7 days.
@@ -39,9 +39,10 @@ EXIT_GAIN = 0.02
 MAX_ALERTS, MAX_SHADOWS = 400, 1500
 LATE_STEP, LATE_MAX = 50, 300
 SCORE_STEP, SCORE_MIN, SCORE_MAX = 5, 35, 60
-GRID = [(tp, stop, minutes) for tp in (20, 30, 50, 80) for stop in (15, 25, 35) for minutes in (30, 60, 120)]
+GRID = [(tp, stop, minutes, half) for tp in (20, 30, 50, 80) for stop in (15, 25, 35) for minutes in (30, 60, 120)
+        for half in (0, 1)]   # half=1: sell half at the take-profit, ride the rest (a two-step ladder)
 SETTINGS = {"zone": ("HYPE_AVOID_MC_HI",), "profile": ("HYPE_SKIP_PROFILE",), "late": ("HYPE_MAX_H1_PCT",),
-            "score": ("HYPE_MIN_SCORE",), "exit": ("HYPE_TP_PCT", "HYPE_STOP_PCT", "HYPE_MAX_MINUTES")}
+            "score": ("HYPE_MIN_SCORE",), "exit": ("HYPE_TP_PCT", "HYPE_STOP_PCT", "HYPE_MAX_MINUTES", "HYPE_HALF_AT_TP")}
 
 
 def replay(price: float, path: list[tuple[int, float]], start: int, plan: dict, slip: float,
@@ -50,15 +51,19 @@ def replay(price: float, path: list[tuple[int, float]], start: int, plan: dict, 
     recorded price path — what the paper autopilot does each tick. None when the path doesn't cover the trade."""
     if price <= 0 or not path:
         return None
-    entry, peak = price * (1 + slip), 1.0
+    entry, peak, got, left = price * (1 + slip), 1.0, 0.0, 1.0
+    half = plan.get("half")
     for ts, p in path:
         x = p / entry
         peak = max(peak, x)
-        if (ts - start >= plan["hold"] or x >= plan["tp"] or x <= plan["stop"]
+        if half and left == 1.0 and x >= plan["tp"]:
+            got, left = 0.5 * x * (1 - slip), 0.5          # the ladder's first step: half at the take-profit
+            continue
+        if (ts - start >= plan["hold"] or (not half and x >= plan["tp"]) or x <= plan["stop"]
                 or (peak >= 1.5 and x <= peak * (1 - trail_pct / 100))):
-            return x * (1 - slip)
+            return got + left * x * (1 - slip)
     if path[-1][0] - start >= plan["hold"] - 120:
-        return path[-1][1] / entry * (1 - slip)
+        return got + left * path[-1][1] / entry * (1 - slip)
     return None
 
 
@@ -250,27 +255,28 @@ class Tuner:
         return self.report
 
     def _exit_grid(self, alerts: list[dict], plan: dict) -> dict:
-        combos = [(tp, stop, minutes, {"tp": 1 + tp / 100, "stop": 1 - stop / 100, "hold": minutes * 60})
-                  for tp, stop, minutes in GRID]
-        runs = {c[:3]: self._run(alerts, c[3]) for c in combos}
+        combos = [(tp, stop, minutes, half, {"tp": 1 + tp / 100, "stop": 1 - stop / 100, "hold": minutes * 60,
+                                             "half": bool(half)})
+                  for tp, stop, minutes, half in GRID]
+        runs = {c[:4]: self._run(alerts, c[4]) for c in combos}
         current = self._run(alerts, plan)
         keep = [i for i in range(len(alerts)) if current[i] is not None and all(v[i] is not None for v in runs.values())]
         cur = stats([current[i] for i in keep])
         now_tp, now_stop, now_min = self.cfg.get("HYPE_TP_PCT"), self.cfg.get("HYPE_STOP_PCT"), self.cfg.get("HYPE_MAX_MINUTES")
+        now_half = int(self.cfg.flag("HYPE_HALF_AT_TP"))
         best_key, best, best_rank = None, None, None
         for key, res in runs.items():
             s = stats([res[i] for i in keep])
             # equal results: the combination closest to today's plan wins (no change for nothing)
             rank = (round(s["avg_wo_best"], 4), -(abs(key[0] - now_tp) / 10 + abs(key[1] - now_stop) / 10
-                                                  + abs(key[2] - now_min) / 30))
+                                                  + abs(key[2] - now_min) / 30 + abs(key[3] - now_half)))
             if best_rank is None or rank > best_rank:
                 best_key, best, best_rank = key, s, rank
-        out = {"current": {**cur, "tp": now_tp, "stop": now_stop, "minutes": now_min}, "change": None}
+        out = {"current": {**cur, "tp": now_tp, "stop": now_stop, "minutes": now_min, "half": now_half}, "change": None}
         if best_key:
-            out["best"] = {**best, "tp": best_key[0], "stop": best_key[1], "minutes": best_key[2]}
+            out["best"] = {**best, "tp": best_key[0], "stop": best_key[1], "minutes": best_key[2], "half": best_key[3]}
             if (cur["n"] >= EXIT_MIN_N and best["avg_wo_best"] >= cur["avg_wo_best"] + EXIT_GAIN
-                    and best["avg"] >= cur["avg"]
-                    and best_key != (out["current"]["tp"], out["current"]["stop"], out["current"]["minutes"])):
+                    and best["avg"] >= cur["avg"] and best_key != (now_tp, now_stop, now_min, now_half)):
                 out["change"] = best_key
         return out
 
@@ -333,13 +339,16 @@ class Tuner:
             notes.append(text)
         ex = report["exit"]
         if ex.get("change") and self._free("exit", now)[0]:
-            tp, stop, minutes = ex["change"]
+            tp, stop, minutes, half = ex["change"]
             cur, best = ex["current"], ex["best"]
-            for name, value in (("HYPE_TP_PCT", tp), ("HYPE_STOP_PCT", stop), ("HYPE_MAX_MINUTES", minutes)):
-                self._apply(name, value, now)
-            notes.append(f"Hype exit plan: +{tp}% take-profit, -{stop}% stop, out after {minutes} min — on your last "
-                         f"{best['n']} hype alerts it averaged {_pct(best['avg'])} a trade ({best['won'] * 100:.0f}% won) vs "
-                         f"{_pct(cur['avg'])} for +{cur['tp']:.0f}% / -{cur['stop']:.0f}% / {cur['minutes']:.0f} min.")
+            for name, value in (("HYPE_TP_PCT", tp), ("HYPE_STOP_PCT", stop), ("HYPE_MAX_MINUTES", minutes),
+                                ("HYPE_HALF_AT_TP", half)):
+                if self.cfg.get(name) != value:
+                    self._apply(name, value, now)
+            notes.append(f"Hype exit plan: {'half' if half else 'all'} out at +{tp}%{', ride the rest' if half else ''}, "
+                         f"-{stop}% stop, out after {minutes} min — on your last {best['n']} hype alerts it averaged "
+                         f"{_pct(best['avg'])} a trade ({best['won'] * 100:.0f}% won) vs {_pct(cur['avg'])} for "
+                         f"{'half' if cur['half'] else 'all'} at +{cur['tp']:.0f}% / -{cur['stop']:.0f}% / {cur['minutes']:.0f} min.")
         for text in notes:
             self._note(text, now)
         if notes:
@@ -388,10 +397,10 @@ def format_report(report: dict) -> str:
     ex = report.get("exit") or {}
     cur, best = ex.get("current") or {}, ex.get("best") or {}
     if cur.get("n"):
-        lines.append(f"\n<b>Exit plan</b> +{cur['tp']:.0f}% / -{cur['stop']:.0f}% / {cur['minutes']:.0f} min: "
+        lines.append(f"\n<b>Exit plan</b> {'half' if cur.get('half') else 'all'} at +{cur['tp']:.0f}% / -{cur['stop']:.0f}% / {cur['minutes']:.0f} min: "
                      f"{_pct(cur['avg'])} a trade on {cur['n']} alerts")
         if best:
-            lines.append(f"Best of 36 tried: +{best['tp']}% / -{best['stop']}% / {best['minutes']} min: {_pct(best['avg'])} "
+            lines.append(f"Best of {len(GRID)} tried: {'half' if best.get('half') else 'all'} at +{best['tp']}% / -{best['stop']}% / {best['minutes']} min: {_pct(best['avg'])} "
                          f"({_pct(best['avg_wo_best'])} without its best coin)")
     log = report.get("log") or []
     if log:

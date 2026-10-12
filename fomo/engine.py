@@ -11,7 +11,7 @@ import statistics
 import time
 
 from .hype import LABELS as hype_labels, alertable
-from . import playbook, copies, exits, messages, profiles
+from . import playbook, copies, exits, messages, profiles, pumplog
 from .coins import CoinTracker
 from .community import CommunityChecker
 from .market import IGNORED_MINTS
@@ -33,7 +33,7 @@ THIN_LIQUIDITY_USD = 5_000
 def grade_buy(*, status: str, stats: dict, confluence: int, chase: float | None, safety: dict,
               rug: dict | None, liquidity: float, usd_value: float, usual_usd: float,
               late_chase_pct: float, community: dict | None = None, after: dict | None = None,
-              micro: dict | None = None, profile: dict | None = None) -> tuple[str, list]:
+              micro: dict | None = None, profile: dict | None = None, jup: dict | None = None) -> tuple[str, list]:
     """Grade a whale buy. Returns ('A'|'B'|'C'|'SKIP', [(ok, reason), ...]).
 
     ok=True is a plus, ok=False a warning, ok=None neutral information.
@@ -75,6 +75,8 @@ def grade_buy(*, status: str, stats: dict, confluence: int, chase: float | None,
     if safety.get("ok"):
         if safety.get("freeze_authority"):
             return "SKIP", [(False, "Freeze authority is live — the dev can freeze your tokens")]
+        if safety.get("traps"):
+            return "SKIP", [(False, "Token trap: " + "; ".join(safety["traps"]))]
         if safety.get("mint_authority"):
             points -= 1
             reasons.append((False, "Mint authority is live — supply can be inflated"))
@@ -83,6 +85,23 @@ def grade_buy(*, status: str, stats: dict, confluence: int, chase: float | None,
     if rug and rug.get("danger"):
         points -= 1
         reasons.append((False, "RugCheck: " + ", ".join(rug["danger"][:2])))
+    on_curve = bool(micro and micro.get("curve"))
+    if rug and rug.get("lp_locked") is not None and rug["lp_locked"] < 50 and not on_curve and liquidity > 0:
+        points -= 1
+        reasons.append((False, f"Only {rug['lp_locked']:.0f}% of the liquidity is locked or burned — it can be pulled"))
+    jup = jup or {}
+    org = num(jup.get("organic"), -1)
+    if 0 <= org < 25:
+        points -= 1
+        reasons.append((False, f"🤖 Jupiter organic score {org:.0f}: the trading is mostly bots / wash trading"))
+    elif org >= 60:
+        reasons.append((True, f"🌿 Jupiter organic score {org:.0f}: real buyers"))
+    if num(jup.get("dev_mints")) >= 20:
+        points -= 1
+        reasons.append((False, f"🏭 The dev has minted {int(num(jup.get('dev_mints')))} coins — a launch factory"))
+    if jup.get("sus"):
+        points -= 1
+        reasons.append((False, "⚠️ Jupiter's audit flags this token as suspicious"))
     if 0 <= liquidity < THIN_LIQUIDITY_USD:
         points -= 1
         reasons.append((False, f"Thin liquidity (${liquidity:,.0f}) — big slippage"))
@@ -141,34 +160,39 @@ class Engine:
         self.last_event_ts = 0
         self.events = 0
         self.last_error = ""
+        self.fast_buys = 0          # pump.fun buys read straight from the stream's logs (no RPC round trip)
+        self.stream_misses: dict[str, list[int]] = {}   # wallet -> times the poller found a trade the stream missed
+        self.on_stream_miss = None  # set by the app: resubscribe a wallet the stream keeps missing
 
     # -- intake ------------------------------------------------------------------------------
     def watched_wallets(self) -> list[str]:
         return [w["address"] for w in self.whales.active()] + sorted(self.my_wallets)
 
-    async def enqueue(self, wallet: str, signature: str, source: str = "stream") -> None:
+    async def enqueue(self, wallet: str, signature: str, source: str = "stream", logs: list | None = None) -> None:
         key = (signature, wallet)
         if key in self._inflight or self.db.scalar("select 1 from processed where sig=? and wallet=?", key):
             return
         self._inflight.add(key)
         try:
-            self.queue.put_nowait((wallet, signature, source))
+            self.queue.put_nowait((wallet, signature, source, logs))
         except asyncio.QueueFull:
             self._inflight.discard(key)
             self.last_error = "event queue full"
 
     async def worker(self) -> None:
         while True:
-            wallet, signature, source = await self.queue.get()
+            wallet, signature, source, logs = await self.queue.get()
             try:
-                await self.process(wallet, signature, source)
+                await self.process(wallet, signature, source, logs)
             except Exception as exc:  # one bad transaction must never stop the bot
                 self.last_error = f"{time.strftime('%H:%M:%S')} {type(exc).__name__}: {exc}"
             finally:
                 self._inflight.discard((signature, wallet))
                 self.queue.task_done()
 
-    async def process(self, wallet: str, signature: str, source: str = "stream") -> None:
+    async def process(self, wallet: str, signature: str, source: str = "stream", logs: list | None = None) -> None:
+        if logs and wallet not in self.my_wallets and await self._fast_pump_buy(wallet, signature, source, logs):
+            return
         try:
             tx = await self.rpc.transaction(signature, priority=True)
         except TypeError:   # an RPC without priorities
@@ -182,9 +206,33 @@ class Engine:
         sol_usd = await self.market.sol_usd()
         swap = parse_swap(tx, wallet, sol_usd)
         if swap and swap["mint"] not in IGNORED_MINTS:
+            if source == "poll" and wallet not in self.my_wallets and time.time() - (swap["ts"] or 0) < 900:
+                self._stream_missed(wallet)
             await self.handle_swap(wallet, signature, swap, source, sol_usd)
         elif not swap and source == "stream" and wallet not in self.whales.my_wallets:
             await self._follow_funding(wallet, tx)
+
+    async def _fast_pump_buy(self, wallet: str, signature: str, source: str, logs: list) -> bool:
+        """A whale's pump.fun buy, read from the logs the stream delivered: handled at once, no RPC call."""
+        event = pumplog.buy_by(logs, wallet)
+        if not event or event["mint"] in IGNORED_MINTS or event["token_raw"] <= 0:
+            return False
+        prior = num(self.db.scalar("""select holding_after from swaps where wallet=? and mint=?
+            order by ts desc, id desc limit 1""", (wallet, event["mint"])))
+        self.db.run("insert or ignore into processed(sig,wallet,ts) values(?,?,?)", (signature, wallet, int(time.time())))
+        self.fast_buys += 1
+        sol_usd = await self.market.sol_usd()
+        await self.handle_swap(wallet, signature, pumplog.as_swap(event, prior), source, sol_usd)
+        return True
+
+    def _stream_missed(self, wallet: str) -> None:
+        """The poller found a fresh trade the stream never delivered: twice in 30 minutes → resubscribe that wallet."""
+        now = int(time.time())
+        recent = [t for t in self.stream_misses.get(wallet, []) if now - t < 1800] + [now]
+        self.stream_misses[wallet] = recent[-10:]
+        if len(recent) >= 2 and self.on_stream_miss:
+            self.on_stream_miss(wallet)
+            self.stream_misses[wallet] = []
 
     async def _follow_funding(self, wallet: str, tx: dict) -> list[str]:
         """Funding → buyer → split → rotate: when a whale sends real size to a FRESH wallet, that wallet is often where
@@ -302,6 +350,16 @@ class Engine:
         finally:
             self._buying.discard(key)
 
+    async def _jupiter(self, mint: str) -> dict:
+        """Jupiter's organic score / dev audit for one coin (never holds an alert up more than 4 seconds)."""
+        jup = getattr(self.market, "jup", None)
+        if not jup:
+            return {}
+        try:
+            return (await asyncio.wait_for(jup.stats([mint]), 4)).get(mint) or {}
+        except Exception:
+            return {}
+
     async def _supply(self, mint: str, info: dict) -> float:
         price, mcap = num(info.get("price_usd")), num(info.get("mc_usd"))
         if price > 0 and mcap > 0:
@@ -385,8 +443,9 @@ class Engine:
         whale = self.whales.get(wallet) or {}
         stats = self.whales.stats(wallet)
         info = c["info"]
-        safety, rug, community = await asyncio.gather(self.market.safety(mint), self._rugcheck(mint),
-                                                      self.community.check(mint, info))
+        # every pre-alert check at once: chain (authorities, Token-2022 traps), RugCheck, holders, Jupiter's view
+        safety, rug, community, jup = await asyncio.gather(self.market.safety(mint), self._rugcheck(mint),
+                                                           self.community.check(mint, info), self._jupiter(mint))
         now_price = num(info.get("price_usd"))
         chase = (now_price / c["price"] - 1) * 100 if now_price > 0 and c["price"] > 0 else None
         confluence = self._confluence(mint, c["ts"])
@@ -401,7 +460,7 @@ class Engine:
             status=stats["status"], stats=stats, confluence=len(confluence), chase=chase, safety=safety, rug=rug,
             liquidity=num(info.get("liquidity_usd"), -1), usd_value=c["usd_value"],
             usual_usd=self.whales.usual_buy_usd(wallet), late_chase_pct=self.cfg.get("LATE_CHASE_PCT"),
-            community=community, after=after, micro=micro, profile=self.profiles.get(wallet))
+            community=community, after=after, micro=micro, profile=self.profiles.get(wallet), jup=jup)
         if not swap["new_position"] and grade != "SKIP":
             reasons.append((None, "Adding to a bag they already held"))
         pb = (self.profiles.get(wallet) or {}).get("playbook") or {}
@@ -516,7 +575,8 @@ class Engine:
         self.db.run("update alerts set tg_message_id=?, status=? where id=?",
                     (msg_id or 0, "silent" if silent else "sent", alert_id))
         self.paper.open(alert_id=alert_id, mint=mint, whale=wallet, symbol=info.get("symbol") or self.market.symbol(mint),
-                        price=entry_price, mc_usd=num(info.get("mc_usd")) or c["trade_mc"])
+                        price=entry_price, mc_usd=num(info.get("mc_usd")) or c["trade_mc"], info=info,
+                        signal={"grade": grade, "score": hyped["score"] if hyped else None})
 
     def runner_setup(self, c: dict, info: dict) -> bool:
         """The pattern behind most 10x coins in your data: a whale buying $1K+ of a coin that just left the pump.fun

@@ -85,7 +85,7 @@ def test_wallet_stream_subscribes_and_reports_signatures():
         srv = TestServer(app)
         await srv.start_server()
 
-        async def on_sig(wallet, sig):
+        async def on_sig(wallet, sig, logs=None):
             got.append((wallet, sig))
 
         stream = WalletStream(str(srv.make_url("/")).replace("http", "ws"), on_sig)
@@ -412,3 +412,50 @@ def test_background_calls_use_the_second_free_rpc_and_refused_or_used_up_nodes_a
             await srv.close()
 
     asyncio.run(run())
+
+
+def test_a_crashing_loop_is_restarted_and_the_rest_keeps_running():
+    from fomo.app import App
+    app = App.__new__(App)
+    app.crashes, app.last_crash = {}, ""
+    runs = {"n": 0}
+
+    async def flaky():
+        runs["n"] += 1
+        if runs["n"] < 3:
+            raise ValueError("bad answer from somewhere")
+
+    async def go():
+        import fomo.app as appmod
+        real_sleep = asyncio.sleep
+
+        async def fast_sleep(s):
+            await real_sleep(0)
+        appmod.asyncio.sleep = fast_sleep
+        try:
+            await asyncio.wait_for(app.supervise("hype scanner", flaky), 2)
+        finally:
+            appmod.asyncio.sleep = real_sleep
+    asyncio.run(go())
+    assert runs["n"] == 3 and app.crashes == {"hype scanner": 2} and "ValueError" in app.last_crash
+
+
+def test_caches_stay_bounded_on_a_long_run():
+    import time as _t
+    from fomo.util import prune_cache
+    now = _t.time()
+    cache = {f"old{i}": (now - 7200, i) for i in range(15)} | {f"new{i}": (now, i) for i in range(10)}
+    prune_cache(cache, max_items=20)
+    assert len(cache) == 10 and all(k.startswith("new") for k in cache)
+    cache = {f"k{i}": (now - i, i) for i in range(30)}
+    prune_cache(cache, max_items=20)
+    assert len(cache) == 15 and "k0" in cache and "k29" not in cache
+
+
+def test_health_report_shows_latency_by_source_and_no_secrets(chat):
+    import time as _t
+    now = int(_t.time())
+    chat.db.run("""insert into swaps(sig,wallet,is_me,ts,seen_ts,side,mint,source) values
+        ('h1','W',0,?,?,'BUY','M','stream'), ('h2','W',0,?,?,'BUY','M2','poll')""", (now - 100, now - 98, now - 900, now - 60))
+    out = chat.say("/health")
+    assert "Health" in out and "straight from the stream" in out and "api-key" not in out

@@ -156,9 +156,11 @@ def alertable(result: dict, cfg) -> bool:
 def exit_plan(cfg) -> dict:
     """Hype coins spike and fade: on your 32 hype alerts, selling everything at +30% with a -25% stop and a 1-hour
     limit averaged 1.04x (56% won); holding for 2x averaged 0.92x (28% won)."""
-    return {"label": f"sell it all at +{cfg.get('HYPE_TP_PCT'):.0f}%, stop -{cfg.get('HYPE_STOP_PCT'):.0f}%, "
+    half = cfg.flag("HYPE_HALF_AT_TP")
+    return {"label": f"sell {'half' if half else 'it all'} at +{cfg.get('HYPE_TP_PCT'):.0f}%"
+                     f"{', ride the rest' if half else ''}, stop -{cfg.get('HYPE_STOP_PCT'):.0f}%, "
                      f"out after {cfg.get('HYPE_MAX_MINUTES'):.0f} min",
-            "tp": 1 + cfg.get("HYPE_TP_PCT") / 100, "half": False, "stop": 1 - cfg.get("HYPE_STOP_PCT") / 100,
+            "tp": 1 + cfg.get("HYPE_TP_PCT") / 100, "half": half, "stop": 1 - cfg.get("HYPE_STOP_PCT") / 100,
             "hold": int(cfg.get("HYPE_MAX_MINUTES") * 60), "follow_whale": False}
 
 
@@ -282,7 +284,7 @@ class HypeScanner:
 
     async def _unsafe(self, mint: str, info: dict) -> bool:
         safety = await self.market.safety(mint)
-        if not safety.get("ok", True) or safety.get("freeze_authority"):
+        if not safety.get("ok", True) or safety.get("freeze_authority") or safety.get("traps"):
             return True
         community = await self.engine.community.check(mint, info)
         return community.get("label") == "WHALE-ONLY"
@@ -309,7 +311,8 @@ class HypeScanner:
         copies.open_copy(self.db, whale=HYPE, mint=mint, swap_id=0, alert_id=alert_id, price=num(info["price_usd"]),
                          mc_usd=num(info.get("mc_usd")), whale_price=num(info["price_usd"]), ts=now)
         self.engine.paper.open(alert_id=alert_id, mint=mint, whale=HYPE, symbol=info.get("symbol") or mint[:4],
-                               price=num(info["price_usd"]), mc_usd=num(info.get("mc_usd")), ts=now)
+                               price=num(info["price_usd"]), mc_usd=num(info.get("mc_usd")), ts=now, info=info,
+                               signal={"score": r["score"]})
         if self.tuner:
             self.tuner.seen_alert(mint, info, r, alert_id, now)
         if not self.cfg.flag("ALERTS_ENABLED"):
@@ -330,7 +333,8 @@ class HypeScanner:
         lines.append("💼 Size: shot — keep it small; on a coin this young, devs, insiders and bots are ahead of you"
                      if age_d < 14 else "💼 Size: normal — the coin survived its first weeks")
         plan = exit_plan(self.cfg)
-        lines.append(f"🎯 Plan: sell it all at +{self.cfg.get('HYPE_TP_PCT'):.0f}% ({mc(mcap * plan['tp'])} MC) · "
+        lines.append(f"🎯 Plan: sell {'half' if plan['half'] else 'it all'} at +{self.cfg.get('HYPE_TP_PCT'):.0f}% "
+                     f"({mc(mcap * plan['tp'])} MC){', ride the rest' if plan['half'] else ''} · "
                      f"stop -{self.cfg.get('HYPE_STOP_PCT'):.0f}% ({mc(mcap * plan['stop'])} MC) · out after "
                      f"{self.cfg.get('HYPE_MAX_MINUTES'):.0f} min. Hype coins spike and fade — take the first move.")
         lines.append(f"<code>{mint}</code>")

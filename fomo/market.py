@@ -11,7 +11,7 @@ import time
 import aiohttp
 
 from .swaps import USDC, USDT, WSOL
-from .util import is_address, num
+from .util import is_address, num, prune_cache
 
 DEX = "https://api.dexscreener.com"
 RUGCHECK = "https://api.rugcheck.xyz/v1/tokens/{}/report/summary"
@@ -211,6 +211,7 @@ class Market:
                     self._cache[mint] = (now, info)
                     out[mint] = info
                     self._save(info)
+        prune_cache(self._cache)
         return out
 
     async def token(self, mint: str, max_age: float = 20.0) -> dict:
@@ -284,19 +285,22 @@ class Market:
     # -- safety -----------------------------------------------------------------------------
     async def safety(self, mint: str, max_age: float = 6 * 3600) -> dict:
         """Mint/freeze authority + supply straight from the chain (cached)."""
-        row = self.db.row("select mint_authority,freeze_authority,decimals,supply,safety_ts from tokens where mint=?",
-                          (mint,))
+        row = self.db.row("""select mint_authority,freeze_authority,decimals,supply,safety_ts,traps from tokens
+            where mint=?""", (mint,))
         if row and row["safety_ts"] and time.time() - row["safety_ts"] < max_age:
             return {"mint_authority": row["mint_authority"] or "", "freeze_authority": row["freeze_authority"] or "",
-                    "decimals": row["decimals"], "supply": row["supply"], "ok": True}
+                    "decimals": row["decimals"], "supply": row["supply"], "ok": True,
+                    "traps": [t for t in str(row["traps"] or "").split(" | ") if t]}
         info = await self.rpc.mint_info(mint)
         if not info:
             return {"ok": False}
-        self.db.run("""insert into tokens(mint,mint_authority,freeze_authority,decimals,supply,safety_ts)
-            values(?,?,?,?,?,?) on conflict(mint) do update set mint_authority=excluded.mint_authority,
+        info.setdefault("traps", [])
+        self.db.run("""insert into tokens(mint,mint_authority,freeze_authority,decimals,supply,safety_ts,traps)
+            values(?,?,?,?,?,?,?) on conflict(mint) do update set mint_authority=excluded.mint_authority,
             freeze_authority=excluded.freeze_authority,decimals=excluded.decimals,supply=excluded.supply,
-            safety_ts=excluded.safety_ts""",
-            (mint, info["mint_authority"], info["freeze_authority"], info["decimals"], info["supply"], int(time.time())))
+            safety_ts=excluded.safety_ts,traps=excluded.traps""",
+            (mint, info["mint_authority"], info["freeze_authority"], info["decimals"], info["supply"], int(time.time()),
+             " | ".join(info["traps"])))
         return {**info, "ok": True}
 
     async def rugcheck(self, mint: str, timeout: float = 3.0) -> dict | None:
@@ -314,7 +318,9 @@ class Market:
             name = str(risk.get("name") or "risk")[:60]
             (danger if str(risk.get("level") or "").lower() in {"danger", "critical"} else warn).append(name)
         score = data.get("score_normalised")
-        return {"score": num(score, -1) if score is not None else -1, "danger": danger, "warn": warn}
+        lp = data.get("lpLockedPct")
+        return {"score": num(score, -1) if score is not None else -1, "danger": danger, "warn": warn,
+                "lp_locked": num(lp) if lp is not None else None}
 
     # -- lookups --------------------------------------------------------------------------
     async def resolve_mint(self, address: str) -> str:

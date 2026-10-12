@@ -366,8 +366,9 @@
         td(r.change ? `${r.change[0]}: ${r.change[1]} → ${r.change[3]}` : "keep", "wrap"))),
       "Nothing measured yet.");
     const ex = t.exit || {}, cur = ex.current || {}, best = ex.best || {};
-    $("tune-exit").textContent = cur.n ? `Exit plan +${cur.tp}% / -${cur.stop}% / ${cur.minutes} min: ${x(cur.avg)} a trade on ${cur.n} alerts`
-      + (best.n ? ` · best of 36 tried: +${best.tp}% / -${best.stop}% / ${best.minutes} min at ${x(best.avg)} (${x(best.avg_wo_best)} without its best coin)` : "") : "";
+    const plan = (p) => `${p.half ? "half" : "all"} at +${p.tp}% / -${p.stop}% / ${p.minutes} min`;
+    $("tune-exit").textContent = cur.n ? `Exit plan ${plan(cur)}: ${x(cur.avg)} a trade on ${cur.n} alerts`
+      + (best.n ? ` · best of 72 tried: ${plan(best)} at ${x(best.avg)} (${x(best.avg_wo_best)} without its best coin)` : "") : "";
     $("tune-log").replaceChildren(...(t.log || []).slice(-6).reverse().map((l) => el("li", {},
       el("b", {}, `${new Date(l.ts * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })} `), l.text)));
   }
@@ -689,6 +690,22 @@
     const h = [["Version", o.version], ["Up for", dur(o.uptime)], ["Wallet stream", o.stream.connected ? `connected (${o.stream.subs} subscriptions)` : `reconnecting ${o.stream.error || ""}`],
       ["RPC", `${o.helius ? (o.rpc.primary_down ? `⚠️ ${o.rpc_name} not answering — using the public RPC` : o.rpc_name) : "public (slow)"} · ${o.rpc.calls.toLocaleString()} calls · ${(o.rpc.errors - o.rpc.rate_limited).toLocaleString()} failed · ${o.rpc.rate_limited.toLocaleString()} slowed down by the plan's rate limit (retried)`],
       ["Your wallet", o.wallet_synced ? "synced" : "not synced (MY_WALLETS in .env)"], ["Recent issues", o.errors.join(" | ") || "none"]];
+    try {
+      const hl = await api("/api/health");
+      const lat = (hl.ingest || {}).latency_24h || {};
+      const secs = (s) => s === null || s === undefined ? "—" : s < 120 ? `${s}s` : s < 7200 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`;
+      if (lat.n) h.push(["Whale trades (24h)", `${lat.n} · ${Math.round(lat.stream_share * 100)}% straight from the stream · `
+        + Object.entries(lat.sources).map(([k, v]) => `${k}: typical ${secs(v.p50)}, slowest 10% ${secs(v.p90)}`).join(" · ")
+        + (lat.late_alerts ? ` · ${lat.late_alerts} reached the bot 10+ min late` : "")]);
+      const st = hl.stream || {};
+      h.push(["Stream detail", `${st.subscribed}/${st.wanted} wallets · ${st.notifications} pushed · ${st.reconnects} reconnects · ${st.resubscribed} resubscribed · ${hl.ingest.fast_buys} pump.fun buys read from logs`]);
+      for (const n of (hl.rpc || {}).nodes || []) h.push([`RPC · ${n.name}`, `${n.calls.toLocaleString()} calls · ${n.errors.toLocaleString()} errors · ${n.avg_ms ?? "—"} ms · ${n.resting_s ? `resting ${secs(n.resting_s)}` : "ok"}`]);
+      const lv = hl.live || {};
+      if (lv.enabled) h.push(["Live autopilot", lv.halt ? `⏸ buys halted — ${lv.halt}` : `ready · ${lv.exec.sent} sent · ${lv.exec.failed} failed · ${lv.exec.skipped} skipped by the checks`]);
+      const crashes = Object.entries((hl.loops || {}).crashes || {});
+      h.push(["Crashes", crashes.length ? crashes.map(([k, v]) => `${k} ×${v}`).join(", ") + ` (restarted) — ${hl.loops.last_crash}` : "none since start"]);
+      h.push(["Memory", `${hl.memory_mb} MB peak`]);
+    } catch (e) { /* older bot or no health yet: the basic rows still show */ }
     $("health").replaceChildren(...h.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]));
   }
 

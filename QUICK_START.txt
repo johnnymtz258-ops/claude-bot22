@@ -30,7 +30,10 @@ LIVE AUTOPILOT (real money, optional — off by default)
   1. New wallet just for this, funded with only what you can lose.
   2. Add its private key to .env:  TRADING_PRIVATE_KEY=...   (never share .env or the folder after this!)
   3. Restart, then /live on. It starts in DRY RUN (nothing is sent). /live dry off to trade for real.
-  0.05 SOL a trade, max 3 open, stops for the day at -0.3 SOL. /live off stops buying.
+  0.05 SOL a trade (more on strong signals, less on weak ones or after losses, never over 1% of the pool),
+  max 3 open, stops for the day at -0.3 SOL. /live off stops buying.
+  Before every real buy: no token traps, and selling straight back must not lose more than 12% (honeypot check).
+  Swaps go privately through Jito (no sandwich bots). 3 failed transactions in a row halt new buys for 30 minutes.
 
 RUN IT 24/7 FOR FREE (recommended — the Mac sleeping cost money in your data)
   Follow SERVER_SETUP.txt: a free Oracle Cloud server, then double-click send_to_server.command.
@@ -38,6 +41,12 @@ RUN IT 24/7 FOR FREE (recommended — the Mac sleeping cost money in your data)
 
 START BY ITSELF (on the Mac)
   Double-click install_autostart.command once (remove_autostart.command undoes it).
+
+FREE RPC (Helius ran out?)
+  FREE_RPC.txt: paste a free Chainstack link into SOLANA_RPC_HTTP= in .env and restart. 3 minutes.
+
+HEALTH
+  /health — live stream, each RPC provider, how fast whale trades arrive, live-trading safety state, crashes.
 
 SELF-TUNING
   The hype filter measures what each of its rules blocked and loosens or tightens itself every 6h (you get a

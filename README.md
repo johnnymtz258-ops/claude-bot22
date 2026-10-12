@@ -117,6 +117,16 @@ on boot and restarts by itself. `open_server_dashboard.command` opens its dashbo
 `server_log.command` shows its log. Telegram works exactly as before. If two copies ever run at once (the Mac and the
 server), the bot says so and holds real-money buys until one stops.
 
+## Production hardening (v28)
+
+`HARDENING.md` is the full audit — ingestion, scam filters, execution & MEV, sizing & risk, exits, concurrency and
+telemetry — with what your data showed and what changed. In short: pump.fun whale buys are read straight from the
+stream's logs (no RPC wait); the stream re-subscribes wallets it misses; Token-2022 trap coins are blocked; every real
+buy first checks it can be sold back (honeypot / tax); swaps go privately through Jito with slippage sized to the
+trade; buys halt after repeated failures or when the RPC/stream is down; size follows signal strength and pool depth;
+a pulled pool triggers an emergency exit; late-landing sells are booked instead of sold twice; crashed loops restart
+by themselves; `/health` shows all of it.
+
 ## Free RPC instead of Helius
 
 Paste any provider's link into `SOLANA_RPC_HTTP=` (Chainstack, Alchemy, dRPC, QuickNode…) — `FREE_RPC.txt` shows the
