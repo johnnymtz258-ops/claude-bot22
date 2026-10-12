@@ -96,9 +96,8 @@ def grade_buy(*, status: str, stats: dict, confluence: int, chase: float | None,
         reasons.append((False, f"🤖 Jupiter organic score {org:.0f}: the trading is mostly bots / wash trading"))
     elif org >= 60:
         reasons.append((True, f"🌿 Jupiter organic score {org:.0f}: real buyers"))
-    if num(jup.get("dev_mints")) >= 20:
-        points -= 1
-        reasons.append((False, f"🏭 The dev has minted {int(num(jup.get('dev_mints')))} coins — a launch factory"))
+    if num(jup.get("dev_mints")) >= 20:   # common on trending coins: shown, not scored
+        reasons.append((None, f"🏭 The dev has minted {int(num(jup.get('dev_mints')))} coins"))
     if jup.get("sus"):
         points -= 1
         reasons.append((False, "⚠️ Jupiter's audit flags this token as suspicious"))

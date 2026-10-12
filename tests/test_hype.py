@@ -146,8 +146,8 @@ def test_jupiter_tells_real_buyers_from_bots(bot):
     assert "organic" in [k for k, _, _ in r["signals"]]
     bots = score({**info_of(), "jup": {"organic": 9, "organic_buyers_1h": 2, "dev_mints": 35, "sus": True}}, bot.cfg, now=NOW)
     keys = dict((k, p) for k, _, p in bots["signals"])
-    assert keys["bots"] < 0 and keys["serialdev"] < 0 and keys["sus"] < 0
-    assert bots["score"] < r["score"] - 50 and not alertable(bots, bot.cfg)
+    assert keys["bots"] < 0 and keys["serialdev"] == 0 and keys["sus"] < 0
+    assert bots["score"] < r["score"] - 40 and not alertable(bots, bot.cfg)
 
 
 def test_jupiter_trending_coins_are_scanned_and_its_data_reaches_the_alert(bot):

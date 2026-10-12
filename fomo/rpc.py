@@ -14,17 +14,29 @@ from .util import is_address
 # JSON-RPC errors that mean "this node can't answer right now" -> try the next node / later.
 RETRYABLE_RPC_CODES = {-32004, -32005, -32007, -32009, -32014, -32016, 429}
 
+# "the plan's monthly allowance is used up": rest that node 30 minutes. Only clear words — "upgrade your plan" alone
+# is also how providers word a requests-per-second limit (Chainstack's free plan: 3 a second), which is NOT this.
+OUT_OF_CREDITS = ("max usage", "quota", "monthly", "credits", "out of credit", "exhausted", "insufficient balance",
+                  "payment required", "request units")
+RATE_WORDS = ("rate limit", "too many requests", "rps", "requests per second", "per second")
+# a node that won't serve one METHOD on its plan (Chainstack's free plan disables getTokenLargestAccounts and
+# getTokenAccountsByOwner): that method goes to the other nodes for an hour, everything else stays on it
+METHOD_REFUSED = ("method not found", "not available", "not allowed", "not supported on", "paid plan", "upgrade your plan",
+                  "dedicated node", "is disabled", "not enabled", "unsupported method")
+KEY_REFUSED = ("api key", "apikey", "api-key", "unauthorized", "invalid key", "authenticat", "token is invalid")
 
-OUT_OF_CREDITS = ("max usage", "credit", "quota", "exceeded your", "upgrade your", "capacity limit", "monthly",
-                  "limit exceeded", "payment required", "insufficient balance", "plan limit")
-# the same, said inside a normal JSON-RPC answer (stricter: "credit" alone also appears in transaction errors)
-QUOTA_WORDS = ("max usage", "quota", "exceeded your", "upgrade your", "capacity limit", "monthly", "limit exceeded",
-               "payment required", "plan limit", "out of credits", "credits exhausted", "insufficient credits")
-REFUSED = (401, 402, 403)   # key wrong, plan used up or not allowed: that node can't help — rest it, use the next
+# requests a second each provider's FREE plan allows, as seconds between calls (just under the limit; a node that
+# still answers 429 is slowed further by itself, without slowing the others)
+PROVIDER_GAP = (("chainstack", 0.36), ("helius", 0.11), ("alchemy", 0.06), ("drpc", 0.1), ("quiknode", 0.07),
+                ("ankr", 0.1), ("syndica", 0.1), ("mainnet-beta.solana.com", 0.15))
 
 
 def _public(url: str) -> bool:
     return "api.mainnet-beta.solana.com" in url
+
+
+def _gap_for(url: str) -> float:
+    return next((gap for key, gap in PROVIDER_GAP if key in url), 0.0)
 
 
 class SolanaRPC:
@@ -33,12 +45,16 @@ class SolanaRPC:
         self.session = session
         self.urls = list(urls)
         self.sem = asyncio.Semaphore(max(1, concurrency))
-        self.min_interval = max(0.0, min_interval)
+        self.min_interval = max(0.0, min_interval)     # all nodes together
         self.base_interval = self.min_interval
         self._next = 0.0
         self._pace_lock = asyncio.Lock()
         self._cool_until = {u: 0.0 for u in self.urls}
-        self.node = {u: {"calls": 0, "errors": 0, "ms": 0.0, "ok": 0} for u in self.urls}   # telemetry per RPC
+        self.base_gap = {u: _gap_for(u) for u in self.urls}   # each node on its own
+        self.gap = dict(self.base_gap)
+        self._node_next = {u: 0.0 for u in self.urls}
+        self._blocked: dict[tuple[str, str], float] = {}     # (node, method) -> refused until
+        self.node = {u: {"calls": 0, "errors": 0, "ms": 0.0, "ok": 0, "last": ""} for u in self.urls}   # telemetry
         self.calls = 0
         self.errors = 0
         self.rate_limited = 0
@@ -50,23 +66,27 @@ class SolanaRPC:
         self.tx_version = 1   # newest transaction format the bot asks for; adjusted if a node names another
         self.last_ok_ts = 0.0
 
-    def _ordered(self, background: bool = False) -> list[str]:
+    def _ordered(self, background: bool = False, method: str = "") -> list[str]:
         now = time.monotonic()
-        healthy = [u for u in self.urls if self._cool_until[u] <= now]
+        usable = [u for u in self.urls if self._blocked.get((u, method), 0) <= now]
+        healthy = [u for u in usable if self._cool_until[u] <= now]
         private = [u for u in healthy if not _public(u)]
         if background and len(private) >= 2:
             # two private RPCs (e.g. two free plans): background work (scanner, coin checks) uses the second, so the
-            # first one's monthly allowance is kept for your live whale trades
+            # first one's allowance is kept for your live whale trades
             healthy = [private[1]] + [u for u in healthy if u != private[1]]
-        return healthy + [u for u in self.urls if u not in healthy]
+        # a node already busy at its own speed limit goes behind one that is free now (keeps preference otherwise)
+        healthy.sort(key=lambda u: self._node_next[u] - now > 0.25)
+        return healthy + [u for u in usable if u not in healthy] + [u for u in self.urls if u not in usable]
 
-    async def _pace(self) -> None:
-        if not self.min_interval:
-            return
+    async def _pace(self, url: str = "") -> None:
         async with self._pace_lock:
             now = time.monotonic()
-            start = max(now, self._next)
-            self._next = start + self.min_interval
+            start = max(now, self._next if self.min_interval else now, self._node_next.get(url, 0.0))
+            if self.min_interval:
+                self._next = start + self.min_interval
+            if url in self._node_next:
+                self._node_next[url] = start + self.gap.get(url, 0.0)
         if start > now:
             await asyncio.sleep(start - now)
 
@@ -74,33 +94,50 @@ class SolanaRPC:
         """Rate limited in the last 10 seconds: background work (the whale scanner) should wait."""
         return time.monotonic() - self._last_429 < 10
 
-    def _slow_down(self) -> None:
-        """Rate limited: pause everyone briefly and space calls out more, instead of hammering the plan's limit."""
+    def _slow_down(self, url: str) -> None:
+        """This node said "too many requests": space ITS calls out more (the other nodes keep their speed)."""
         self._last_429 = time.monotonic()
-        self.min_interval = min(0.5, max(self.min_interval, 0.05) * 1.5)
-        self._next = max(self._next, time.monotonic() + 1.0)
+        self.gap[url] = min(2.0, max(self.gap.get(url, 0.0), 0.05) * 1.5)
+        self._node_next[url] = max(self._node_next.get(url, 0.0), time.monotonic() + 1.0)
 
     def _note_error(self, url: str, text: str, cool: float) -> None:
         # temporary (rate limit, timeout, network blip): retried, counted, never an "issue" on its own —
         # a whale trade that is still lost after every retry is reported by the engine instead
         self.errors += 1
         self.last_transient = f"{time.strftime('%H:%M:%S')} {text}"
-        self._cool_until[url] = time.monotonic() + cool
+        self._cool_until[url] = max(self._cool_until.get(url, 0.0), time.monotonic() + cool)
         if url in self.node:
             self.node[url]["errors"] += 1
+            self.node[url]["last"] = f"{time.strftime('%H:%M')} {text}"[:140]
+
+    def _refuse_method(self, url: str, method: str, why: str) -> None:
+        self._blocked[(url, method)] = time.monotonic() + 3600
+        self.errors += 1
+        if url in self.node:
+            self.node[url]["errors"] += 1
+            self.node[url]["last"] = f"{time.strftime('%H:%M')} {method} not on this plan: {why}"[:140]
+        recent = {m for (u, m), until in self._blocked.items() if u == url and until > time.monotonic()}
+        if len(recent) >= 4:   # refuses almost everything: more likely a bad key than a few paid-only methods
+            self._note_error(url, f"refused {len(recent)} different methods ({why})", 1800.0)
+
+    def _rate_limited(self, url: str, method: str) -> None:
+        self.rate_limited += 1
+        self._slow_down(url)
+        self._note_error(url, f"{method}: rate limited (this provider's requests-per-second limit)", 1.0)
 
     async def call(self, method: str, params: list, *, timeout: float = 12, attempts: int = 2,
                    priority: bool = False):
         """Return the JSON-RPC `result`, or None when every node failed."""
         payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
         before = self.last_error
+        sending = method in ("sendTransaction", "simulateTransaction")
         for attempt in range(attempts):
-            for url in self._ordered(background=not priority):
+            for url in self._ordered(background=not priority, method=method):
                 waited = 0
                 while not priority and self._priority > 0 and waited < 100:   # live trades go first
                     await asyncio.sleep(0.1)
                     waited += 1
-                await self._pace()
+                await self._pace(url)
                 async with self.sem:
                     self.calls += 1
                     started = time.monotonic()
@@ -111,19 +148,22 @@ class SolanaRPC:
                                                      timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
                             if resp.status == 429:
                                 body = (await resp.text())[:300].lower()
-                                if any(w in body for w in OUT_OF_CREDITS):
-                                    # the plan's monthly credits are used up: not a rate limit — rest this node for
-                                    # 30 minutes and let the others work at full speed
-                                    self._note_error(url, f"{method}: out of credits (max usage reached)", 1800.0)
-                                    continue
-                                self.rate_limited += 1
-                                self._slow_down()
-                                self._note_error(url, f"{method}: rate limited", 2.0)
+                                if any(w in body for w in OUT_OF_CREDITS) and not any(w in body for w in RATE_WORDS):
+                                    # the plan's monthly allowance is used up: rest this node 30 minutes, the others
+                                    # keep working at full speed
+                                    self._note_error(url, f"{method}: monthly allowance used up ({body.strip()[:60]!r})",
+                                                     1800.0)
+                                else:
+                                    self._rate_limited(url, method)
                                 continue
-                            if resp.status in REFUSED:
-                                body = (await resp.text())[:200]
-                                self._note_error(url, f"{method}: HTTP {resp.status} — wrong key, or the free plan's "
-                                                      f"limit is used up ({body.strip()[:80]!r})", 1800.0)
+                            if resp.status in (401, 402, 403):
+                                body = (await resp.text())[:200].lower()
+                                if resp.status == 403 and not any(w in body for w in KEY_REFUSED) \
+                                        and not any(w in body for w in OUT_OF_CREDITS):
+                                    self._refuse_method(url, method, f"HTTP 403 {body.strip()[:60]!r}")
+                                else:
+                                    self._note_error(url, f"{method}: HTTP {resp.status} — wrong key or plan used up "
+                                                          f"({body.strip()[:60]!r})", 1800.0)
                                 continue
                             if resp.status >= 500:
                                 self._note_error(url, f"{method}: HTTP {resp.status}", 5.0)
@@ -143,15 +183,19 @@ class SolanaRPC:
                 err = data.get("error")
                 if err:
                     code = err.get("code") if isinstance(err, dict) else None
+                    text = str(err.get("message") if isinstance(err, dict) else err).lower()
+                    if not sending:
+                        if any(w in text for w in OUT_OF_CREDITS) and not any(w in text for w in RATE_WORDS):
+                            self._note_error(url, f"{method}: {text[:80]}", 1800.0)   # allowance used up, said in JSON
+                            continue
+                        if code == 429 or code == -32005 or any(w in text for w in RATE_WORDS):
+                            self._rate_limited(url, method)
+                            continue
+                        if (code == -32601 or any(w in text for w in METHOD_REFUSED)) and "version" not in text:
+                            self._refuse_method(url, method, text[:60])
+                            continue
                     if code in RETRYABLE_RPC_CODES:
                         self._note_error(url, f"{method}: {err.get('message', code)}", 1.0)
-                        continue
-                    text = str(err.get("message") if isinstance(err, dict) else err).lower()
-                    if method not in ("sendTransaction", "simulateTransaction") and (
-                            any(w in text for w in QUOTA_WORDS) or "rate limit" in text or "too many requests" in text):
-                        # a provider saying "limit reached" inside a normal answer: not about this call — next node
-                        out = not ("rate limit" in text or "too many requests" in text)
-                        self._note_error(url, f"{method}: {text[:80]}", 1800.0 if out else 2.0)
                         continue
                     self.last_error = f"{time.strftime('%H:%M:%S')} {method}: {err}"
                     self.last_rpc_error = err if isinstance(err, dict) else {"message": str(err)}
@@ -160,10 +204,10 @@ class SolanaRPC:
                 if url in self.node:
                     self.node[url]["ok"] += 1
                     self.node[url]["ms"] += (time.monotonic() - started) * 1000
+                if self.gap.get(url, 0.0) > self.base_gap.get(url, 0.0):   # recover this node's speed gradually
+                    self.gap[url] = max(self.base_gap[url], self.gap[url] * 0.97)
                 if self.last_error != before:
                     self.last_error = before   # a retry got through (rate limit, network blip): nothing was lost
-                if self.min_interval > self.base_interval:   # recover speed gradually after a rate limit
-                    self.min_interval = max(self.base_interval, self.min_interval * 0.98)
                 return data.get("result")
             await asyncio.sleep(0.4 * (attempt + 1))
         return None
@@ -285,9 +329,12 @@ class SolanaRPC:
         return {"calls": self.calls, "errors": self.errors, "rate_limited": self.rate_limited,
                 "last_error": self.last_error, "last_ok_ts": int(self.last_ok_ts),
                 "primary_down": self.primary_down(),
-                "nodes": [{"name": provider_name(u), "calls": n["calls"], "errors": n["errors"],
+                "nodes": [{"name": provider_name(u), "calls": n["calls"], "errors": n["errors"], "ok": n["ok"],
                            "avg_ms": round(n["ms"] / n["ok"]) if n["ok"] else None,
-                           "resting_s": max(0, int(self._cool_until.get(u, 0) - now))}
+                           "resting_s": max(0, int(self._cool_until.get(u, 0) - now)),
+                           "per_second": round(1 / self.gap[u], 1) if self.gap.get(u) else None,
+                           "not_on_plan": sorted(m for (v, m), until in self._blocked.items() if v == u and until > now),
+                           "last": n["last"]}
                           for u, n in self.node.items()]}
 
     def primary_down(self) -> bool:

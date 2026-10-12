@@ -4,7 +4,7 @@ Jupiter scores every token's trading for bots and wash trading — the "organic 
 and holders, and audits the dev (how many coins this dev has minted) and the top holders. The hype scanner uses it:
   🌿 real buyers  — organic score 60+ with 10+ organic buyers in the hour: people, not a bot loop
   🤖 bot volume   — organic score under 25 while the "rush" fires: the buying is mostly bots / wash trading
-  🏭 serial dev   — the dev has minted 20+ coins: a launch-and-dump factory
+  🏭 serial dev   — the dev has minted 20+ coins (shown, no points: it's on most trending coins)
   ⚠️ suspicious   — Jupiter's own audit flags the token
   𝕏 smart CT     — Crypto-Twitter accounts Jupiter tracks liked it (only when Jupiter includes it)
 Jupiter's trending and top-organic lists also feed the scanner's universe, next to DexScreener and GeckoTerminal.

@@ -138,7 +138,7 @@ A provider that says its limit is used up (or refuses the key) is rested for 30 
 
 Jupiter's trending and top-organic lists feed the hype scanner, and for the busiest 100 coins each minute the bot reads
 Jupiter's organic score (how much of the trading is real people vs bots / wash trading), organic buyers, the dev's
-mint count and Jupiter's audit flag: 🌿 real buyers (+10), 🤖 bot volume (−20), 🏭 serial dev (−10), ⚠️ suspicious
+mint count and Jupiter's audit flag: 🌿 real buyers (+10), 🤖 bot volume (−20), 🏭 serial dev (shown, 0 — it's on most coins), ⚠️ suspicious
 (−25). "Which signals have worked" on the Hype tab measures them like every other signal.
 
 ## Self-tuning hype filter (`/tuning`)

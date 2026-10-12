@@ -130,7 +130,8 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
         if num(jup.get("smart_ct_likes")) >= 3:
             sig.append(("smartct", f"𝕏 {int(num(jup.get('smart_ct_likes')))} smart Crypto-Twitter accounts liked it (Jupiter)", 10))
         if num(jup.get("dev_mints")) >= 20:
-            sig.append(("serialdev", f"🏭 its dev has minted {int(num(jup.get('dev_mints')))} coins — a launch factory", -10))
+            # shown on most trending coins: context, no points, until "Which signals have worked" says otherwise
+            sig.append(("serialdev", f"🏭 its dev has minted {int(num(jup.get('dev_mints')))} coins (context only)", 0))
         if jup.get("sus"):
             sig.append(("sus", "⚠️ Jupiter's audit flags this token as suspicious", -25))
     keys = {k for k, _, _ in sig}

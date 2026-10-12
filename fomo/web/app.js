@@ -699,7 +699,10 @@
         + (lat.late_alerts ? ` · ${lat.late_alerts} reached the bot 10+ min late` : "")]);
       const st = hl.stream || {};
       h.push(["Stream detail", `${st.subscribed}/${st.wanted} wallets · ${st.notifications} pushed · ${st.reconnects} reconnects · ${st.resubscribed} resubscribed · ${hl.ingest.fast_buys} pump.fun buys read from logs`]);
-      for (const n of (hl.rpc || {}).nodes || []) h.push([`RPC · ${n.name}`, `${n.calls.toLocaleString()} calls · ${n.errors.toLocaleString()} errors · ${n.avg_ms ?? "—"} ms · ${n.resting_s ? `resting ${secs(n.resting_s)}` : "ok"}`]);
+      for (const n of (hl.rpc || {}).nodes || []) h.push([`RPC · ${n.name}`, `${(n.ok ?? 0).toLocaleString()} answered of ${n.calls.toLocaleString()} · ${n.avg_ms ?? "—"} ms · ${n.resting_s ? `resting ${secs(n.resting_s)}` : "ok"}`
+        + (n.per_second ? ` · up to ${n.per_second}/s` : "")
+        + ((n.not_on_plan || []).length ? ` · not on its plan (sent elsewhere): ${n.not_on_plan.join(", ")}` : "")
+        + (n.last && n.errors ? ` · last problem: ${n.last}` : "")]);
       const lv = hl.live || {};
       if (lv.enabled) h.push(["Live autopilot", lv.halt ? `⏸ buys halted — ${lv.halt}` : `ready · ${lv.exec.sent} sent · ${lv.exec.failed} failed · ${lv.exec.skipped} skipped by the checks`]);
       const crashes = Object.entries((hl.loops || {}).crashes || {});

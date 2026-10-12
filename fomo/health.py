@@ -90,8 +90,13 @@ def format_health(r: dict) -> str:
     rpc = r.get("rpc") or {}
     for node in rpc.get("nodes") or []:
         state = f"resting {_secs(node['resting_s'])}" if node["resting_s"] else "ok"
-        lines.append(f"RPC {esc(node['name'])}: {node['calls']:,} calls · {node['errors']:,} errors · "
-                     f"{node['avg_ms'] or '—'} ms avg · {state}")
+        line = (f"RPC {esc(node['name'])}: {node.get('ok', 0):,} answered of {node['calls']:,} · {node['avg_ms'] or '—'} ms · "
+                f"{state}" + (f" · up to {node['per_second']}/s" if node.get("per_second") else ""))
+        if node.get("not_on_plan"):
+            line += " · not on its plan (sent elsewhere): " + ", ".join(node["not_on_plan"])
+        if node.get("last") and node["errors"]:
+            line += f" · last problem: {esc(node['last'])}"
+        lines.append(line)
     lv = r.get("live") or {}
     if lv.get("enabled"):
         ex = lv.get("exec") or {}

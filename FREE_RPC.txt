@@ -1,13 +1,17 @@
-REPLACE HELIUS WITH A FREE RPC (3 minutes)
-==========================================
-The bot needs one private Solana RPC link. Free plans that work:
+REPLACE HELIUS WITH FREE RPCs (5 minutes)
+=========================================
+Use TWO free plans together — each one alone is too small for this bot:
 
-  Chainstack  ★ easiest — 3 million requests a month, ~25 a second, websocket included, no card
-  Alchemy       30 million compute units a month, ~25 requests a second
-  dRPC          large free allowance (Jupiter / dRPC numbers change — check their pricing page)
-  Helius        1 million credits a month (the one that ran out)
+  Chainstack  3 requests a second on the free Solana node, websocket included (the live wallet stream), no card.
+              Two methods the bot uses are paid-only there (top holders, wallet token balances).
+  Alchemy     ~25 requests a second, 30 million compute units a month — carries most of the work.
+  dRPC        another large free allowance — a good third.
+  Helius      1 million credits a month — fine as a backup once it resets.
 
-FASTEST WAY (Chainstack)
+The bot gives each provider its own speed limit, sends a request a provider's plan doesn't cover to another one,
+and spreads the rest across them — so free plans add up instead of tripping over each other.
+
+STEP 1 — Chainstack (the live wallet stream + live whale trades)
   1. Go to https://chainstack.com → Start for free → sign up (Google or GitHub works, no card).
   2. Create a project (any name) → add a node: Solana → Mainnet → the free "Global node".
   3. Open the node → Access / credentials → copy the HTTPS endpoint.
@@ -27,10 +31,10 @@ FASTEST WAY (Chainstack)
 The websocket for the live wallet stream is worked out from the link (wss://… same address). Only if the self-check
 says the websocket isn't reachable, copy the WSS endpoint from the same Chainstack page into SOLANA_RPC_WSS=.
 
-RECOMMENDED: ADD A SECOND FREE ONE (so you never run out)
-  Put a second provider's link in SOLANA_RPC_FALLBACKS=. With two, the bot sends background work (whale scanner,
-  coin checks) to the second one, so the first one's allowance lasts for your live whale trades; if one runs out
-  or refuses, the other takes over at full speed.
+STEP 2 — Alchemy (needed: the background work and what Chainstack's free plan doesn't do)
+  Put its link in SOLANA_RPC_FALLBACKS=. The bot sends background work (hype and whale scanners, coin checks, holder
+  checks) to it, so Chainstack's 3-a-second limit is kept for your live whale trades; if one runs out or refuses,
+  the other takes over. A third (dRPC) can go after a comma.
     Alchemy: https://www.alchemy.com → sign up → Create new app → Solana, Mainnet → copy the HTTPS URL
              (https://solana-mainnet.g.alchemy.com/v2/YOUR-KEY)
     dRPC:    https://drpc.org → sign up → Keys → copy the key into

@@ -471,3 +471,59 @@ def test_doctor_online_checks_run_to_the_end(capsys):
     asyncio.run(asyncio.wait_for(doctor.online_checks(cfg), 30))      # no NameError: every check reports
     out = capsys.readouterr().out
     assert "127.0.0.1:9 unreachable" in out and "websocket" in out
+
+
+def test_a_free_plans_speed_limit_and_paid_only_methods_dont_bench_the_whole_rpc():
+    """Chainstack's free Solana node: 3 requests a second, and getTokenLargestAccounts / getTokenAccountsByOwner are
+    paid-only. Its 429 says "upgrade your plan" — that is a speed limit, not used-up credits."""
+    hits = {"cs": [], "other": []}
+    busy = {"left": 1}
+
+    async def chainstack(request):
+        body = await request.json()
+        hits["cs"].append(body["method"])
+        if body["method"] == "getTokenLargestAccounts":
+            return web.json_response({"jsonrpc": "2.0", "id": 1, "error": {
+                "code": -32601, "message": "Method getTokenLargestAccounts is not available on the Developer plan"}})
+        if busy["left"]:
+            busy["left"] -= 1
+            return web.Response(status=429, text='{"error":"RPS limit exceeded. Upgrade your plan for higher limits"}')
+        return web.json_response({"jsonrpc": "2.0", "id": 1, "result": "cs"})
+
+    async def other(request):
+        body = await request.json()
+        hits["other"].append(body["method"])
+        return web.json_response({"jsonrpc": "2.0", "id": 1, "result": "other"})
+
+    async def run():
+        servers = []
+        for fn in (chainstack, other):
+            app = web.Application()
+            app.router.add_post("/", fn)
+            srv = TestServer(app)
+            await srv.start_server()
+            servers.append(srv)
+        async with aiohttp.ClientSession() as session:
+            cs_url = str(servers[0].make_url("/")) + "?chainstack"
+            rpc = SolanaRPC(session, [cs_url, str(servers[1].make_url("/"))])
+            assert rpc.gap[cs_url] == 0.36                                         # paced at under 3 a second
+            assert await rpc.call("getSlot", [], priority=True) == "other"         # 429: this call goes elsewhere…
+            assert rpc.rate_limited == 1 and rpc._cool_until[cs_url] - time.monotonic() < 5   # …not benched 30 min
+            assert rpc.gap[cs_url] > 0.36
+            await asyncio.sleep(1.1)
+            assert await rpc.call("getSlot", [], priority=True) == "cs"            # back on Chainstack
+            await asyncio.sleep(0.7)                                                # (its own pace: under 3 a second)
+            assert await rpc.call("getTokenLargestAccounts", ["m"], priority=True) == "other"
+            await asyncio.sleep(0.7)
+            assert await rpc.call("getTokenLargestAccounts", ["m"], priority=True) == "other"
+            assert hits["cs"].count("getTokenLargestAccounts") == 1                 # asked once, then sent elsewhere
+            await asyncio.sleep(0.7)
+            assert await rpc.call("getSlot", [], priority=True) == "cs"            # everything else still there
+            assert await rpc.call("getSlot", [], priority=True) == "other"         # busy at its limit: no waiting
+            node = rpc.health()["nodes"][0]
+            assert node["not_on_plan"] == ["getTokenLargestAccounts"] and not rpc.primary_down()
+        for srv in servers:
+            await srv.close()
+
+    import time
+    asyncio.run(run())
