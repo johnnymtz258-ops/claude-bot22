@@ -459,3 +459,15 @@ def test_health_report_shows_latency_by_source_and_no_secrets(chat):
         ('h1','W',0,?,?,'BUY','M','stream'), ('h2','W',0,?,?,'BUY','M2','poll')""", (now - 100, now - 98, now - 900, now - 60))
     out = chat.say("/health")
     assert "Health" in out and "straight from the stream" in out and "api-key" not in out
+
+
+def test_doctor_online_checks_run_to_the_end(capsys):
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("doctor", Path(__file__).resolve().parents[1] / "doctor.py")
+    doctor = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(doctor)
+    cfg = config.Config(rpc_http=["http://127.0.0.1:9/rpc", config.PUBLIC_RPC], rpc_wss="ws://127.0.0.1:9")
+    asyncio.run(asyncio.wait_for(doctor.online_checks(cfg), 30))      # no NameError: every check reports
+    out = capsys.readouterr().out
+    assert "127.0.0.1:9 unreachable" in out and "websocket" in out

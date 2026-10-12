@@ -27,8 +27,8 @@ async def online_checks(cfg):
                      f"Telegram token rejected: {data.get('description')}")
             except Exception as exc:
                 line(False, f"Telegram unreachable ({type(exc).__name__})")
-        from fomo.config import provider_name
-        private = [u for u in cfg.rpc_http if u != config.PUBLIC_RPC]
+        from fomo.config import PUBLIC_RPC, provider_name
+        private = [u for u in cfg.rpc_http if u != PUBLIC_RPC]
         for url in (private or cfg.rpc_http)[:3]:
             name = provider_name(url)
             try:
