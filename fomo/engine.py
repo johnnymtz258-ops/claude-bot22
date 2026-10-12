@@ -10,7 +10,7 @@ import asyncio
 import statistics
 import time
 
-from .hype import LABELS as hype_labels, alertable
+from .hype import LABELS as hype_labels, alertable, seeded_pool
 from . import playbook, copies, exits, messages, profiles, pumplog
 from .coins import CoinTracker
 from .community import CommunityChecker
@@ -33,7 +33,8 @@ THIN_LIQUIDITY_USD = 5_000
 def grade_buy(*, status: str, stats: dict, confluence: int, chase: float | None, safety: dict,
               rug: dict | None, liquidity: float, usd_value: float, usual_usd: float,
               late_chase_pct: float, community: dict | None = None, after: dict | None = None,
-              micro: dict | None = None, profile: dict | None = None, jup: dict | None = None) -> tuple[str, list]:
+              micro: dict | None = None, profile: dict | None = None, jup: dict | None = None,
+              seeded: int = 0) -> tuple[str, list]:
     """Grade a whale buy. Returns ('A'|'B'|'C'|'SKIP', [(ok, reason), ...]).
 
     ok=True is a plus, ok=False a warning, ok=None neutral information.
@@ -89,6 +90,10 @@ def grade_buy(*, status: str, stats: dict, confluence: int, chase: float | None,
     if rug and rug.get("lp_locked") is not None and rug["lp_locked"] < 50 and not on_curve and liquidity > 0:
         points -= 1
         reasons.append((False, f"Only {rug['lp_locked']:.0f}% of the liquidity is locked or burned — it can be pulled"))
+    if seeded:
+        points -= 2
+        reasons.append((False, f"🍼 Pool only {seeded} min old and seeded like a pull-the-liquidity setup — in your data most "
+                               "were emptied within 2 hours"))
     jup = jup or {}
     org = num(jup.get("organic"), -1)
     if 0 <= org < 25:
@@ -459,7 +464,8 @@ class Engine:
             status=stats["status"], stats=stats, confluence=len(confluence), chase=chase, safety=safety, rug=rug,
             liquidity=num(info.get("liquidity_usd"), -1), usd_value=c["usd_value"],
             usual_usd=self.whales.usual_buy_usd(wallet), late_chase_pct=self.cfg.get("LATE_CHASE_PCT"),
-            community=community, after=after, micro=micro, profile=self.profiles.get(wallet), jup=jup)
+            community=community, after=after, micro=micro, profile=self.profiles.get(wallet), jup=jup,
+            seeded=seeded_pool(info, self.cfg))
         if not swap["new_position"] and grade != "SKIP":
             reasons.append((None, "Adding to a bag they already held"))
         pb = (self.profiles.get(wallet) or {}).get("playbook") or {}

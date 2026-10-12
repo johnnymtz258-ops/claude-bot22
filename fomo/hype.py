@@ -47,6 +47,7 @@ LABELS = {"rush": "🚀 buy rush", "pressure": "🟢 buy pressure", "volume": "�
           "sus": "⚠️ Jupiter: suspicious"}
 
 
+SHADOWED = ("zone", "profile", "late", "fresh", "bots")   # adjustable rules the tuner measures on what they block
 BURST = {"rush", "volume", "loading", "pressure"}   # the same burst of buying seen four ways: one shared budget
 BURST_CAP = 45
 
@@ -73,6 +74,12 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
     elif m5 > 40 or h1 > cfg.get("HYPE_MAX_H1_PCT"):
         out["blocked"] = f"late — already {pct(h1)} this hour ({pct(m5)} in 5 min)"
         out["rule"] = "late" if m5 <= 40 else "late5"
+    elif seeded_pool(info, cfg, now) and cfg.get("HYPE_FRESH_MINUTES") > 0 and not whales:
+        # 134 hype alerts measured honestly: pools under 10 min old were emptied within 2h 87% of the time, under $20K MC
+        # 90%, liquidity >= market cap 97% — the creator seeds a pool, bots pump it, the liquidity is pulled
+        out["blocked"] = (f"pool {seeded_pool(info, cfg, now)} min old at {mc(mcap)} with {usd(max(liq, 0))} liquidity — "
+                          "the seed-pump-pull setup (most were emptied within 2 hours)")
+        out["rule"] = "fresh"
     elif cfg.get("HYPE_AVOID_MC_LO") <= mcap < cfg.get("HYPE_AVOID_MC_HI") and not whales:
         out["rule"] = "zone"
         # 225 hype trades: $30K-100K lost in every period (-$436, 18% rugged) — where fresh migrations get dumped;
@@ -138,6 +145,10 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
     if peak_mc >= 2.5 * mcap and keys & {"loading", "rush", "volume"}:
         sig.append(("reload", f"♻️ second leg: peaked at {mc(peak_mc)} in the last 2 days, now {mc(mcap)} — "
                               "buyers coming back", 15))
+    if seeded_pool(info, cfg, now):
+        sig.append(("fresh", f"🍼 pool {seeded_pool(info, cfg, now)} min old, seeded like a pull-the-liquidity setup", 0))
+    if cfg.flag("HYPE_BLOCK_BOTS") and not out["blocked"] and not whales and any(k == "bots" for k, _, _ in sig):
+        out["blocked"], out["rule"] = "mostly bot / wash buying (Jupiter organic score under 25) — 94% were emptied", "bots"
     if cfg.flag("HYPE_SKIP_PROFILE") and not out["blocked"] and not whales and any(k == "profile" for k, _, _ in sig):
         # coins with a paid DexScreener profile / socials lost in every period (151 trades: 33% won, -$588);
         # the ones without made +$415 (68% won). Teams paying for attention are often selling into it.
@@ -146,6 +157,20 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
     burst = min(BURST_CAP, sum(p for k, _, p in sig if k in BURST))
     out["score"] = max(0, min(100, burst + sum(p for k, _, p in sig if k not in BURST)))
     return out
+
+
+def seeded_pool(info: dict, cfg, now: float | None = None) -> int:
+    """Minutes since the pool was created when it looks seeded to be pulled (young, and a small market cap or more
+    liquidity than ~its market cap); 0 when it doesn't."""
+    created = num(info.get("pair_created_ts"))
+    if not created:
+        return 0
+    age = ((now or time.time()) - created) / 60
+    limit = cfg.get("HYPE_FRESH_MINUTES") or 30
+    mcap, liq = num(info.get("mc_usd")), num(info.get("liquidity_usd"), -1)
+    if 0 <= age < limit and (mcap < cfg.get("HYPE_FRESH_MIN_MC") or (liq > 0 and liq >= 0.8 * mcap)):
+        return max(1, int(age))
+    return 0
 
 
 def alertable(result: dict, cfg) -> bool:
@@ -259,7 +284,7 @@ class HypeScanner:
         for mint, info, r in scored:
             if alertable(r, self.cfg) or not self.tuner.shadow_rule(mint, info, r, now):
                 continue
-            if r.get("rule") in ("zone", "profile", "late"):   # score it with its holders, like an alert would be
+            if r.get("rule") in SHADOWED:   # score it with its holders, like an alert would be
                 holders = await self._holders(mint, info)
                 if holders:
                     r = score({**info, "mint": mint}, self.cfg, whales=self.whales_in(mint, now), lists=self.lists,

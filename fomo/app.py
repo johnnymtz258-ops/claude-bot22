@@ -58,6 +58,18 @@ class App:
             self.db.set_meta("setting:QUALITY_GATE", 0)
             cfg.set("QUALITY_GATE", 0)
             self.db.set_meta("quality_gate_off_v25_2", "1")
+        if self.db.get_meta("rug_audit_v28_3") != "1":   # paper sales into emptied pools: re-booked at what they'd get
+            from .paper import PaperTrader
+            paper = PaperTrader(self.db, cfg, None)
+            self.rug_audit = paper.audit_rugs()
+            if self.rug_audit["n"]:
+                # the balance was built on sales that couldn't happen: start a new, honest paper period (history kept)
+                self.rug_audit["balance_was"] = paper.summary()["equity"]
+                paper.new_period(f"{self.rug_audit['n']} sales into emptied pools corrected")
+            for name in ("HYPE_TP_PCT", "HYPE_STOP_PCT", "HYPE_MAX_MINUTES", "HYPE_HALF_AT_TP"):
+                self.db.run("delete from meta where key=?", (f"tune:changed:{name}",))   # re-decide on honest replays
+            self.db.set_meta("tune:last_run", 0)
+            self.db.set_meta("rug_audit_v28_3", "1")
         if self.db.get_meta("runner_alerts_off_v22_4") != "1":   # community runners averaged -71% on your data
             self.db.set_meta("setting:RUNNER_ALERTS", 0)
             cfg.set("RUNNER_ALERTS", 0)
@@ -276,7 +288,15 @@ class App:
 
     def startup_text(self, imported: int) -> str:
         n = self.whales.count()
-        lines = [f"✅ <b>FomoBot Whale Copy {VERSION}</b> is running on {esc(HOST)}",
+        lines = [f"✅ <b>FomoBot Whale Copy {VERSION}</b> is running on {esc(HOST)}"]
+        audit = getattr(self, "rug_audit", None)
+        if audit and audit["n"]:
+            lines.append(f"🧾 <b>Paper record corrected:</b> {audit['n']} trades had \"sold\" into pools whose liquidity "
+                         f"had been pulled (rugs) — paper booked {audit['paper_pnl']:+,.0f}$ on them, real money would have "
+                         f"got {audit['real_pnl']:+,.0f}$. The honest balance was {audit.get('balance_was', 0):,.0f}$; a new "
+                         "paper period starts now at the usual balance, with honest fills. That setup is now blocked before "
+                         "entry. Don't trade real money until the new period is in profit.")
+        lines += [
                  f"Following {n} whale{'s' if n != 1 else ''}" + (f" ({imported} imported from the old bot)"
                                                                    if imported else "")]
         lines.append("Your wallet: synced (exact P/L)" if self.cfg.my_wallets

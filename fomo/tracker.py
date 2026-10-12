@@ -119,7 +119,7 @@ class Tracker:
                  | set(shadows))
         infos = await self.market.tokens(sorted(mints), max_age=PRICE_EVERY - 2) if mints else {}
         for mint, info in infos.items():
-            self.marks.record(mint, num(info.get("price_usd")), now)
+            self.marks.record(mint, num(info.get("price_usd")), now, num(info.get("liquidity_usd"), -1))
         for c in open_copies:
             self._update_copy(c, infos.get(c["mint"]), now)
         for p in positions:

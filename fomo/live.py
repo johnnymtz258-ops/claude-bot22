@@ -383,6 +383,11 @@ class LiveTrader:
                     await self.notify(f"🛑 <b>Live autopilot paused for today</b>\nRealized loss today reached "
                                       f"{limit:g} SOL (LIVE_DAILY_LOSS_SOL). It starts again tomorrow.", kind="LIVE")
                 return 0
+            from .hype import seeded_pool
+            if info and seeded_pool(info, self.cfg):
+                await self._skip(symbol, mint, f"pool only {seeded_pool(info, self.cfg)} min old and seeded like a "
+                                               "pull-the-liquidity setup — real money never buys these")
+                return 0
             size, size_note = await self.size_for(info, signal)
             if size < 0.25 * self.cfg.get("LIVE_TRADE_SOL"):
                 await self._skip(symbol, mint, f"the pool is too thin for a real buy ({size:.4f} SOL would be "

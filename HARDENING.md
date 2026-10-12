@@ -82,9 +82,8 @@ fallbacks, and dry run shows exactly what would be sent.
 - Emergency exit when the pool is being emptied: liquidity down `RUG_LIQUIDITY_DROP_PCT` (70%) from entry on two
   readings 10 s apart → sell everything, whatever the plan says.
 - Two-step ladder for hype trades (`HYPE_HALF_AT_TP`): half at the take-profit, the rest rides on the stop / trail /
-  time limit. The self-tuner now replays 72 exit plans (36 all-out + 36 ladders) on your alerts and switches when one
-  is clearly better. On your data the best was **half at +80%, ride the rest, −35% stop, 2 h: +54% a trade** vs +23%
-  for today's all-out at +30% (67% vs 71% won).
+  time limit. The self-tuner replays 72 exit plans (36 all-out + 36 ladders) on your alerts and switches when one is
+  clearly better. (The "+54% a trade" first reported here was wrong — see the correction below.)
 - Desync fixes: a sell that doesn't confirm in time is remembered; before selling again, the bot checks whether it
   landed late and books what it really got from that transaction's balances. Every 5 minutes, open real positions
   are checked against the wallet's actual token balance; one that's gone (sold elsewhere) is closed.
@@ -115,3 +114,30 @@ checks, confirm time), kill-switch state, crashes, memory. A snapshot is saved e
 `LIVE_JITO` · `LIVE_JITO_TIP_LAMPORTS` · `LIVE_MIN_SLIPPAGE_BPS` · `LIVE_MAX_ROUNDTRIP_LOSS_PCT` ·
 `LIVE_DYNAMIC_SIZE` · `LIVE_MAX_LIQ_PCT` · `LIVE_KILL_FAILS` · `LIVE_KILL_MINUTES` · `HYPE_HALF_AT_TP`
 (all in /settings and the dashboard; defaults above).
+
+## Correction (v28.3) — paper was selling into emptied pools
+
+Your Oct 12 export showed what the numbers above missed. Most hype alerts were on **pools minutes old, seeded with
+more liquidity than their market cap, whose liquidity was then pulled** (the creator seeds a pool, bots pump it, the
+liquidity is removed). Once that happens nobody can sell; the last price simply freezes. The paper autopilot — and the
+self-tuner's replays — kept "selling" at that frozen price, so they booked profits that could never happen.
+
+Measured honestly on 134 hype alerts: pools under 10 minutes old were emptied within 2 hours 87% of the time; market
+cap under $20K 90%; liquidity ≥ market cap 97%; Jupiter "bot volume" 94%. 38 paper trades had sold into emptied pools:
++$1,184 booked, about −$1,849 in reality. The honest balance was about −$680 from $1,000, not +$2,332, and no exit plan
+was profitable once those trades count as losses.
+
+Fixed:
+- Paper fills are liquidity-aware: a sale returns what the pool's depth allows (constant product); an emptied pool
+  returns next to nothing; a price frozen for 10 minutes in a near-empty pool is a rug, not a price; a jump printed
+  into an empty pool is never a take-profit.
+- Liquidity is recorded with every price mark, and the self-tuner's replays treat an emptied or frozen pool as
+  unsellable.
+- Past paper trades that sold into emptied pools are re-booked once (the original figure is kept); a new paper period
+  starts with honest fills; the exit plan is re-chosen on honest replays.
+- The setup is blocked before entry: pools younger than `HYPE_FRESH_MINUTES` (30) with a market cap under
+  `HYPE_FRESH_MIN_MC` ($60K) or liquidity ≥ ~market cap, and coins Jupiter rates as mostly bot buying
+  (`HYPE_BLOCK_BOTS`). Both are measured by the tuner on what they block. Whale alerts on such pools lose 2 grade
+  points; the live autopilot never buys them.
+
+Go live only once the new paper period is in profit over a real number of trades; `LIVE_PROFITABLE_ONLY` enforces it.

@@ -19,6 +19,18 @@ from .util import esc, mult, num, usd
 GLITCH_JUMP = 8.0
 MAX_HOLD = 24 * 3600
 EQUITY_EVERY = 300
+DEAD_LIQ = 1_000          # under $1K of liquidity left: nothing to sell into
+FROZEN_FOR = 600          # the same price for 10 minutes while the pool is (nearly) empty: liquidity was pulled
+
+
+def fill(value_usd: float, liq_usd: float) -> float:
+    """What selling `value_usd` worth of tokens really returns from a pool with `liq_usd` of liquidity (constant
+    product: half of the liquidity is the SOL side). Unknown liquidity (-1): the value as quoted. An emptied pool
+    returns next to nothing — a price printed there can't be sold at."""
+    if liq_usd < 0:
+        return value_usd
+    side = liq_usd / 2
+    return value_usd * side / (side + value_usd) if side > 0 else 0.0
 
 
 class PaperTrader:
@@ -28,6 +40,7 @@ class PaperTrader:
         self.notify = notify
         self._pending: dict[int, tuple[float, int]] = {}
         self._liq_seen: dict[int, int] = {}   # trade id -> first reading with the pool mostly emptied
+        self._frozen: dict[int, tuple[float, int]] = {}   # trade id -> (price, since) while the price doesn't move
         self._last_equity = 0
         self.live = None   # LiveTrader: makes these trades for real when LIVE_TRADING is on
 
@@ -40,9 +53,19 @@ class PaperTrader:
             self.db.set_meta("paper_start_ts", int(time.time()))
         return num(saved)
 
+    def period_start(self) -> int:
+        """Trades closed before this count in the history, not in the current balance (a new honest period)."""
+        return int(num(self.db.get_meta("paper_period_ts", "0")))
+
+    def new_period(self, why: str = "") -> None:
+        self.db.set_meta("paper_period_ts", int(time.time()))
+        self.db.set_meta("paper_start", self.cfg.get("PAPER_START_USD"))
+        self.db.set_meta("paper_start_ts", int(time.time()))
+        self.db.set_meta("paper_period_why", why)
+
     def cash(self) -> float:
         realized = num(self.db.scalar("select coalesce(sum(proceeds_usd - size_usd),0) from paper_trades "
-                                      "where status='closed'"))
+                                      "where status='closed' and coalesce(close_ts,0)>=?", (self.period_start(),)))
         open_cost = num(self.db.scalar("select coalesce(sum(size_usd - proceeds_usd),0) from paper_trades "
                                        "where status='open'"))
         return self.start_balance() + realized - open_cost
@@ -59,7 +82,8 @@ class PaperTrader:
             value = t["remaining"] * t["tokens"] * price * (1 - self._slip())
             open_value += value
             opens.append({**t, "value": value, "multiple": price / t["entry_price"] if t["entry_price"] else 0.0})
-        closed = self.db.rows("select * from paper_trades where status='closed'")
+        closed = self.db.rows("select * from paper_trades where status='closed' and coalesce(close_ts,0)>=?",
+                              (self.period_start(),))
         pnl = [c["proceeds_usd"] - c["size_usd"] for c in closed]
         equity = self.cash() + open_value
         start = self.start_balance()
@@ -134,6 +158,16 @@ class PaperTrader:
         first = self._liq_seen.setdefault(t["id"], now)
         return now - first >= 10
 
+    def _dead(self, t: dict, price: float, liq: float, now: int) -> bool:
+        """The price hasn't moved for 10 minutes and the pool is (nearly) empty: nobody can trade it any more."""
+        frozen = self._frozen.get(t["id"])
+        if not frozen or frozen[0] != price:
+            self._frozen[t["id"]] = (price, now)
+            return False
+        entry = num(t.get("entry_liq"))
+        empty = 0 <= liq < DEAD_LIQ or (entry > 0 and 0 <= liq < 0.1 * entry)
+        return empty and now - frozen[1] >= FROZEN_FOR
+
     def _whale_half_out(self, whale: str, mint: str, since: int) -> bool:
         peak = num(self.db.scalar("select max(max(holding_after), max(pre_holding)) from swaps where wallet=? and mint=?",
                                   (whale, mint)))
@@ -160,10 +194,13 @@ class PaperTrader:
                 continue
             x = price / t["entry_price"]
             liq = num((infos.get(t["mint"]) or {}).get("liquidity_usd"), -1)
-            if self._liquidity_pulled(t, liq, now):   # the pool is being emptied: out now, whatever the plan says
-                done.append(self._sell(t, 1.0, price, f"liquidity pulled ({liq:,.0f}$ left of {num(t['entry_liq']):,.0f}$)",
-                                       now))
+            if self._liquidity_pulled(t, liq, now) or self._dead(t, price, liq, now):
+                # the pool was emptied (rug): sold for whatever the little liquidity left pays — usually nothing
+                done.append(self._sell(t, 1.0, price, f"liquidity pulled — rug ({max(liq, 0):,.0f}$ left of "
+                                                      f"{num(t['entry_liq']):,.0f}$)", now, liq))
                 continue
+            if 0 <= liq < DEAD_LIQ and x >= 3:
+                continue   # a price jump printed into an empty pool: not a real price, never a take-profit
             peak = max(num(t["peak_x"]), x)
             self.db.run("update paper_trades set last_price=?, peak_x=? where id=?", (price, peak, t["id"]))
             t.update(last_price=price, peak_x=peak)
@@ -174,11 +211,11 @@ class PaperTrader:
                 plan = playbook.plan_for(self.db, t["whale"])   # this whale's own winning exit plan, if it has one
             if plan and not plan["half"] and x >= plan["tp"]:
                 why = "hype take-profit" if t["whale"] == "hype" else "whale's playbook"
-                done.append(self._sell(t, 1.0, price, f"all out at {plan['tp']:g}x ({why})", now))
+                done.append(self._sell(t, 1.0, price, f"all out at {plan['tp']:g}x ({why})", now, liq))
                 continue
             half_at = plan["tp"] if plan and plan["half"] else 2.0
             if not t["half_taken"] and x >= half_at:
-                done.append(self._sell(t, 0.5, price, f"half at {half_at:g}x", now))
+                done.append(self._sell(t, 0.5, price, f"half at {half_at:g}x", now, liq))
                 t = self.db.row("select * from paper_trades where id=?", (t["id"],))
             stop_pct = (1 - plan["stop"]) * 100 if plan else stop
             reason = ""
@@ -194,18 +231,20 @@ class PaperTrader:
             elif now - t["open_ts"] >= MAX_HOLD:
                 reason = "24h max hold"
             if reason:
-                done.append(self._sell(t, 1.0, price, reason, now))
+                done.append(self._sell(t, 1.0, price, reason, now, liq))
         self._record_equity(infos, now)
         for trade, what, amount in done:
             if self.cfg.flag("PAPER_NOTIFY"):
                 await self.notify(self._note(trade, what, amount), mint=trade["mint"], silent=True, kind="PAPER")
         return done
 
-    def _sell(self, t: dict, share_of_remaining: float, price: float, reason: str, now: int) -> tuple[dict, str, float]:
+    def _sell(self, t: dict, share_of_remaining: float, price: float, reason: str, now: int,
+              liq: float = -1.0) -> tuple[dict, str, float]:
         if self.live:
             self.live.spawn(self.live.sell(t["mint"], share_of_remaining, reason))
         part = t["remaining"] * share_of_remaining
-        got = part * t["tokens"] * price * (1 - self._slip())
+        # what a real sell gets: the quoted value, less the price impact the pool's depth allows, less slippage
+        got = fill(part * t["tokens"] * price, liq) * (1 - self._slip())
         remaining = t["remaining"] - part
         proceeds = num(t["proceeds_usd"]) + got
         closed = remaining <= 1e-9
@@ -223,6 +262,41 @@ class PaperTrader:
             return None
         trade, what, got = self._sell(t, 1.0, num(t["last_price"]), reason, int(time.time()))
         return trade
+
+    def audit_rugs(self) -> dict:
+        """One-time correction: closed paper trades whose last sale went into an emptied pool (liquidity pulled, or a
+        price frozen for 10 minutes in a pool with almost no liquidity left, or a spike printed into one) are re-booked
+        at what that sale could really get: nothing. The first figure stays in paper_proceeds."""
+        n, before, after = 0, 0.0, 0.0
+        for t in self.db.rows("""select p.*, k.liquidity_usd liq_now from paper_trades p left join tokens k on k.mint=p.mint
+                where p.status='closed' and p.paper_proceeds is null"""):
+            if not self._sold_into_empty_pool(t):
+                continue
+            last_share = 0.5 if t["half_taken"] else 1.0
+            last_sale = last_share * num(t["tokens"]) * num(t["last_price"]) * (1 - self._slip())
+            fixed = max(0.0, num(t["proceeds_usd"]) - last_sale)
+            self.db.run("""update paper_trades set paper_proceeds=proceeds_usd, proceeds_usd=?,
+                    close_reason=close_reason||' → pool emptied: not sellable (corrected)' where id=?""", (fixed, t["id"]))
+            n += 1
+            before += num(t["proceeds_usd"]) - num(t["size_usd"])
+            after += fixed - num(t["size_usd"])
+        return {"n": n, "paper_pnl": before, "real_pnl": after}
+
+    def _sold_into_empty_pool(self, t: dict) -> bool:
+        reason = str(t["close_reason"] or "")
+        if reason.startswith("liquidity pulled"):
+            return True
+        empty_now = t["liq_now"] is not None and 0 <= num(t["liq_now"]) < DEAD_LIQ
+        if not empty_now or not t["close_ts"]:
+            return False
+        before = [num(r["price"]) for r in self.db.rows("""select price from price_marks where mint=? and ts>=? and ts<=?
+            order by ts""", (t["mint"], int(t["close_ts"]) - FROZEN_FOR, int(t["close_ts"])))]
+        if len(before) >= 8 and max(before) == min(before):
+            return True   # sold at a price that had been frozen for 10 minutes: the pool was already empty
+        after = [num(r["price"]) for r in self.db.rows("""select price from price_marks where mint=? and ts>? and ts<=?
+            order by ts""", (t["mint"], int(t["close_ts"]), int(t["close_ts"]) + FROZEN_FOR))]
+        x = num(t["proceeds_usd"]) / num(t["size_usd"]) if num(t["size_usd"]) else 0
+        return x > 3 and len(after) >= 5 and max(after) == min(after)   # a spike printed into an emptied pool
 
     def _record_equity(self, infos: dict, now: int) -> None:
         if now - self._last_equity < EQUITY_EVERY:

@@ -140,6 +140,9 @@ class Database:
         for name, kind in (("chain", "text default 'solana'"), ("pair", "text default ''")):
             if name not in coin_cols:
                 self.conn.execute(f"alter table coins add column {name} {kind}")
+        mark_cols = {r[1] for r in self.conn.execute("pragma table_info(price_marks)")}
+        if "liq" not in mark_cols:   # the pool's liquidity with each price: a price in an emptied pool isn't sellable
+            self.conn.execute("alter table price_marks add column liq real")
         token_cols = {r[1] for r in self.conn.execute("pragma table_info(tokens)")}
         if "traps" not in token_cols:   # Token-2022 traps: re-check every coin's mint account once
             self.conn.execute("alter table tokens add column traps text default ''")
@@ -149,6 +152,8 @@ class Database:
             self.conn.execute("alter table paper_trades add column interrupted integer default 0")
         if "entry_liq" not in paper_cols:     # pool liquidity at entry: a pull of most of it is an emergency exit
             self.conn.execute("alter table paper_trades add column entry_liq real default 0")
+        if "paper_proceeds" not in paper_cols:   # what paper first booked, kept when a sale into an emptied pool is corrected
+            self.conn.execute("alter table paper_trades add column paper_proceeds real")
         live_cols = {r[1] for r in self.conn.execute("pragma table_info(live_trades)")}
         for name, kind in (("retries", "integer default 0"), ("retry_ts", "integer default 0"),
                            ("rent_back", "real default 0"), ("pending_sig", "text default ''"),

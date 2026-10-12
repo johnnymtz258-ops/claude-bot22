@@ -141,15 +141,15 @@ def test_paper_takes_half_at_2x_and_trails_the_rest(bot):
     t = int(time.time())
     tick(bot, P0 * 2.1, t)
     tr = bot.db.row("select * from paper_trades")
-    assert tr["half_taken"] == 1 and tr["remaining"] == pytest.approx(0.5) and tr["proceeds_usd"] == pytest.approx(52.5)
+    assert tr["half_taken"] == 1 and tr["remaining"] == pytest.approx(0.5) and tr["proceeds_usd"] == pytest.approx(52.5, rel=2e-3)
     assert bot.notes.kinds() == ["PAPER"] and "sold half" in bot.notes.sent[0]["text"]
     tick(bot, P0 * 3.0, t + 15)
     tick(bot, P0 * 1.9, t + 30)                                   # -37% from the 3x top
     tr = bot.db.row("select * from paper_trades")
     assert tr["status"] == "closed" and "fell 35%" in tr["close_reason"]
-    assert tr["proceeds_usd"] == pytest.approx(52.5 + 25 * 1.9)
+    assert tr["proceeds_usd"] == pytest.approx(52.5 + 25 * 1.9, rel=2e-3)
     s = bot.engine.paper.summary()
-    assert s["equity"] == pytest.approx(1000 + 52.5 + 47.5 - 50) and s["won"] == 1
+    assert s["equity"] == pytest.approx(1000 + 52.5 + 47.5 - 50, rel=2e-3) and s["won"] == 1
 
 
 def test_paper_stops_out_and_ignores_a_one_tick_glitch(bot):
@@ -160,7 +160,7 @@ def test_paper_stops_out_and_ignores_a_one_tick_glitch(bot):
     tick(bot, P0 * 0.55, t + 15)                                  # -45%
     tr = bot.db.row("select * from paper_trades")
     assert tr["status"] == "closed" and tr["close_reason"] == "stop -40%"
-    assert bot.engine.paper.summary()["equity"] == pytest.approx(1000 - 50 + 50 * 0.55)
+    assert bot.engine.paper.summary()["equity"] == pytest.approx(1000 - 50 + 50 * 0.55, rel=2e-3)
 
 
 def test_paper_exits_when_the_whale_sells_half(bot):
@@ -337,3 +337,41 @@ def test_picks_found_while_auto_follow_was_off_get_followed(bot):
     assert bot.run(bot.scout.promote_picks(now)) == [good]          # inactive wallets stay suggestions
     assert bot.db.row("select source from whales where address=?", (good,))["source"] == "auto"
     assert bot.run(bot.scout.promote_picks(now)) == []
+
+
+def test_paper_cannot_sell_into_an_emptied_pool(bot):
+    """A rug: the liquidity is pulled and the price freezes. Paper used to 'sell' at that frozen price; nothing can."""
+    from fomo.paper import fill
+    import time as _t
+    assert fill(100, 40_000) > 99 and fill(100, 10) < 5 and fill(100, -1) == 100
+    bot.cfg.set("PAPER_SLIPPAGE_PCT", "0")
+    bot.whales.add(WHALE, "Rocket")
+    bot.market.set_pair(mint=MINT, price=0.000075, mc=75_000, liq=20_000)
+    bot.feed(WHALE, pump_buy())
+    t = bot.db.row("select * from paper_trades")
+    assert t and t["entry_liq"] == 20_000
+    now = int(_t.time())
+    bot.market.set_pair(mint=MINT, price=0.000090, mc=90_000, liq=3)                 # pulled: $3 left
+    for i, step in enumerate((0, 15, 30)):
+        bot.market._cache.clear()
+        bot.run(bot.engine.paper.tick(bot.market._cache or {MINT: bot.run(bot.market.token(MINT, max_age=0))}, now + step))
+    t = bot.db.row("select * from paper_trades")
+    assert t["status"] == "closed" and "rug" in t["close_reason"] and t["proceeds_usd"] < 2   # $50 in, ~$1.50 back
+
+
+def test_past_paper_sales_into_emptied_pools_are_corrected_once(bot):
+    import time as _t
+    now = int(_t.time())
+    bot.db.run("insert into tokens(mint, liquidity_usd) values(?, 3)", (MINT,))
+    bot.db.run("""insert into paper_trades(alert_id,mint,whale,symbol,open_ts,entry_price,entry_mc,size_usd,tokens,remaining,
+        proceeds_usd,status,close_ts,close_reason,last_price,half_taken) values(0,?,'hype','RUG',?,1,1,50,50,0,65,'closed',?,
+        'liquidity pulled (3$ left of 20,000$)',1.3,0)""", (MINT, now - 900, now - 600))
+    bot.db.run("""insert into paper_trades(alert_id,mint,whale,symbol,open_ts,entry_price,entry_mc,size_usd,tokens,remaining,
+        proceeds_usd,status,close_ts,close_reason,last_price,half_taken) values(0,'OK1111111111111111111111111111111111111111',
+        'hype','OK',?,1,1,50,50,0,90,'closed',?,'all out at 1.8x',1.8,0)""", (now - 900, now - 600))
+    res = bot.engine.paper.audit_rugs()
+    assert res["n"] == 1 and res["paper_pnl"] == 15 and res["real_pnl"] < -45
+    rug = bot.db.row("select * from paper_trades where symbol='RUG'")
+    assert rug["paper_proceeds"] == 65 and rug["proceeds_usd"] < 5 and "corrected" in rug["close_reason"]
+    assert bot.db.row("select proceeds_usd from paper_trades where symbol='OK'")["proceeds_usd"] == 90
+    assert bot.engine.paper.audit_rugs()["n"] == 0                      # once

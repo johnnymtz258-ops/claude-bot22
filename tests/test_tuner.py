@@ -34,9 +34,13 @@ def test_replay_follows_the_hype_exit_plan():
     assert abs(replay(1.0, up, 0, PLAN, 0.03) - 1.30 * 0.97) < 0.03         # take-profit, minus the sell slippage
     down = [(60 * j, falling(j)) for j in range(1, 60)]
     assert replay(1.0, down, 0, PLAN, 0.03) < 0.76                           # stop
-    flat = [(60 * j, 1.0) for j in range(1, 70)]
-    assert abs(replay(1.0, flat, 0, PLAN, 0.0) - 1.0) < 1e-9                  # time limit
+    flat = [(60 * j, 1.0 + 0.001 * (j % 2)) for j in range(1, 70)]
+    assert abs(replay(1.0, flat, 0, PLAN, 0.0) - 1.0) < 0.002                  # time limit
     assert replay(1.0, flat[:20], 0, PLAN, 0.0) is None                       # price data stops early: not counted
+    rug = [(60 * j, 1.2) for j in range(1, 70)]                               # frozen: liquidity pulled
+    assert replay(1.0, rug, 0, PLAN, 0.0) == 0.0                              # nothing to sell into
+    emptied = [(60, 1.1, 20_000.0), (120, 1.15, 15_000.0), (180, 1.2, 4.0), (240, 1.2, 3.0)]
+    assert replay(1.0, emptied, 0, PLAN, 0.0) == 0.0
 
 
 def test_a_coin_held_back_by_the_zone_is_shadowed_and_priced(bot):

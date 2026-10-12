@@ -42,18 +42,47 @@ SCORE_STEP, SCORE_MIN, SCORE_MAX = 5, 35, 60
 GRID = [(tp, stop, minutes, half) for tp in (20, 30, 50, 80) for stop in (15, 25, 35) for minutes in (30, 60, 120)
         for half in (0, 1)]   # half=1: sell half at the take-profit, ride the rest (a two-step ladder)
 SETTINGS = {"zone": ("HYPE_AVOID_MC_HI",), "profile": ("HYPE_SKIP_PROFILE",), "late": ("HYPE_MAX_H1_PCT",),
+            "fresh": ("HYPE_FRESH_MINUTES",), "bots": ("HYPE_BLOCK_BOTS",),
             "score": ("HYPE_MIN_SCORE",), "exit": ("HYPE_TP_PCT", "HYPE_STOP_PCT", "HYPE_MAX_MINUTES", "HYPE_HALF_AT_TP")}
 
 
-def replay(price: float, path: list[tuple[int, float]], start: int, plan: dict, slip: float,
+FROZEN_MARKS = 10       # the same price for 10 minutes in a row: nobody can trade it — the pool was emptied
+DEAD_LIQ = 1_000        # under $1K of liquidity left: there is nothing to sell into
+
+
+def dead_from(path: list[tuple], entry_liq: float = 0.0) -> int | None:
+    """Index in the path from which the coin can't be sold any more (liquidity pulled), or None.
+    Seen two ways: the recorded liquidity collapses, or (older records without liquidity) the price freezes."""
+    run = 1
+    for i, point in enumerate(path):
+        liq = point[2] if len(point) > 2 else None
+        if liq is not None and liq >= 0 and (liq < DEAD_LIQ or (entry_liq > 0 and liq < 0.1 * entry_liq)):
+            return i
+        if i and point[1] == path[i - 1][1]:
+            run += 1
+            if run >= FROZEN_MARKS:
+                return i - run + 1
+        else:
+            run = 1
+    return None
+
+
+def replay(price: float, path: list[tuple], start: int, plan: dict, slip: float,
            trail_pct: float = 35.0) -> float | None:
     """Multiple of your money for one coin bought at `price` (plus slippage) and run through the hype exit plan on its
-    recorded price path — what the paper autopilot does each tick. None when the path doesn't cover the trade."""
+    recorded price path — what the paper autopilot does each tick. None when the path doesn't cover the trade.
+    Realistic: once the pool is emptied (liquidity pulled / price frozen), whatever is still held is worth nothing —
+    a price printed into an empty pool can't be sold at."""
     if price <= 0 or not path:
         return None
     entry, peak, got, left = price * (1 + slip), 1.0, 0.0, 1.0
     half = plan.get("half")
-    for ts, p in path:
+    first_liq = next((pt[2] for pt in path if len(pt) > 2 and pt[2] is not None and pt[2] > 0), 0.0)
+    dead = dead_from(path, first_liq)
+    for i, point in enumerate(path):
+        ts, p = point[0], point[1]
+        if dead is not None and i >= dead:
+            return got                                   # the rest can't be sold
         x = p / entry
         peak = max(peak, x)
         if half and left == 1.0 and x >= plan["tp"]:
@@ -130,7 +159,7 @@ class Tuner:
         """The one adjustable rule that kept this coin from an alert, or '' (not a shadow: safety blocks, quiet coins,
         already alerted or shadowed lately, or this hour's shadows used up)."""
         rule = r.get("rule", "")
-        if rule in ("zone", "profile", "late"):
+        if rule in ("zone", "profile", "late", "fresh", "bots"):
             if not alertable({**r, "blocked": ""}, self.cfg):
                 return ""
             if rule == "late" and num(info.get("change_h1")) > self.cfg.get("HYPE_MAX_H1_PCT") + 2 * LATE_STEP:
@@ -164,8 +193,8 @@ class Tuner:
             rows += self.db.rows("""select * from hype_seen where kind=? and ts>=? and ts<=? order by ts desc limit ?""",
                                  (kind, int(now) - WINDOW_DAYS * 86400, int(now) - TRACK, limit))
         for row in rows:
-            row["path"] = [(int(m["ts"]), num(m["price"])) for m in self.db.rows(
-                "select ts, price from price_marks where mint=? and ts>? and ts<=? order by ts",
+            row["path"] = [(int(m["ts"]), num(m["price"]), m["liq"]) for m in self.db.rows(
+                "select ts, price, liq from price_marks where mint=? and ts>? and ts<=? order by ts",
                 (row["mint"], row["ts"], row["ts"] + TRACK)) if num(m["price"]) > 0]
             row["keyset"] = set(str(row["keys"] or "").split(","))
             row["x"] = self._run([row], plan)[0]
@@ -219,6 +248,19 @@ class Tuner:
               and "profile" in r["keyset"] and no_whales(r) and r["ts"] >= self._since("HYPE_SKIP_PROFILE")],
              ("HYPE_SKIP_PROFILE", 0, "off") if cfg.flag("HYPE_SKIP_PROFILE") else None,
              ("HYPE_SKIP_PROFILE", 1, "back on") if self.base("HYPE_SKIP_PROFILE") >= 0.5 else None),
+            ("fresh", "young pool seeded to be pulled", cfg.get("HYPE_FRESH_MINUTES") > 0,
+             [r for r in shadows if r["rule"] == "fresh"],
+             [r for r in alerts if cfg.get("HYPE_FRESH_MINUTES") <= 0 < self.base("HYPE_FRESH_MINUTES")
+              and "fresh" in r["keyset"] and no_whales(r) and r["ts"] >= self._since("HYPE_FRESH_MINUTES")],
+             ("HYPE_FRESH_MINUTES", 0, "off") if cfg.get("HYPE_FRESH_MINUTES") > 0 else None,
+             ("HYPE_FRESH_MINUTES", self.base("HYPE_FRESH_MINUTES"), "back on")
+             if cfg.get("HYPE_FRESH_MINUTES") <= 0 < self.base("HYPE_FRESH_MINUTES") else None),
+            ("bots", "mostly bot buying (Jupiter)", cfg.flag("HYPE_BLOCK_BOTS"),
+             [r for r in shadows if r["rule"] == "bots"],
+             [r for r in alerts if not cfg.flag("HYPE_BLOCK_BOTS") and self.base("HYPE_BLOCK_BOTS") >= 0.5
+              and "bots" in r["keyset"] and no_whales(r) and r["ts"] >= self._since("HYPE_BLOCK_BOTS")],
+             ("HYPE_BLOCK_BOTS", 0, "off") if cfg.flag("HYPE_BLOCK_BOTS") else None,
+             ("HYPE_BLOCK_BOTS", 1, "back on") if self.base("HYPE_BLOCK_BOTS") >= 0.5 else None),
             ("late", f"already up more than {late:.0f}% in the hour", True,
              [r for r in shadows if r["rule"] == "late" and num(r["h1"]) <= late + LATE_STEP],
              [r for r in alerts if late > b_late and num(r["h1"]) > late - LATE_STEP

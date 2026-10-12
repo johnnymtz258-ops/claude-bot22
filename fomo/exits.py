@@ -45,7 +45,7 @@ class MarkRecorder:
         self._last: dict[str, tuple[int, float]] = {}
         self._pending: dict[str, float] = {}
 
-    def record(self, mint: str, price: float, ts: int) -> bool:
+    def record(self, mint: str, price: float, ts: int, liq: float | None = None) -> bool:
         if price <= 0:
             return False
         last = self._last.get(mint)
@@ -64,7 +64,8 @@ class MarkRecorder:
         if len(self._last) > 20_000:   # 24/7: forget coins not priced for a day
             self._last = {m: v for m, v in self._last.items() if ts - v[0] < 86400}
             self._pending = {}
-        self.db.run("insert or ignore into price_marks(mint,ts,price) values(?,?,?)", (mint, ts, price))
+        self.db.run("insert or ignore into price_marks(mint,ts,price,liq) values(?,?,?,?)",
+                    (mint, ts, price, liq if liq is not None and liq >= 0 else None))
         return True
 
 
