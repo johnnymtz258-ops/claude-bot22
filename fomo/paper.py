@@ -72,10 +72,15 @@ class PaperTrader:
         out = []
         for kind, label, cond in (("hype", "🔥 Hype alerts", "whale='hype'"), ("whales", "🐋 Whale alerts", "whale<>'hype'")):
             rows = self.db.rows(f"""select size_usd, proceeds_usd from paper_trades where status='closed' and {cond}
-                and close_ts>=?""", (int(time.time()) - days * 86400,))
+                and close_ts>=? and coalesce(interrupted,0)=0""", (int(time.time()) - days * 86400,))
             pnl = [num(r["proceeds_usd"]) - num(r["size_usd"]) for r in rows]
             out.append({"kind": kind, "label": label, "n": len(pnl), "won": sum(p > 0 for p in pnl), "pnl": sum(pnl),
                         "avg": sum(pnl) / len(pnl) if pnl else 0.0})
+        rows = self.db.rows("""select size_usd, proceeds_usd from paper_trades where status='closed' and close_ts>=?
+            and coalesce(interrupted,0)=1""", (int(time.time()) - days * 86400,))
+        pnl = [num(r["proceeds_usd"]) - num(r["size_usd"]) for r in rows]
+        out.append({"kind": "offline", "label": "💤 Open while the bot was asleep", "n": len(pnl),
+                    "won": sum(p > 0 for p in pnl), "pnl": sum(pnl), "avg": sum(pnl) / len(pnl) if pnl else 0.0})
         return out
 
     def _slip(self) -> float:
@@ -106,7 +111,9 @@ class PaperTrader:
         last = num(t["last_price"])
         if price <= 0:
             return None
-        if last > 0 and (price / last >= GLITCH_JUMP or last / price >= GLITCH_JUMP):
+        # only a sudden SPIKE needs a second reading; a crash is real far more often than a glitch (rugs: the old
+        # filter held them as 'glitches' while the stop and the time limit couldn't fire)
+        if last > 0 and price / last >= GLITCH_JUMP:
             pending = self._pending.get(t["id"])
             if pending and 0.8 <= price / pending[0] <= 1.25 and now - pending[1] >= 15:
                 self._pending.pop(t["id"], None)
@@ -133,8 +140,12 @@ class PaperTrader:
         for t in self.open_trades():
             price = self._accept(t, num((infos.get(t["mint"]) or {}).get("price_usd")), now)
             if price is None:
-                if now - t["open_ts"] >= MAX_HOLD and num(t["last_price"]) > 0:
-                    done.append(self._sell(t, 1.0, num(t["last_price"]), "24h max hold", now))
+                limit = MAX_HOLD
+                if t["whale"] == "hype":
+                    from .hype import exit_plan
+                    limit = exit_plan(self.cfg)["hold"]
+                if now - t["open_ts"] >= limit and num(t["last_price"]) > 0:   # no usable price: the limit still applies
+                    done.append(self._sell(t, 1.0, num(t["last_price"]), "time limit (no fresh price)", now))
                 continue
             x = price / t["entry_price"]
             peak = max(num(t["peak_x"]), x)

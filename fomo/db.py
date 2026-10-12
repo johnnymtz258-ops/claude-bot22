@@ -140,6 +140,9 @@ class Database:
         for name, kind in (("chain", "text default 'solana'"), ("pair", "text default ''")):
             if name not in coin_cols:
                 self.conn.execute(f"alter table coins add column {name} {kind}")
+        paper_cols = {r[1] for r in self.conn.execute("pragma table_info(paper_trades)")}
+        if "interrupted" not in paper_cols:   # open while the bot was asleep/stopped: unmanaged, kept out of strategy stats
+            self.conn.execute("alter table paper_trades add column interrupted integer default 0")
         live_cols = {r[1] for r in self.conn.execute("pragma table_info(live_trades)")}
         for name, kind in (("retries", "integer default 0"), ("retry_ts", "integer default 0"),
                            ("rent_back", "real default 0")):

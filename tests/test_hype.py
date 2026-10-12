@@ -11,7 +11,7 @@ NOW = time.time()
 def hot_pair(**over):
     """A young coin with a buy rush, buyers beating sellers and a volume surge."""
     base = dict(mint=MINT, price=0.0002, mc=200_000, liq=40_000, created_ms=int((NOW - 2 * 3600) * 1000),
-                buys_h1=240, buys_m5=90, sells_m5=30, volume_m5=30_000, change_m5=12, change_h1=60)
+                buys_h1=240, buys_m5=90, sells_m5=30, volume_m5=30_000, change_m5=12, change_h1=60, socials=0)
     base.update(over)
     return base
 
@@ -80,7 +80,7 @@ def test_second_leg_is_caught_while_buyers_load_before_the_price_moves(bot):
     bot.db.run("delete from alerts")
     bot.market.trending = []                                       # dropped off trending since
     bot.market.set_pair(mint=MINT, price=0.00034, mc=340_000, liq=60_000, created_ms=old, buys_h1=120,
-                        buys_m5=30, sells_m5=12, volume_m5=25_000, change_m5=3, change_h1=5, boosts=1)
+                        buys_m5=30, sells_m5=12, volume_m5=25_000, change_m5=3, change_h1=5, boosts=1, socials=0)
     bot.market._cache.clear()
     bot.run(bot.runners.tick(int(NOW)))
     assert bot.notes.kinds() == ["HYPE"]
@@ -88,12 +88,12 @@ def test_second_leg_is_caught_while_buyers_load_before_the_price_moves(bot):
     assert "buyers loading before the price moves" in text and "second leg: peaked at $1.5M" in text
 
 
-def _cores(bot, age_min, holders):
+def _cores(bot, age_min, holders, mc=53_500, socials=3):
     from tests.helpers import ON_CURVE
-    bot.market.set_pair(mint=MINT, price=0.0002, mc=53_500, liq=17_936, created_ms=int((NOW - age_min * 60) * 1000),
-                        buys_h1=430, buys_m5=173, sells_m5=40, volume_m5=9_894, change_m5=8, change_h1=23)
+    bot.market.set_pair(mint=MINT, price=0.0002, mc=mc, liq=max(17_936, mc * 0.2), created_ms=int((NOW - age_min * 60) * 1000),
+                        buys_h1=430, buys_m5=173, sells_m5=40, volume_m5=9_894, change_m5=8, change_h1=23, socials=socials)
     bot.rpc.holders[MINT] = [(ON_CURVE[i], amount) for i, amount in enumerate(holders)]
-    bot.market.watchlist = [MINT]                             # a new DexScreener token profile, like most launches
+    bot.market.trending = [MINT]                              # how the scanner finds it
     bot.run(bot.runners.tick(int(NOW)))
 
 
@@ -101,13 +101,18 @@ def test_cores_a_bundled_eight_minute_old_launch_is_not_a_93(bot):
     """$CORES: 8 minutes old, 173 buys in 5 min — and the dev's bundle holding the supply. It dumped 93% minutes later."""
     _cores(bot, 8, [26_000_000] * 5)                          # 5 wallets with ~49% of the supply
     assert bot.notes.kinds() == []
+    assert "zone" in bot.hype.board[0]["blocked"]             # $53.5K: the $30K-100K zone where launches got dumped
+    bot.cfg.set("HYPE_AVOID_MC_HI", "30000")                  # even with the zone off, the bundle check catches it
+    bot.market._cache.clear()
+    _cores(bot, 8, [26_000_000] * 5, socials=0)
+    assert bot.notes.kinds() == []
     row = bot.hype.board[0]
     assert row["score"] < 45 and "bundle" in row["keys"]
 
 
 def test_the_same_push_on_a_coin_that_survived_its_launch_with_spread_supply_is_alerted(bot):
     bot.market.boosted = [MINT]
-    _cores(bot, 2 * 24 * 60, [2_500_000] * 10)               # 2 days old, top 10 hold ~9%
+    _cores(bot, 2 * 24 * 60, [10_000_000] * 10, mc=150_000, socials=0)   # 2 days old, top 10 hold ~13%
     assert bot.notes.kinds() == ["HYPE"]
     text = bot.notes.sent[0]["text"]
     assert "supply spread out" in text
@@ -123,3 +128,13 @@ def test_hype_paper_trades_take_the_first_move(bot):
     bot.run(bot.tracker.tick(int(NOW) + 120))
     t = bot.db.row("select * from paper_trades where whale='hype'")
     assert t["status"] == "closed" and "hype take-profit" in t["close_reason"]
+
+
+def test_paid_profile_coins_and_the_dump_zone_are_held_back_unless_your_whales_are_in(bot):
+    profiled = {"profiles": {MINT}}                                         # on DexScreener's paid token-profile list
+    assert "paid DexScreener profile" in score(info_of(), bot.cfg, now=NOW, lists=profiled)["blocked"]
+    whales = [{"name": "Rocket"}]
+    assert not score(info_of(), bot.cfg, now=NOW, lists=profiled, whales=whales)["blocked"]
+    assert "zone" in score(info_of(mc=60_000, liq=15_000), bot.cfg, now=NOW)["blocked"]
+    assert not score(info_of(mc=25_000, liq=8_000), bot.cfg, now=NOW, )["blocked"].startswith("$25")
+    assert not score(info_of(mc=60_000, liq=15_000), bot.cfg, now=NOW, whales=whales)["blocked"]

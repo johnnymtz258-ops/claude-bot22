@@ -77,11 +77,20 @@ class Tracker:
         gap = now - last if last else 0.0
         if gap >= GAP_WARN_SECONDS:
             self.db.set_meta("last_gap", f"{int(last)}-{int(now)}")
-            await self.notify(
-                f"💤 <b>The bot was paused for {dur(gap)}</b> ({time.strftime('%H:%M', time.localtime(last))}"
-                f" → {time.strftime('%H:%M', time.localtime(now))}).\nYour Mac slept or the bot was stopped, so whale "
-                "buys in that window were missed. Keep the lid open and the charger in while it runs.",
-                silent=True, kind="GAP")
+            unwatched = self.db.run("update paper_trades set interrupted=1 where status='open' and open_ts<?", (int(last),))
+            live_open = self.db.scalar("select count(*) from live_trades where status='open' and dry=0 and open_ts<?",
+                                       (int(last),), default=0)
+            text = (f"💤 <b>The bot was paused for {dur(gap)}</b> ({time.strftime('%H:%M', time.localtime(last))}"
+                    f" → {time.strftime('%H:%M', time.localtime(now))}).\nYour Mac slept (lid closed?) or the bot was "
+                    "stopped: whale buys in that window were missed")
+            if unwatched:
+                text += (f", and {unwatched} open paper trade{'s were' if unwatched != 1 else ' was'} unwatched — the plan "
+                         "closes any past its limit now. They're kept out of the strategy's results")
+            text += ".\nKeep the lid open and the charger in while it runs — macOS sleeps on lid close whatever apps ask."
+            if live_open:
+                text += (f"\n⚠️ <b>{live_open} REAL position{'s were' if live_open != 1 else ' was'} unwatched</b> — "
+                         "check the trading wallet.")
+            await self.notify(text, silent=not live_open, kind="GAP")
         return gap
 
     async def tick(self, now: int | None = None) -> None:

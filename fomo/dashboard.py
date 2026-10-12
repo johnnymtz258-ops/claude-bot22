@@ -117,6 +117,9 @@ class Dashboard:
         types = a.engine.paper.by_type()
         live = getattr(a, "live", None)
         for t in types:
+            if t["kind"] == "offline":
+                t["live_ok"], t["live_why"] = None, "not a strategy result — keep the Mac awake"
+                continue
             t["live_ok"], t["live_why"] = live.type_allowed("hype" if t["kind"] == "hype" else "") if live else (True, "")
         return _json({"summary": s, "curve": curve, "closed": closed, "enabled": a.cfg.flag("PAPER_TRADING"),
                       "types": types, "hype_exit": {"tp": a.cfg.get("HYPE_TP_PCT"), "stop": a.cfg.get("HYPE_STOP_PCT"),

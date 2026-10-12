@@ -175,7 +175,7 @@ class LiveTrader:
         """The paper autopilot's closed trades for one alert type ('hype' or 'whales') over the last `days`."""
         cond = "whale='hype'" if kind == "hype" else "whale<>'hype'"
         rows = self.db.rows(f"""select size_usd, proceeds_usd from paper_trades where status='closed' and {cond}
-            and close_ts>=?""", (int(time.time()) - days * 86400,))
+            and close_ts>=? and coalesce(interrupted,0)=0""", (int(time.time()) - days * 86400,))
         pnl = [num(r["proceeds_usd"]) - num(r["size_usd"]) for r in rows]
         return {"n": len(pnl), "pnl": sum(pnl), "won": sum(p > 0 for p in pnl)}
 

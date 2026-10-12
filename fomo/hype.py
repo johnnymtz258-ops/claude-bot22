@@ -70,6 +70,11 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
         out["blocked"] = f"dumping ({pct(m5)} 5m, {pct(h1)} 1h)"
     elif m5 > 40 or h1 > cfg.get("HYPE_MAX_H1_PCT"):
         out["blocked"] = f"late — already {pct(h1)} this hour ({pct(m5)} in 5 min)"
+    elif cfg.get("HYPE_AVOID_MC_LO") <= mcap < cfg.get("HYPE_AVOID_MC_HI") and not whales:
+        # 225 hype trades: $30K-100K lost in every period (-$436, 18% rugged) — where fresh migrations get dumped;
+        # under $30K made +$453 (78% won)
+        out["blocked"] = (f"{mc(mcap)} is in the {mc(cfg.get('HYPE_AVOID_MC_LO'))}-{mc(cfg.get('HYPE_AVOID_MC_HI'))} zone "
+                          "where fresh launches got dumped in your data")
 
     sig = []
     b5, s5 = num(info.get("buys_m5")), num(info.get("sells_m5"))
@@ -112,6 +117,10 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
     if peak_mc >= 2.5 * mcap and keys & {"loading", "rush", "volume"}:
         sig.append(("reload", f"♻️ second leg: peaked at {mc(peak_mc)} in the last 2 days, now {mc(mcap)} — "
                               "buyers coming back", 15))
+    if cfg.flag("HYPE_SKIP_PROFILE") and not out["blocked"] and not whales and any(k == "profile" for k, _, _ in sig):
+        # coins with a paid DexScreener profile / socials lost in every period (151 trades: 33% won, -$588);
+        # the ones without made +$415 (68% won). Teams paying for attention are often selling into it.
+        out["blocked"] = "paid DexScreener profile / socials — these lost in every period of your data"
     out["signals"] = sig
     burst = min(BURST_CAP, sum(p for k, _, p in sig if k in BURST))
     out["score"] = max(0, min(100, burst + sum(p for k, _, p in sig if k not in BURST)))
