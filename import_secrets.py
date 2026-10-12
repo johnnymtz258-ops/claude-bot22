@@ -1,4 +1,4 @@
-"""First run: copy Telegram/Helius/wallet settings from a previous bot folder next to this one.
+"""First run: copy Telegram, RPC and wallet settings from a previous bot folder next to this one.
 
 Only the keys listed below are copied. Private keys, seed phrases and old trading settings are
 never read or copied. Exit code 2 means nothing was found (the launcher then runs the wizard).
@@ -6,8 +6,9 @@ never read or copied. Exit code 2 means nothing was found (the launcher then run
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-KEYS = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "HELIUS_API_KEY", "SOLANA_RPC_FALLBACKS", "MY_WALLETS",
-        "PUBLIC_SOLANA_WALLET_ADDRESS", "FOMO_STATE_DIR", "DASHBOARD_PORT"]
+KEYS = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "HELIUS_API_KEY", "SOLANA_RPC_HTTP", "SOLANA_RPC_FALLBACKS",
+        "SOLANA_RPC_WSS", "JUPITER_API_KEY", "MY_WALLETS", "PUBLIC_SOLANA_WALLET_ADDRESS", "FOMO_STATE_DIR",
+        "DASHBOARD_PORT"]
 
 
 def read_env(path: Path) -> dict:
@@ -42,7 +43,8 @@ def main() -> int:
         lines.append(f"{key}={values.pop(key)}" if key in values else line)
     lines += [f"{k}={v}" for k, v in values.items()]
     out.write_text("\n".join(lines) + "\n")
-    print(f"Copied Telegram/Helius/wallet settings from {old.parent.name}. Nothing else was copied.")
+    print(f"Copied Telegram, RPC and wallet settings from {old.parent.name}. Nothing else was copied "
+          "(a TRADING_PRIVATE_KEY never is — add it again yourself if you use live trading).")
     return 0
 
 
