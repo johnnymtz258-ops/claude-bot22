@@ -252,3 +252,44 @@ def test_live_only_follows_alert_types_that_make_money_on_paper(bot):
     assert bot.run(live.buy(0, "Hyped" + "1" * 39, "HYPED", "hype")) == 0
     assert any("skipping" in m["text"] for m in bot.notes.sent)
     assert live.type_allowed("SomeWhale")[0]                                 # whale alerts aren't losing: allowed
+
+
+def _paired(bot, n, paper_x, live_x, now):
+    for i in range(n):
+        pid = bot.db.insert("""insert into paper_trades(mint,whale,symbol,open_ts,entry_price,size_usd,tokens,remaining,
+            proceeds_usd,status,close_ts) values(?,?,?,?,1,50,50,0,?,'closed',?)""",
+                            (f"F{i}" + "1" * 40, "hype", "F", now - 7200, 50 * paper_x, now - 600))
+        bot.db.run("""insert into live_trades(paper_id,mint,symbol,open_ts,sol_in,sol_out,status,close_ts,dry)
+            values(?,?,?,?,0.1,?,'closed',?,0)""", (pid, f"F{i}" + "1" * 40, "F", now - 7200 + 4, 0.1 * live_x, now - 590))
+
+
+def test_real_fills_are_compared_with_paper_and_paper_is_calibrated(bot):
+    import time as _t
+    live, chain, quotes, kp, msg = live_bot(bot, dry=False)
+    bot.cfg.set("PAPER_SLIPPAGE_PCT", "3")
+    calls = []
+    live.set_setting = lambda name, value: calls.append((name, value)) or bot.cfg.set(name, value)
+    now = int(_t.time())
+    _paired(bot, 10, paper_x=1.20, live_x=1.10, now=now)
+    f = live.fills()
+    assert f["n"] == 10 and f["live_avg"] == pytest.approx(1.10) and f["paper_avg"] == pytest.approx(1.20)
+    assert f["delay_s"] == 4 and 5 < f["real_slip_pct"] < 8                 # ~7% each way explains 1.10x vs 1.20x
+    assert live.summary()["fills"]["n"] == 10
+    text = bot.run(live.calibrate(now))
+    assert calls and calls[0][0] == "PAPER_SLIPPAGE_PCT" and 5 < bot.cfg.get("PAPER_SLIPPAGE_PCT") < 8
+    assert "calibrated to your real fills" in text
+    assert bot.run(live.calibrate(now)) == ""                                # once a day
+
+
+def test_calibration_waits_for_enough_real_trades_and_respects_your_setting(bot):
+    import time as _t
+    live, chain, quotes, kp, msg = live_bot(bot, dry=False)
+    bot.cfg.set("PAPER_SLIPPAGE_PCT", "3")
+    live.set_setting = lambda name, value: bot.cfg.set(name, value)
+    now = int(_t.time())
+    _paired(bot, 9, paper_x=1.20, live_x=1.00, now=now)
+    assert bot.run(live.calibrate(now)) == "" and bot.cfg.get("PAPER_SLIPPAGE_PCT") == 3
+    _paired(bot, 3, paper_x=1.20, live_x=1.00, now=now)
+    bot.db.set_meta("live_calibrated", "")
+    bot.db.set_meta("tune:manual:PAPER_SLIPPAGE_PCT", now - 3600)
+    assert bot.run(live.calibrate(now)) == "" and bot.cfg.get("PAPER_SLIPPAGE_PCT") == 3

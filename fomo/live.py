@@ -35,6 +35,8 @@ MAX_RETRIES = 15          # …and after this many failed tries you're told to s
 TOKEN_PROGRAMS = (TOKEN_PROGRAM, TOKEN_2022_PROGRAM)
 PROFIT_DAYS = 7
 PROFIT_MIN_TRADES = 15
+FILL_DAYS = 30
+CALIBRATE_MIN = 10        # real trades before paper's slippage is set from them
 
 
 def load_keypair():
@@ -46,7 +48,7 @@ def load_keypair():
     try:
         from solders.keypair import Keypair
     except ImportError:
-        return None, "live-trading support isn't installed yet — restart with start_mac.command"
+        return None, "live-trading support isn't installed yet — restart the bot (start_mac.command / server/install.sh)"
     try:
         if path:
             with open(os.path.expanduser(path)) as f:
@@ -72,6 +74,8 @@ class LiveTrader:
         self.jupiter = os.environ.get("JUPITER_API", "").strip().rstrip("/") or JUPITER
         self.jupiter_key = os.environ.get("JUPITER_API_KEY", "").strip()
         self.last_error = ""
+        self.set_setting = None   # App.set_setting: lets calibrate() store the measured slippage
+        self.hold_until = 0.0     # set while a second copy of the bot is running: no real buys (they'd double)
         self._lock = asyncio.Lock()
         self._tasks: set = set()
 
@@ -193,6 +197,8 @@ class LiveTrader:
     async def buy(self, paper_id: int, mint: str, symbol: str, whale: str = "") -> int:
         ok, why = self.ready()
         if not ok:
+            return 0
+        if time.time() < self.hold_until:
             return 0
         allowed, why = self.type_allowed(whale)
         if not allowed:
@@ -405,6 +411,57 @@ class LiveTrader:
         await self.notify(f"⚠️ <b>Live autopilot: ${esc(symbol)}</b>\n{esc(why)}\n<code>{mint}</code>", mint=mint,
                           silent=True, kind="LIVE")
 
+    # -- real fills vs paper ------------------------------------------------------------------------
+    def fills(self, days: int = FILL_DAYS) -> dict:
+        """Real trades next to the paper trades they copied: what real swaps cost on top of what paper assumes.
+        paper_x / live_x are the multiples of the money put in (fees, slippage, priority fees and rent all included)."""
+        rows = self.db.rows("""select l.id, l.symbol, l.mint, l.open_ts, l.sol_in, l.sol_out, p.open_ts as paper_ts,
+                p.size_usd, p.proceeds_usd from live_trades l join paper_trades p on p.id=l.paper_id
+            where l.status='closed' and l.dry=0 and p.status='closed' and l.sol_in>0 and p.size_usd>0 and l.close_ts>=?
+            order by l.close_ts desc""", (int(time.time()) - days * 86400,))
+        slip = self.cfg.get("PAPER_SLIPPAGE_PCT") / 100
+        ratios = []
+        for r in rows:
+            r["live_x"], r["paper_x"] = r["sol_out"] / r["sol_in"], num(r["proceeds_usd"]) / r["size_usd"]
+            r["delay_s"] = max(0, int(r["open_ts"]) - int(r["paper_ts"]))
+            market_x = r["paper_x"] * (1 + slip) / (1 - slip)      # the price move itself, before paper's costs
+            if market_x > 0:
+                ratios.append(r["live_x"] / market_x)
+        out = {"n": len(rows), "rows": rows[:10], "paper_slip_pct": slip * 100}
+        if rows:
+            out.update(live_avg=sum(r["live_x"] for r in rows) / len(rows),
+                       paper_avg=sum(r["paper_x"] for r in rows) / len(rows),
+                       delay_s=sorted(r["delay_s"] for r in rows)[len(rows) // 2])
+            out["gap"] = out["live_avg"] - out["paper_avg"]
+        if ratios:
+            k = sorted(ratios)[len(ratios) // 2]                      # median: one rug doesn't swing it
+            out["real_slip_pct"] = max(0.0, (1 - k) / (1 + k) * 100)  # cost per side that explains the real fills
+        return out
+
+    async def calibrate(self, now: int | None = None) -> str:
+        """Once a day: with 10+ real trades, set the paper autopilot's slippage to what real swaps actually cost, so
+        paper results (and the self-tuner, which replays with it) predict real money. A value you set yourself is
+        left alone for a week."""
+        now = int(now or time.time())
+        today = datetime.fromtimestamp(now).strftime("%Y-%m-%d")
+        if self.db.get_meta("live_calibrated") == today or not self.set_setting:
+            return ""
+        self.db.set_meta("live_calibrated", today)
+        f = self.fills()
+        if f["n"] < CALIBRATE_MIN or "real_slip_pct" not in f:
+            return ""
+        if now - int(num(self.db.get_meta("tune:manual:PAPER_SLIPPAGE_PCT", "0"))) < 7 * 86400:
+            return ""
+        new = round(min(15.0, max(1.0, f["real_slip_pct"])), 1)
+        if abs(new - f["paper_slip_pct"]) < 1:
+            return ""
+        self.set_setting("PAPER_SLIPPAGE_PCT", new)
+        text = (f"📏 <b>Paper autopilot calibrated to your real fills</b>\nOn your last {f['n']} real trades, swaps cost about "
+                f"{f['real_slip_pct']:.1f}% each way (paper assumed {f['paper_slip_pct']:g}%): real {f['live_avg']:.2f}x vs paper "
+                f"{f['paper_avg']:.2f}x a trade. PAPER_SLIPPAGE_PCT → {new:g}, so paper results match what real money gets.")
+        await self.notify(text, silent=True, kind="LIVE")
+        return text
+
     def summary(self) -> dict:
         trades = self.db.rows("select * from live_trades where dry=? order by open_ts desc", (int(self.dry_run),))
         closed = [t for t in trades if t["status"] == "closed"]
@@ -412,4 +469,12 @@ class LiveTrader:
         return {"enabled": self.cfg.flag("LIVE_TRADING"), "dry_run": self.dry_run, "wallet": self.wallet,
                 "problem": self.ready()[1], "open": [t for t in trades if t["status"] == "open"],
                 "closed": len(closed), "won": sum(p > 0 for p in pnl), "realized_sol": sum(pnl),
-                "today_sol": self.today_realized_sol(), "recent": trades[:20], "error": self.last_error}
+                "today_sol": self.today_realized_sol(), "recent": self._with_paper(trades[:20]), "error": self.last_error,
+                "fills": {k: v for k, v in self.fills().items() if k != "rows"}}
+
+    def _with_paper(self, trades: list[dict]) -> list[dict]:
+        for t in trades:
+            p = self.db.row("select status, size_usd, proceeds_usd from paper_trades where id=?", (t["paper_id"],))
+            t["paper_x"] = (num(p["proceeds_usd"]) / num(p["size_usd"]) if p and p["status"] == "closed"
+                            and num(p["size_usd"]) > 0 else None)
+        return trades

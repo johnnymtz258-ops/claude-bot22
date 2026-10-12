@@ -200,6 +200,27 @@ class Database:
         self.run("delete from tg_messages where ts<?", (int(time.time()) - 60 * 86400,))
 
 
+def backup(db_path: Path | str, folder: Path | str, keep: int = 3, day: str | None = None) -> Path | None:
+    """A consistent copy of the live database (safe while the bot writes), one per day, the last `keep` days kept."""
+    db_path, folder = Path(db_path), Path(folder)
+    if str(db_path) == ":memory:" or not db_path.exists():
+        return None
+    folder.mkdir(parents=True, exist_ok=True)
+    out = folder / f"whales-{day or time.strftime('%Y-%m-%d')}.db"
+    tmp = out.with_suffix(".tmp")
+    src = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    dst = sqlite3.connect(str(tmp))
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+    tmp.replace(out)
+    for old in sorted(folder.glob("whales-*.db"))[:-keep]:
+        old.unlink(missing_ok=True)
+    return out
+
+
 OUTCOME_POINTS = (("p1h", 3600, 3600), ("p6h", 6 * 3600, 3 * 3600), ("p24h", 86400, 6 * 3600))  # (column, after, grace)
 
 

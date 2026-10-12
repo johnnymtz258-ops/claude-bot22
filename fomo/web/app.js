@@ -348,6 +348,26 @@
         td(`${Math.round(r.hit_1_5x * 100)}%`, "num"), td(`${Math.round(r.hit_2x * 100)}%`, "num"),
         td(r.avg_1h === null ? "—" : pct(r.avg_1h), `num ${signClass(r.avg_1h)}`))),
       "No hype alerts yet — results appear here as they come in.");
+    renderTuning(h.tuning || {});
+  }
+
+  function renderTuning(t) {
+    const x = (v) => pct((v - 1) * 100, 1);
+    const a = t.alerts || {};
+    $("tune-meta").textContent = !t.ts ? "measuring — needs a few hours of scanning"
+      : `${t.auto ? "adjusting by itself" : "measuring only (/set HYPE_AUTOTUNE 1)"} · last ${t.days} days · alerts replayed: ${a.n ? `${a.n} at ${x(a.avg)}, ${Math.round(a.won * 100)}% won` : "none finished yet"}`;
+    table($("tune-rules"), ["Rule", "State", { label: "Blocked", num: 1 }, { label: "Would have made", num: 1 }, { label: "Won", num: 1 }, { label: "Let in", num: 1 }, "Next step"],
+      (t.rules || []).map((r) => el("tr", {}, td(r.label), td(r.active ? "on" : "off (loosened)"),
+        td(String(r.blocked.n), "num"), td(r.blocked.n ? x(r.blocked.avg) : "—", `num ${r.blocked.n ? signClass(r.blocked.avg - 1) : ""}`),
+        td(r.blocked.n ? `${Math.round(r.blocked.won * 100)}%` : "—", "num"),
+        td(r.admitted.n ? `${r.admitted.n} at ${x(r.admitted.avg)}` : "—", "num"),
+        td(r.change ? `${r.change[0]}: ${r.change[1]} → ${r.change[3]}` : "keep", "wrap"))),
+      "Nothing measured yet.");
+    const ex = t.exit || {}, cur = ex.current || {}, best = ex.best || {};
+    $("tune-exit").textContent = cur.n ? `Exit plan +${cur.tp}% / -${cur.stop}% / ${cur.minutes} min: ${x(cur.avg)} a trade on ${cur.n} alerts`
+      + (best.n ? ` · best of 36 tried: +${best.tp}% / -${best.stop}% / ${best.minutes} min at ${x(best.avg)} (${x(best.avg_wo_best)} without its best coin)` : "") : "";
+    $("tune-log").replaceChildren(...(t.log || []).slice(-6).reverse().map((l) => el("li", {},
+      el("b", {}, `${new Date(l.ts * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })} `), l.text)));
   }
 
   async function renderHot() {
@@ -509,10 +529,18 @@
       act("Sell everything", "sellall"),
       el("span", { class: "muted" }, ` ${l.closed} closed · ${l.won} won · ${l.realized_sol >= 0 ? "+" : ""}${l.realized_sol.toFixed(3)} SOL · today ${l.today_sol >= 0 ? "+" : ""}${l.today_sol.toFixed(3)} SOL`));
     canSell = !!l.wallet;
-    table($("live-trades"), ["Coin", { label: "SOL in", num: 1 }, { label: "SOL out", num: 1 }, { label: "P/L", num: 1 }, "Status", "Opened", ""],
+    const f = l.fills || {};
+    $("live-fills").textContent = f.n
+      ? `Real vs paper on the same ${f.n} trades: real ${f.live_avg.toFixed(2)}x · paper ${f.paper_avg.toFixed(2)}x a trade`
+        + (f.real_slip_pct !== undefined ? ` · real swaps cost ~${f.real_slip_pct.toFixed(1)}% each way (paper assumes ${f.paper_slip_pct}%)` : "")
+        + ` · bought ${f.delay_s}s after paper. With 10+ real trades the paper autopilot's slippage is set to the real cost.`
+      : "Once real trades close, each is compared with the paper trade it copied — what real swaps cost on top.";
+    table($("live-trades"), ["Coin", { label: "SOL in", num: 1 }, { label: "SOL out", num: 1 }, { label: "P/L", num: 1 }, { label: "Real", num: 1 }, { label: "Paper", num: 1 }, "Status", "Opened", ""],
       l.recent.map((t) => el("tr", { class: "click", onclick: () => openCoin(t.mint) },
         td(coinCell(t.symbol, "", t.mint)), td(t.sol_in.toFixed(3), "num"), td(t.sol_out.toFixed(3), "num"),
         td(t.status === "closed" ? `${(t.sol_out - t.sol_in >= 0 ? "+" : "")}${(t.sol_out - t.sol_in).toFixed(3)}` : "—", `num ${signClass(t.sol_out - t.sol_in)}`),
+        td(t.status === "closed" && t.sol_in > 0 ? `${(t.sol_out / t.sol_in).toFixed(2)}x` : "—", "num"),
+        td(t.paper_x === null || t.paper_x === undefined ? "—" : `${t.paper_x.toFixed(2)}x`, "num"),
         td(t.status === "closed" ? t.close_reason : (t.dry ? "open (dry run)" : "open"), "wrap"), td(ago(t.open_ts)),
         td(t.status === "open" ? sellButtons(t.mint, t.symbol, renderLiveTrading) : ""))),
       "No live trades yet.");

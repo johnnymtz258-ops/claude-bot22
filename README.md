@@ -108,6 +108,31 @@ These sell from the trading wallet — coins in your Fomo wallet are still sold 
 `/live off` stops new buys. Watch the paper autopilot for a few days first: if it isn't making money,
 the live one won't either.
 
+## Run it 24/7 on a free server
+
+The Mac sleeping cost real money in your data (trades left open while it slept lost $296; watched ones made +$124).
+`SERVER_SETUP.txt` walks through a free Oracle Cloud "Always Free" server (or Google Cloud's free e2-micro):
+`send_to_server.command` copies the bot, your `.env` and your history there and installs it as a service that starts
+on boot and restarts by itself. `open_server_dashboard.command` opens its dashboard through an SSH tunnel and
+`server_log.command` shows its log. Telegram works exactly as before. If two copies ever run at once (the Mac and the
+server), the bot says so and holds real-money buys until one stops.
+
+## Self-tuning hype filter (`/tuning`)
+
+Each hype rule (the $30K–100K zone, paid profiles, "already up too much this hour", the score threshold) is measured on
+the coins it BLOCKED: a coin that fails only one of them is priced for two hours and replayed with the exit plan, the
+same way real alerts are. Every 6 hours, over 14 days: a rule whose blocked coins would have made money (12+ coins,
++3% a trade, half won) is loosened a step; if what it then lets in loses, it's tightened back. The exit plan is replayed
+on every hype alert under 36 take-profit / stop / time-limit combinations and replaced when another one is clearly
+better. One change per setting every 3 days, fixed bounds, a Telegram note for each change; a setting you `/set`
+yourself is left alone for a week. `HYPE_AUTOTUNE 0` keeps the measuring and stops the changes.
+
+## Real fills vs paper
+
+Every closed live trade is compared with the paper trade it copied (`/live`, dashboard): real vs paper multiple, what
+real swaps cost each way, how many seconds after paper it bought. After 10 real trades the paper autopilot's slippage
+is set to the measured real cost, so paper results — and the self-tuner — predict what real money gets.
+
 ## Start automatically
 
 Double-click `install_autostart.command` once and the bot opens by itself every time you log in.
@@ -246,4 +271,6 @@ All in `.env` with defaults; change live with `/set` or on the dashboard. The us
 
 `fomo/` the bot · `fomo/web/` dashboard page · `browser_extension/` Chrome add-on · `tests/`
 (run `python3 -m pytest tests`) · `legacy/` the previous bot, untouched.
-History lives in `~/Library/Application Support/FomoBot/whales.db` so updates never lose it.
+History lives in `~/Library/Application Support/FomoBot/whales.db` (on a Linux server `~/.local/share/FomoBot/`)
+so updates never lose it; a copy is kept for each of the last 3 days in its `backups/` folder.
+`server/install.sh` installs the bot as a systemd service on any Linux server.

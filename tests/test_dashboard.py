@@ -96,5 +96,10 @@ def test_hype_board_endpoint_with_scored_coins(client):
         client.loop.run_until_complete(client.demo.market.tokens([MINT], max_age=0)), {}, int(time.time())))
     status, h = call(client, "GET", "/api/hype")
     assert status == 200 and h["board"] and h["board"][0]["score"] >= 60 and h["board"][0]["keys"]
+    assert {r["rule"] for r in h["tuning"]["rules"]} == {"zone", "profile", "late", "score"}
+    status, live = call(client, "GET", "/api/live")
+    assert status == 200 and (not live.get("available") or "fills" in live)
+    status, _ = call(client, "GET", "/api/overview", headers={"Host": "localhost:8788"})   # SSH tunnel on another port
+    assert status == 200
     _, page = call(client, "GET", "/")
     assert "app.js?v=" in page and "__VERSION__" not in page

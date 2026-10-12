@@ -1,0 +1,85 @@
+RUN FOMOBOT 24/7 ON A FREE CLOUD SERVER
+=======================================
+Why: in your data the Mac sleeping cost real money. Trades left open while it slept lost $296; the ones it watched
+made +$124. A server never sleeps, so the exit plan always runs and no whale buy is missed overnight.
+
+What it costs: $0 on Oracle Cloud's "Always Free" tier (the best free option: an ARM server with up to 2 CPUs and
+12 GB of memory). Oracle asks for a card to check you're a real person. Always Free servers aren't charged; just
+don't pick anything that isn't marked "Always Free".
+
+You need: about 20 minutes, this folder on your Mac, and your phone for Oracle's sign-up check.
+
+
+STEP 1 — Get your server key (on the Mac, 1 minute)
+  Double-click send_to_server.command. It makes a login key for the server and shows the PUBLIC half
+  (a line starting "ssh-ed25519"), already copied for you. Leave that window open: it asks for the server's
+  address in step 3.
+
+STEP 2 — Create the free server (Oracle Cloud, 15 minutes)
+  1. Sign up at https://signup.cloud.oracle.com
+     • Home region: one near you, e.g. "US Midwest (Chicago)" or "US East (Ashburn)". It can't be changed later.
+  2. Once signed in: ☰ menu → Compute → Instances → Create instance
+     • Name: fomobot
+     • Image and shape → Edit:
+         Image: Change image → Ubuntu → Canonical Ubuntu 24.04
+         Shape: Change shape → Ampere → VM.Standard.A1.Flex → 1 OCPU, 6 GB memory (shows "Always Free-eligible")
+         "Out of capacity" error? Try another "Availability domain" at the top, or try again later — or pick
+         Specialty and previous generation → VM.Standard.E2.1.Micro (also Always Free; smaller, still enough).
+     • Networking: leave as is (it creates a network and gives the server a public IP address).
+     • Add SSH keys: "Paste public keys" → paste the key from step 1.
+     • Create. Wait until it says RUNNING, then copy the "Public IP address".
+
+STEP 3 — Send the bot (on the Mac, 3 minutes)
+  Back in the send_to_server.command window, type   ubuntu@YOUR-IP   (e.g. ubuntu@129.153.10.20) and press Enter.
+  It will:
+    • stop the bot on your Mac (two copies would send every alert twice — and make real trades twice)
+    • copy the bot and your .env to the server over an encrypted connection
+    • copy your whales, paper/live history and /set settings (the first time only)
+    • install it as a service: it starts when the server boots and restarts by itself if it ever stops
+  Telegram then says "✅ FomoBot … is running on fomobot". Your Mac can sleep, travel or be switched off.
+
+
+EVERY DAY
+  Telegram works exactly as before: alerts, the pinned card, /paper, /live, /set, /tuning …
+  Dashboard: double-click open_server_dashboard.command. It opens http://localhost:8787 in your browser through an
+             encrypted tunnel (nothing on the server is open to the internet). Keep that window open while you use it.
+  Log:       double-click server_log.command to watch what the bot prints.
+
+UPDATING TO A NEW VERSION
+  Unzip the new version on your Mac, double-click send_to_server.command IN THE NEW FOLDER. It remembers your server,
+  copies the new code and restarts the bot. The server's history is kept (it asks before replacing it — say no).
+
+KEEPING IT FREE (and running)
+  • Stay on Always Free shapes, at most 2 OCPUs / 12 GB in total for Ampere servers.
+  • Oracle may stop an Always Free server it considers idle (under 20% CPU, network AND memory for 7 days). If the
+    pinned Telegram card stops updating, log in → Compute → Instances → fomobot → Start. The bot comes back by itself.
+    Upgrading the account to "Pay As You Go" stops that and stays $0 while you only use Always Free resources —
+    but anything beyond them is billed, so set a budget alert if you do.
+  • Nothing else needs to be opened or paid for: no ports, no domain.
+
+ALTERNATIVE: GOOGLE CLOUD (also free)
+  Free tier: one e2-micro server (2 shared CPUs, 1 GB memory — enough; the installer adds swap) in us-central1 (Iowa),
+  us-east1 (South Carolina) or us-west1 (Oregon) only.
+  Compute Engine → VM instances → Create instance:
+    • Region us-central1, machine type e2-micro
+    • Boot disk → Change: Ubuntu 24.04 LTS, disk type "Standard persistent disk", 30 GB
+      (the default "Balanced" disk is NOT free)
+    • Security → Manage access → Add manually generated SSH keys → paste the key from step 1
+  Then in send_to_server.command type   fomobot@YOUR-IP   (the user name comes from the key).
+
+SAFETY
+  • The server holds your .env: Telegram token, RPC keys and — only if you added one — TRADING_PRIVATE_KEY.
+    It's readable only by your server user, and only your Mac's key can log in (no passwords).
+  • Never open port 8787 to the internet; the tunnel is the way in.
+  • The bot backs its database up every day on the server: ~/.local/share/FomoBot/backups (last 3 days).
+
+BACK TO THE MAC
+  On the Mac, in Terminal:
+    ssh -i ~/.ssh/fomobot_ed25519 ubuntu@YOUR-IP "sudo systemctl disable --now fomobot"
+    rm ~/.fomobot_server
+  Then start_mac.command as before. (To bring the server's history back:
+    scp -i ~/.ssh/fomobot_ed25519 ubuntu@YOUR-IP:.local/share/FomoBot/whales.db ~/Library/Application\ Support/FomoBot/
+  while the Mac bot is stopped.)
+
+BY HAND (any Linux server, no Mac)
+  Copy this folder (with .env) to the server, then:  cd fomobot && bash server/install.sh

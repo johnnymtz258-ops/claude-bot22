@@ -32,8 +32,16 @@ LIVE AUTOPILOT (real money, optional — off by default)
   3. Restart, then /live on. It starts in DRY RUN (nothing is sent). /live dry off to trade for real.
   0.05 SOL a trade, max 3 open, stops for the day at -0.3 SOL. /live off stops buying.
 
-START BY ITSELF
+RUN IT 24/7 FOR FREE (recommended — the Mac sleeping cost money in your data)
+  Follow SERVER_SETUP.txt: a free Oracle Cloud server, then double-click send_to_server.command.
+  Dashboard from the server: open_server_dashboard.command · its log: server_log.command.
+
+START BY ITSELF (on the Mac)
   Double-click install_autostart.command once (remove_autostart.command undoes it).
+
+SELF-TUNING
+  The hype filter measures what each of its rules blocked and loosens or tightens itself every 6h (you get a
+  🧠 note in Telegram for each change). /tuning shows the numbers · /set HYPE_AUTOTUNE 0 stops the changes.
 
 EVERY ALERT HAS THE SAME PLAN
   Sell half at 2x. Sell the rest if it falls 35% from its top, or 40% below your entry.

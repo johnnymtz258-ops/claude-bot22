@@ -58,19 +58,21 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
     mint = info.get("mint", "")
     mcap, liq = num(info.get("mc_usd")), num(info.get("liquidity_usd"), -1)
     m5, h1 = num(info.get("change_m5")), num(info.get("change_h1"))
-    out = {"score": 0, "signals": [], "blocked": ""}
+    out = {"score": 0, "signals": [], "blocked": "", "rule": ""}   # rule: which gate blocked it (the tuner measures each)
     if mcap <= 0 or num(info.get("price_usd")) <= 0:
-        out["blocked"] = "no price"
+        out["blocked"], out["rule"] = "no price", "price"
         return out
     if mcap > cfg.get("HYPE_MAX_MC_USD"):
-        out["blocked"] = f"market cap {mc(mcap)} — past early"
+        out["blocked"], out["rule"] = f"market cap {mc(mcap)} — past early", "mc"
     elif liq < cfg.get("HYPE_MIN_LIQ_USD") or liq < 0.03 * mcap:
-        out["blocked"] = f"liquidity too thin ({usd(max(liq, 0))})"
+        out["blocked"], out["rule"] = f"liquidity too thin ({usd(max(liq, 0))})", "liquidity"
     elif m5 < -15 or h1 < -35:
-        out["blocked"] = f"dumping ({pct(m5)} 5m, {pct(h1)} 1h)"
+        out["blocked"], out["rule"] = f"dumping ({pct(m5)} 5m, {pct(h1)} 1h)", "dumping"
     elif m5 > 40 or h1 > cfg.get("HYPE_MAX_H1_PCT"):
         out["blocked"] = f"late — already {pct(h1)} this hour ({pct(m5)} in 5 min)"
+        out["rule"] = "late" if m5 <= 40 else "late5"
     elif cfg.get("HYPE_AVOID_MC_LO") <= mcap < cfg.get("HYPE_AVOID_MC_HI") and not whales:
+        out["rule"] = "zone"
         # 225 hype trades: $30K-100K lost in every period (-$436, 18% rugged) — where fresh migrations get dumped;
         # under $30K made +$453 (78% won)
         out["blocked"] = (f"{mc(mcap)} is in the {mc(cfg.get('HYPE_AVOID_MC_LO'))}-{mc(cfg.get('HYPE_AVOID_MC_HI'))} zone "
@@ -120,7 +122,7 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
     if cfg.flag("HYPE_SKIP_PROFILE") and not out["blocked"] and not whales and any(k == "profile" for k, _, _ in sig):
         # coins with a paid DexScreener profile / socials lost in every period (151 trades: 33% won, -$588);
         # the ones without made +$415 (68% won). Teams paying for attention are often selling into it.
-        out["blocked"] = "paid DexScreener profile / socials — these lost in every period of your data"
+        out["blocked"], out["rule"] = "paid DexScreener profile / socials — these lost in every period of your data", "profile"
     out["signals"] = sig
     burst = min(BURST_CAP, sum(p for k, _, p in sig if k in BURST))
     out["score"] = max(0, min(100, burst + sum(p for k, _, p in sig if k not in BURST)))
@@ -158,6 +160,7 @@ class HypeScanner:
         self.board: list[dict] = []      # this minute's top coins, for the dashboard and /hype
         self.last_scan = 0
         self.last_error = ""
+        self.tuner = None                # Tuner: measures what each rule blocked and adjusts the filter
         db.run("""create table if not exists hype_watch(mint text primary key, hot_ts integer, peak_mc real)""")
 
     def whales_in(self, mint: str, now: float) -> list[dict]:
@@ -225,7 +228,24 @@ class HypeScanner:
                 continue
             await self.alert(mint, info, r, now)
             sent.append(mint)
+        if self.tuner:
+            await self._shadows(scored, now)
         return sent
+
+    async def _shadows(self, scored: list, now: int) -> None:
+        """Coins kept out by ONE adjustable rule are priced for two hours as if alerted — that's how the tuner knows
+        whether a rule is saving money or killing good entries."""
+        for mint, info, r in scored:
+            if alertable(r, self.cfg) or not self.tuner.shadow_rule(mint, info, r, now):
+                continue
+            if r.get("rule") in ("zone", "profile", "late"):   # score it with its holders, like an alert would be
+                holders = await self._holders(mint, info)
+                if holders:
+                    r = score({**info, "mint": mint}, self.cfg, whales=self.whales_in(mint, now), lists=self.lists,
+                              now=now, peak_mc=self.peak_of(mint), holders=holders)
+            rule = self.tuner.shadow_rule(mint, info, r, now)
+            if rule and not await self._unsafe(mint, info):
+                self.tuner.shadow(mint, info, r, rule, now)
 
     def recently_alerted(self, mint: str, now: float) -> bool:
         return bool(self.db.scalar("""select 1 from alerts where mint=? and ts>=? and (kind='HYPE'
@@ -272,6 +292,8 @@ class HypeScanner:
                          mc_usd=num(info.get("mc_usd")), whale_price=num(info["price_usd"]), ts=now)
         self.engine.paper.open(alert_id=alert_id, mint=mint, whale=HYPE, symbol=info.get("symbol") or mint[:4],
                                price=num(info["price_usd"]), mc_usd=num(info.get("mc_usd")), ts=now)
+        if self.tuner:
+            self.tuner.seen_alert(mint, info, r, alert_id, now)
         if not self.cfg.flag("ALERTS_ENABLED"):
             return
         created = num(info.get("pair_created_ts"))

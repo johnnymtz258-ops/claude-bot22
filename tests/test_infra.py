@@ -285,3 +285,60 @@ def test_out_of_credits_rests_the_node_without_slowing_the_others():
             await srv.close()
 
     asyncio.run(run())
+
+
+def test_daily_database_backup_keeps_the_last_three(tmp_path):
+    from fomo.db import Database, backup
+    path = tmp_path / "whales.db"
+    db = Database(path)
+    db.set_meta("x", "1")
+    for day in ("2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04"):
+        out = backup(path, tmp_path / "backups", day=day)
+    assert out.name == "whales-2026-10-04.db"
+    assert sorted(p.name for p in (tmp_path / "backups").iterdir()) == [
+        "whales-2026-10-02.db", "whales-2026-10-03.db", "whales-2026-10-04.db"]
+    assert Database(out).get_meta("x") == "1"
+    assert backup(":memory:", tmp_path / "b2") is None
+
+
+def test_state_folder_is_per_platform(monkeypatch):
+    from fomo import config
+    monkeypatch.setattr(config.sys, "platform", "darwin")
+    assert config.default_state_dir() == "~/Library/Application Support/FomoBot"
+    monkeypatch.setattr(config.sys, "platform", "linux")
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    assert config.default_state_dir() == "~/.local/share/FomoBot"
+
+
+def test_two_running_copies_are_reported_and_real_buys_held(bot):
+    import time as _t
+    from fomo.app import App
+    app = App.__new__(App)
+    app.db, app.notify = bot.db, bot.notes
+
+    class TG:
+        conflict_ts = 0.0
+    app.telegram = TG()
+
+    class Live:
+        hold_until = 0.0
+    app.live = Live()
+    assert not bot.run(app.check_conflict())
+    TG.conflict_ts = _t.time()
+    assert bot.run(app.check_conflict())
+    assert app.live.hold_until > _t.time() + 500
+    assert "Two copies of FomoBot are running" in bot.notes.sent[-1]["text"]
+    bot.run(app.check_conflict())
+    assert len(bot.notes.sent) == 1                                     # warned once an hour, not every poll
+
+
+def test_a_mac_env_on_a_linux_server_uses_the_servers_folder(monkeypatch, tmp_path):
+    from fomo import config
+    missing = tmp_path / "no.env"
+    monkeypatch.setenv("FOMO_STATE_DIR", "~/Library/Application Support/FomoBot")   # what a Mac .env says
+    monkeypatch.delenv("WHALE_DB", raising=False)
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.setattr(config.sys, "platform", "linux")
+    assert str(config.load(missing).db_path).endswith(".local/share/FomoBot/whales.db")
+    monkeypatch.setattr(config.sys, "platform", "darwin")
+    assert "Library/Application Support/FomoBot" in str(config.load(missing).db_path)

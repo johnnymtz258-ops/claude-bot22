@@ -55,6 +55,7 @@ class Telegram:
         self.ok = bool(token)
         self.last_error = ""
         self.sent = 0
+        self.conflict_ts = 0.0   # Telegram said another copy of the bot is polling with this token
         self._send_lock = asyncio.Lock()
         self._last_send = 0.0
 
@@ -105,6 +106,9 @@ class Telegram:
                 await asyncio.sleep(min(float(retry), 30))
                 continue
             self.last_error = f"{method}: {data.get('description', 'error')}"
+            if data.get("error_code") == 409 or "Conflict" in str(data.get("description", "")):
+                self.conflict_ts = time.time()
+                return None
             if "can't parse entities" in str(data.get("description", "")) and params.get("parse_mode"):
                 params = {**params, "parse_mode": None, "text": re.sub(r"<[^>]+>", "", params.get("text", ""))}
                 payload = {k: v for k, v in params.items() if v is not None}

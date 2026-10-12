@@ -56,6 +56,13 @@
       <div class="table-wrap"><table id="hype-signals"></table></div>
     </div>
     <div class="card">
+      <div class="card-head"><h2>🧠 Self-tuning: what each rule blocked</h2><span class="muted" id="tune-meta"></span></div>
+      <p class="hint">Coins kept out by one rule are priced for two hours as if they'd been alerted, and replayed with the exit plan. A rule whose blocked coins would have made money is loosened by itself; one whose let-in coins lose is tightened back. Every change is sent to Telegram (/tuning).</p>
+      <div class="table-wrap"><table id="tune-rules"></table></div>
+      <p class="hint" id="tune-exit"></p>
+      <ul class="messages" id="tune-log"></ul>
+    </div>
+    <div class="card">
       <div class="card-head"><h2>Coins with 2+ of your whales</h2>
         <select id="hot-hours"><option value="6">6h</option><option value="24" selected>24h</option><option value="72">3 days</option></select>
       </div>
@@ -110,6 +117,7 @@
       <summary class="card-head"><h2>Optional: real-money autopilot</h2><span class="muted" id="live-state"></span></summary>
       <p class="hint" id="live-hint"></p>
       <div class="row" id="live-actions"></div>
+      <p class="hint" id="live-fills"></p>
       <div class="table-wrap"><table id="live-trades"></table></div>
     </details>
   </section>

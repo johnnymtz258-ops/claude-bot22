@@ -26,6 +26,9 @@ def _json(data, status: int = 200) -> web.Response:
     return web.json_response(data, status=status, dumps=lambda d: json.dumps(d, default=str))
 
 
+LOCAL_NAMES = {"localhost", "127.0.0.1"}
+
+
 class Dashboard:
     def __init__(self, app):
         self.app = app
@@ -36,7 +39,8 @@ class Dashboard:
     # -- guards -------------------------------------------------------------------------------
     @web.middleware
     async def guard(self, request: web.Request, handler):
-        if request.host not in self.allowed_hosts:  # blocks DNS-rebinding tricks
+        # blocks DNS-rebinding tricks: only localhost names (any port, so an SSH tunnel to a server's dashboard works)
+        if request.host not in self.allowed_hosts and request.host.rsplit(":", 1)[0] not in LOCAL_NAMES:
             return web.Response(status=403, text="forbidden host")
         if request.method == "POST" and request.headers.get("X-Fomo-Token") != self.token:
             return _json({"error": "missing or wrong session token — reload the page"}, 403)
@@ -91,7 +95,8 @@ class Dashboard:
             return _json({"board": [], "record": {}, "signals": [], "min_score": 0, "enabled": False})
         return _json({"board": hype.board, "record": hype.record(), "signals": hype.signal_results(),
                       "min_score": self.app.cfg.get("HYPE_MIN_SCORE"), "enabled": self.app.cfg.flag("HYPE_ALERTS"),
-                      "last_scan": hype.last_scan})
+                      "last_scan": hype.last_scan,
+                      "tuning": hype.tuner.current() if getattr(hype, "tuner", None) else {}})
 
     async def hot(self, request):
         hours = num(request.query.get("hours"), 24) or 24
@@ -118,7 +123,7 @@ class Dashboard:
         live = getattr(a, "live", None)
         for t in types:
             if t["kind"] == "offline":
-                t["live_ok"], t["live_why"] = None, "not a strategy result — keep the Mac awake"
+                t["live_ok"], t["live_why"] = None, "not a strategy result — keep the bot running (Mac awake, or a server)"
                 continue
             t["live_ok"], t["live_why"] = live.type_allowed("hype" if t["kind"] == "hype" else "") if live else (True, "")
         return _json({"summary": s, "curve": curve, "closed": closed, "enabled": a.cfg.flag("PAPER_TRADING"),

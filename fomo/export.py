@@ -12,7 +12,7 @@ from pathlib import Path
 
 DAYS = 10
 FULL = ("alerts", "copies", "whales", "tokens", "my_trades", "watches", "position_notes", "whale_candidates",
-        "paper_trades", "paper_equity", "live_trades")
+        "paper_trades", "paper_equity", "live_trades", "hype_seen", "hype_watch")
 
 
 def build_review_zip(db_path: Path, out_zip: Path, days: int = DAYS) -> Path:
@@ -32,9 +32,13 @@ def build_review_zip(db_path: Path, out_zip: Path, days: int = DAYS) -> Path:
             if t in tables:
                 con.execute(f"create table out.{t} as select * from main.{t}")
         con.execute("create table out.swaps as select * from main.swaps where ts>=?", (since,))
-        con.execute("""create table out.price_marks as select * from main.price_marks where ts>=? and
-            (mint in (select mint from main.alerts where ts>=?) or mint in (select mint from main.my_trades))""",
-                    (since, since - 86400))
+        shadows = " or mint in (select mint from main.hype_seen where ts>=?)" if "hype_seen" in tables else ""
+        con.execute(f"""create table out.price_marks as select * from main.price_marks where ts>=? and
+            (mint in (select mint from main.alerts where ts>=?) or mint in (select mint from main.my_trades){shadows})""",
+                    (since, since - 86400) + ((since - 86400,) if shadows else ()))
+        # your settings and what the self-tuner changed (no keys or tokens live in this table)
+        con.execute("""create table out.settings as select key, value from main.meta
+            where key like 'setting:%' or key like 'tune:%'""")
         con.commit()
         con.execute("detach database out")
     finally:

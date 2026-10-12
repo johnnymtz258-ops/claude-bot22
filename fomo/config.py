@@ -7,6 +7,7 @@ or the dashboard); a live change is saved in the database and wins over `.env`.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -70,6 +71,7 @@ TUNABLES = {t.name: t for t in (
     Tunable("HYPE_MIN_LIQ_USD", 10000, "Hype scanner: smallest liquidity a coin needs", 0, 10000000),
     Tunable("HYPE_MAX_H1_PCT", 100, "Hype scanner: don't alert coins already up more than this % in the last hour (late)", 20, 1000),
     Tunable("HYPE_MAX_PER_HOUR", 6, "Hype scanner: most hype alerts per hour", 1, 60),
+    Tunable("HYPE_AUTOTUNE", 1, "Hype filter tunes itself every 6h from what each rule blocked and what it would have made (/tuning; 1 = on)", 0, 1, True),
     Tunable("RUNNER_SETUP", 1, "Flag the setup most of your 10x coins had — whale buys $1K+ of a just-graduated coin at $40K-250K MC — and send it even from flipper whales (1 = on)", 0, 1, True),
     Tunable("RUNNER_SETUP_MIN_BUY_USD", 1000, "Runner setup: smallest whale buy that counts", 100, 100000),
     Tunable("MICRO_ALERTS", 1, "Send buys of coins still on the pump.fun bonding curve (flagged ⚡; they either graduate and run or die — off = tracked, not sent)", 0, 1, True),
@@ -165,6 +167,13 @@ PUBLIC_RPC = "https://api.mainnet-beta.solana.com"
 PUBLIC_WSS = "wss://api.mainnet-beta.solana.com"
 
 
+def default_state_dir() -> str:
+    """Where whales and history live (outside the bot folder, so updates never touch them)."""
+    if sys.platform == "darwin":
+        return "~/Library/Application Support/FomoBot"
+    return os.path.join(os.environ.get("XDG_DATA_HOME") or "~/.local/share", "FomoBot")   # Linux server
+
+
 def load(env_file: Path | None = None) -> Config:
     try:
         from dotenv import load_dotenv
@@ -188,7 +197,10 @@ def load(env_file: Path | None = None) -> Config:
     wallets_text = _env("MY_WALLETS") or _env("PUBLIC_SOLANA_WALLET_ADDRESS")
     my_wallets = [w.strip() for w in wallets_text.replace(";", ",").split(",") if is_address(w.strip())]
 
-    state_dir = Path(os.path.expanduser(_env("FOMO_STATE_DIR") or "~/Library/Application Support/FomoBot"))
+    state_text = _env("FOMO_STATE_DIR")
+    if "Library/Application Support" in state_text and sys.platform != "darwin":
+        state_text = ""   # a Mac .env copied to a Linux server: use the server's usual place
+    state_dir = Path(os.path.expanduser(state_text or default_state_dir()))
     db_path = Path(os.path.expanduser(_env("WHALE_DB") or str(state_dir / "whales.db")))
     legacy_db = Path(os.path.expanduser(_env("FOMO_STATE_DB") or str(state_dir / "fomo_master.db")))
 

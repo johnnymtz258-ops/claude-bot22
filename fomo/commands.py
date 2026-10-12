@@ -22,6 +22,7 @@ Every minute it scores new, trending, boosted and whale-bought coins on what a r
 buyers vs sellers, volume surge, your whales, paid boosts, socials, trending, early market cap. A coin that
 lines up gets a 🔥 HYPE alert; a whale buy into a hyped coin is marked 🔥🐋 WHALE + HYPE.
 /hype — hottest coins right now and which signals have worked
+/tuning — what each hype rule blocked, what those coins would have made, what the filter changed by itself
 
 <b>🎯 Insider framework</b>
 New wallets the scanner finds are 👀 watched for 7 days before their buys are sent (they graduate early once their
@@ -446,6 +447,15 @@ class Commands:
                              f"{r['hit_2x'] * 100:.0f}% hit 2x")
         await self.say("\n".join(lines))
 
+    async def cmd_tuning(self, args, reply_mint):
+        """/tuning — what each hype-filter rule blocked, what those coins would have made, and what the tuner changed."""
+        tuner = getattr(self.app, "tuner", None) or getattr(getattr(self.app, "hype", None), "tuner", None)
+        if not tuner:
+            await self.say("The self-tuner isn't running.")
+            return
+        from .tuner import format_report
+        await self.say(format_report(tuner.current()))
+
     async def cmd_runners(self, args, reply_mint):
         rows = self.app.db.rows("select * from alerts where kind='RUNNER' order by ts desc limit 10")
         record = self.app.whales.stats("runner", fresh=True)
@@ -740,6 +750,11 @@ def format_live(app) -> str:
              f"{s['realized_sol']:+.3f} SOL · today {s['today_sol']:+.3f} SOL"]
     for t in s["open"]:
         lines.append(f"• ${esc(t['symbol'])} open · {t['sol_in']:.3f} SOL in")
+    f = s.get("fills") or {}
+    if f.get("n"):
+        lines.append(f"📏 Real vs paper on the same {f['n']} trades: real {f['live_avg']:.2f}x · paper {f['paper_avg']:.2f}x a trade"
+                     + (f" · real swaps cost ~{f['real_slip_pct']:.1f}% each way (paper assumes {f['paper_slip_pct']:g}%)"
+                        if "real_slip_pct" in f else "") + f" · bought {f['delay_s']}s after paper")
     if s["error"]:
         lines.append(f"Last problem: {esc(s['error'])}")
     lines.append("\n/live on · /live off · /live dry off (trade for real) · /sellall")

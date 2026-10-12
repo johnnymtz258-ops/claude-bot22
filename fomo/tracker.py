@@ -6,6 +6,7 @@ readings at least 20s apart). The only dip message is one STOP_LOSS_PCT warning 
 from __future__ import annotations
 
 import asyncio
+import sys
 import statistics
 import time
 
@@ -80,13 +81,15 @@ class Tracker:
             unwatched = self.db.run("update paper_trades set interrupted=1 where status='open' and open_ts<?", (int(last),))
             live_open = self.db.scalar("select count(*) from live_trades where status='open' and dry=0 and open_ts<?",
                                        (int(last),), default=0)
+            why = ("Your Mac slept (lid closed?) or the bot was stopped" if sys.platform == "darwin"
+                   else "The server restarted or the bot was stopped")
             text = (f"💤 <b>The bot was paused for {dur(gap)}</b> ({time.strftime('%H:%M', time.localtime(last))}"
-                    f" → {time.strftime('%H:%M', time.localtime(now))}).\nYour Mac slept (lid closed?) or the bot was "
-                    "stopped: whale buys in that window were missed")
+                    f" → {time.strftime('%H:%M', time.localtime(now))}).\n{why}: whale buys in that window were missed")
             if unwatched:
                 text += (f", and {unwatched} open paper trade{'s were' if unwatched != 1 else ' was'} unwatched — the plan "
                          "closes any past its limit now. They're kept out of the strategy's results")
-            text += ".\nKeep the lid open and the charger in while it runs — macOS sleeps on lid close whatever apps ask."
+            text += (".\nKeep the lid open and the charger in while it runs — macOS sleeps on lid close whatever apps ask "
+                     "(or run it on a free server: SERVER_SETUP.txt)." if sys.platform == "darwin" else ".")
             if live_open:
                 text += (f"\n⚠️ <b>{live_open} REAL position{'s were' if live_open != 1 else ' was'} unwatched</b> — "
                          "check the trading wallet.")
@@ -108,9 +111,12 @@ class Tracker:
             self._last_outcome = now
             older = {a["mint"] for a in outcomes}
         paper = self.engine.paper.open_trades()
+        tuner = getattr(getattr(self.engine, "hype", None), "tuner", None)
+        shadows = tuner.tracked_mints(now) if tuner else []   # coins a rule held back: priced like alerts
         tracked = self.engine.coins.active()
         mints = ({c["mint"] for c in open_copies} | {p["mint"] for p in positions} | set(recent) | set(closed)
-                 | {w["mint"] for w in watches} | older | {t["mint"] for t in paper} | {c["mint"] for c in tracked})
+                 | {w["mint"] for w in watches} | older | {t["mint"] for t in paper} | {c["mint"] for c in tracked}
+                 | set(shadows))
         infos = await self.market.tokens(sorted(mints), max_age=PRICE_EVERY - 2) if mints else {}
         for mint, info in infos.items():
             self.marks.record(mint, num(info.get("price_usd")), now)
@@ -125,6 +131,7 @@ class Tracker:
         live = getattr(self.engine.paper, "live", None)
         if live and live.keypair and self.cfg.flag("LIVE_TRADING"):
             await self._step("live catch-up", live.reconcile, now)
+            await self._step("live calibration", live.calibrate, now)
         if tracked:
             await self._step("tracked coins", self.engine.coins.tick, infos, now)
         if now - self._last_balance_check >= WHALE_BALANCE_CHECK_EVERY:

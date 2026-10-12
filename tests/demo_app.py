@@ -15,6 +15,7 @@ from fomo.runners import RunnerScanner
 from fomo.scout import WhaleScout
 from fomo.telegram import Notifier
 from fomo.tracker import Tracker
+from fomo.tuner import Tuner
 from fomo.whales import Whales
 from tests.helpers import FakeMarket, FakeRPC, pump_buy, pump_sell
 
@@ -59,10 +60,11 @@ class DemoApp:
         self.runners = RunnerScanner(self.cfg, self.db, self.market, self.engine, self.whales, self.notify)
         self.hype = HypeScanner(self.cfg, self.db, self.market, self.engine, self.whales, self.notify)
         self.runners.hype = self.engine.hype = self.hype
+        self.hype.tuner = self.tuner = Tuner(self.cfg, self.db, self.notify, self.set_setting)
         self.scout = WhaleScout(self.cfg, self.db, self.rpc, self.market, self.whales, self.runners, self.notify, lambda: None)
         self._sig = 0
 
-    def set_setting(self, name, value):
+    def set_setting(self, name, value, by_tuner=False):
         parsed = self.cfg.set(name, value)
         self.db.set_meta(f"setting:{name.upper()}", parsed)
         return parsed

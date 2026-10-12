@@ -16,6 +16,15 @@ if [ ! -d ".venv" ]; then
 fi
 
 PY="./.venv/bin/python3"
+
+if [ -f "$HOME/.fomobot_server" ]; then
+  echo "⚠️  FomoBot runs on your server ($(cat "$HOME/.fomobot_server")). Running it here too sends every alert twice"
+  echo "   and doubles real trades. To move it back to this Mac, see SERVER_SETUP.txt (\"Back to the Mac\")."
+  read -r -p "Start it on this Mac anyway? [y/N] " a
+  if [ "$a" != "y" ] && [ "$a" != "Y" ]; then
+    exit 0
+  fi
+fi
 "$PY" -m pip install -q -r requirements.txt || {
   echo "Installing dependencies failed. Check your internet connection and try again."
   read -p "Press Enter to close."

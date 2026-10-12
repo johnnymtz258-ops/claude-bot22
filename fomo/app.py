@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 import ssl
 import time
 from datetime import datetime
@@ -12,7 +13,7 @@ import aiohttp
 from . import VERSION, config, profiles
 from .card import LiveCard
 from .commands import Commands, format_stats
-from .db import Database, backfill_alert_outcomes, coin_addresses_in_whales, drop_autopilot_whales, import_legacy_whales
+from .db import Database, backfill_alert_outcomes, backup, coin_addresses_in_whales, drop_autopilot_whales, import_legacy_whales
 from .discovery import Discovery
 from .engine import Engine
 from .live import LiveTrader
@@ -24,8 +25,13 @@ from .runners import RunnerScanner
 from .scout import WhaleScout
 from .telegram import Notifier, Telegram
 from .tracker import Tracker
+from .tuner import SETTINGS as _TUNED_SETTINGS, Tuner
 from .util import esc
 from .whales import Whales
+
+
+HOST = socket.gethostname().split(".")[0] or "this computer"
+TUNED = {name for names in _TUNED_SETTINGS.values() for name in names} | {"PAPER_SLIPPAGE_PCT"}   # set by the bot itself too
 
 
 def _ssl_context():
@@ -61,9 +67,12 @@ class App:
         self.last_find: dict | None = None
         self._jobs: set = set()
 
-    def set_setting(self, name: str, value) -> float:
+    def set_setting(self, name: str, value, by_tuner: bool = False) -> float:
         parsed = self.cfg.set(name, value)
-        self.db.set_meta(f"setting:{name.strip().upper()}", parsed)
+        key = name.strip().upper()
+        self.db.set_meta(f"setting:{key}", parsed)
+        if not by_tuner and key in TUNED:
+            self.db.set_meta(f"tune:manual:{key}", int(time.time()))   # your choice: the tuner leaves it alone a week
         return parsed
 
     async def move_coin_whales(self) -> list[str]:
@@ -129,6 +138,7 @@ class App:
         offset = int(self.db.get_meta("tg_offset", "0") or 0)
         while True:
             updates = await self.telegram.updates(offset)
+            await self.check_conflict()
             for update in updates:
                 offset = max(offset, int(update.get("update_id", 0)) + 1)
                 asyncio.create_task(self._safe(self.commands.handle_update(update)))
@@ -136,6 +146,24 @@ class App:
                 self.db.set_meta("tg_offset", offset)
             else:
                 await asyncio.sleep(1)
+
+    async def check_conflict(self, now: float | None = None) -> bool:
+        """Two copies running with the same Telegram bot (the Mac AND the server): double alerts, commands answered by
+        whichever copy wins, and — worst — double real trades. Say so (hourly) and hold real-money buys meanwhile."""
+        now = now or time.time()
+        if now - self.telegram.conflict_ts > 120:
+            return False
+        live = getattr(self, "live", None)
+        if live:
+            live.hold_until = now + 600
+        if now - float(self.db.get_meta("conflict_warned", "0") or 0) >= 3600:
+            self.db.set_meta("conflict_warned", int(now))
+            await self.notify(f"⚠️ <b>Two copies of FomoBot are running</b> with this Telegram bot — this one is on "
+                              f"<b>{esc(HOST)}</b>. You'll get double alerts, and commands go to either copy.\n"
+                              "Stop one: on the Mac press Control+C in its window (and run remove_autostart.command); "
+                              "on the server: sudo systemctl stop fomobot.\nReal-money buys are on hold until only one runs.",
+                              kind="INFO")
+        return True
 
     async def _safe(self, coro) -> None:
         try:
@@ -149,6 +177,12 @@ class App:
             hour = int(self.cfg.get("DAILY_SUMMARY_HOUR"))
             now = datetime.now()
             today = now.strftime("%Y-%m-%d")
+            if self.db.get_meta("backup_day") != today:
+                self.db.set_meta("backup_day", today)
+                try:   # a daily copy of the database (in its own thread: a big file must not stall alerts)
+                    await asyncio.to_thread(backup, self.cfg.db_path, self.cfg.state_dir / "backups")
+                except Exception as exc:
+                    print(f"[backup] {type(exc).__name__}: {exc}")
             if hour >= 0 and now.hour == hour and self.db.get_meta("daily_sent") != today:
                 self.db.set_meta("daily_sent", today)
                 await self.notify("🌙 <b>Daily summary</b>\n" + format_stats(self, 1).split("\n", 1)[1]
@@ -176,6 +210,8 @@ class App:
             self.runners = RunnerScanner(cfg, self.db, self.market, self.engine, self.whales, self.notify)
             self.hype = HypeScanner(cfg, self.db, self.market, self.engine, self.whales, self.notify)
             self.runners.hype = self.engine.hype = self.hype
+            self.hype.tuner = self.tuner = Tuner(cfg, self.db, self.notify,
+                                                 lambda name, value: self.set_setting(name, value, by_tuner=True))
             self.engine.refresh_wallets = self.refresh_wallets
             self.engine.profiles.discovery = self.discovery
             self.scout = WhaleScout(cfg, self.db, self.rpc, self.market, self.whales, self.runners, self.notify,
@@ -192,6 +228,7 @@ class App:
             self.refresh_wallets()
             self.live = LiveTrader(cfg, self.db, self.rpc, session, self.notify)
             self.engine.paper.live = self.live
+            self.live.set_setting = lambda name, value: self.set_setting(name, value, by_tuner=True)
             self.card = LiveCard(self)
             tasks = [self.stream.run(), self.tracker.run_prices(), self.tracker.run_poller(),
                      self.telegram_loop(), self.daily_loop(), self.runners.run(),
@@ -207,7 +244,7 @@ class App:
 
     def startup_text(self, imported: int) -> str:
         n = self.whales.count()
-        lines = [f"✅ <b>FomoBot Whale Copy {VERSION}</b> is running",
+        lines = [f"✅ <b>FomoBot Whale Copy {VERSION}</b> is running on {esc(HOST)}",
                  f"Following {n} whale{'s' if n != 1 else ''}" + (f" ({imported} imported from the old bot)"
                                                                    if imported else "")]
         lines.append("Your wallet: synced (exact P/L)" if self.cfg.my_wallets

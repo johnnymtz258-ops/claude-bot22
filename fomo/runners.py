@@ -96,6 +96,8 @@ class RunnerScanner:
                 await hype.scan(infos, lists, now)
             except Exception as exc:
                 hype.last_error = f"{time.strftime('%H:%M:%S')} {type(exc).__name__}: {exc}"
+            if hype.tuner:
+                await hype.tuner.tick(now)   # every 6h: measure each rule on what it blocked, adjust
         if not self.cfg.flag("RUNNER_ALERTS"):
             return []
         passed = [i for i in infos.values() if prefilter(i, self.cfg, now)[0]]
