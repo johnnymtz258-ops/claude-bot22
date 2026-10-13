@@ -253,10 +253,14 @@ class App:
             self.live.set_setting = lambda name, value: self.set_setting(name, value, by_tuner=True)
             self.live.market, self.live.stream = self.market, self.stream
             self.card = LiveCard(self)
+            from .marketpulse import MarketPulse
+            self.pulse = MarketPulse(cfg, self.db, self.market, self.notify, self.runners)
+            self.live.pulse = self.hype.pulse = self.pulse
+            self.pulse.stream = self.stream
             loops = [("wallet stream", self.stream.run), ("prices", self.tracker.run_prices),
                      ("backup poller", self.tracker.run_poller), ("telegram", self.telegram_loop),
                      ("daily", self.daily_loop), ("hype scanner", self.runners.run), ("whale scanner", self.scout.run),
-                     ("live card", self.card.run)]
+                     ("live card", self.card.run), ("market pulse", self.pulse.run)]
             loops += [(f"worker {i + 1}", self.engine.worker) for i in range(3)]
             if cfg.dashboard_enabled:
                 from .dashboard import start_dashboard

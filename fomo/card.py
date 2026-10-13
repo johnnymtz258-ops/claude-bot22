@@ -53,6 +53,10 @@ def build_card(app, now: float | None = None) -> str:
         sym = app.market.cached(last["mint"]).get("symbol") or last["mint"][:4]
         lines.append(f"🔔 Last alert: ${esc(sym)} {ago(last['ts'], now)} ago ({esc(app.whales.name(last['wallet']))}, "
                      f"grade {last['grade']})")
+    pulse = getattr(app, "pulse", None)
+    rep = pulse.report(int(now)) if pulse is not None else {}
+    if rep and rep.get("regime") != "learning":
+        lines.append(f"🌡 Market: {rep['label']}" + (f" · {esc(rep['reasons'][0])}" if rep.get("reasons") else ""))
     # paper autopilot
     if cfg.flag("PAPER_TRADING"):
         s = app.engine.paper.summary()

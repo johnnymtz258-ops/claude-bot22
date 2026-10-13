@@ -61,6 +61,8 @@ class DemoApp:
         self.hype = HypeScanner(self.cfg, self.db, self.market, self.engine, self.whales, self.notify)
         self.runners.hype = self.engine.hype = self.hype
         self.hype.tuner = self.tuner = Tuner(self.cfg, self.db, self.notify, self.set_setting)
+        from fomo.marketpulse import MarketPulse
+        self.pulse = self.hype.pulse = MarketPulse(self.cfg, self.db, self.market, self.notify, self.runners)
         self.scout = WhaleScout(self.cfg, self.db, self.rpc, self.market, self.whales, self.runners, self.notify, lambda: None)
         self._sig = 0
 

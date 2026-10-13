@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import datetime
 
 import aiohttp
 
@@ -104,6 +105,7 @@ class Market:
         self._gecko_lock = asyncio.Lock()
         self._gecko_last = 0.0
         self.gecko_every = GECKO_EVERY
+        self.new_pools_per_hour = 0.0
         from .jupiter import JupiterTokens
         self.jup = JupiterTokens(session)   # organic score / real buyers / dev audit, and Jupiter's trending lists
 
@@ -371,12 +373,20 @@ class Market:
         if cached and time.time() - cached[0] < 120:
             return list(cached[1])
         out: list[str] = []
+        stamps: list[float] = []
         data = await self._gecko("/networks/solana/new_pools?page=1")
         for row in (data or {}).get("data") or []:
             base = (((row.get("relationships") or {}).get("base_token") or {}).get("data") or {}).get("id", "")
             mint = str(base).split("_", 1)[-1]
             if is_address(mint) and mint not in IGNORED_MINTS and mint not in out:
                 out.append(mint)
+            created = str((row.get("attributes") or {}).get("pool_created_at") or "")
+            try:
+                stamps.append(datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp())
+            except ValueError:
+                pass
+        if len(stamps) >= 5 and max(stamps) > min(stamps):   # launch pace: new Solana pools per hour right now
+            self.new_pools_per_hour = (len(stamps) - 1) / ((max(stamps) - min(stamps)) / 3600)
         self._new_pools = (time.time(), out[:limit])
         return out[:limit]
 

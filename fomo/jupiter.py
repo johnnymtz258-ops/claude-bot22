@@ -72,6 +72,26 @@ class JupiterTokens:
                     self.last_error = f"Jupiter {type(exc).__name__}"
             return None
 
+    async def board(self) -> list[dict]:
+        """The 100 most traded tokens on Jupiter over 24h: the memecoin market's breadth, volume and launchpads
+        (cached 10 minutes)."""
+        cached = getattr(self, "_board", None)
+        if cached and time.time() - cached[0] < 600:
+            return cached[1]
+        data = await self._get("/toptraded/24h?limit=100")
+        out = []
+        for t in data if isinstance(data, list) else []:
+            if not isinstance(t, dict) or not t.get("id"):
+                continue
+            s24 = t.get("stats24h") or {}
+            out.append({"mint": str(t["id"]), "symbol": str(t.get("symbol") or "")[:24], "name": str(t.get("name") or "")[:48],
+                        "launchpad": str(t.get("launchpad") or ""), "mcap": num(t.get("mcap")),
+                        "chg24": num(s24.get("priceChange")), "vol24": num(s24.get("buyVolume")) + num(s24.get("sellVolume")),
+                        "organic": num(t.get("organicScore"), -1), "verified": bool(t.get("isVerified"))})
+        if out:
+            self._board = (time.time(), out)
+        return out
+
     async def lists(self) -> dict[str, list[str]]:
         """Trending and top-organic coins on Jupiter in the last 5 minutes (cached a minute)."""
         if time.time() - self._lists[0] < LIST_EVERY:

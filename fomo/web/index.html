@@ -15,6 +15,7 @@
 </header>
 <nav class="tabs" id="tabs">
   <button data-tab="live" class="on">Live</button>
+  <button data-tab="market">🌡 Market</button>
   <button data-tab="hot">🔥 Hype</button>
   <button data-tab="whales">Whales</button>
   <button data-tab="paper">Autopilot</button>
@@ -41,6 +42,36 @@
         <div class="card-head"><h2>Messages sent</h2></div>
         <ul class="messages" id="messages"></ul>
       </div>
+    </div>
+  </section>
+
+  <section id="tab-market" class="tab">
+    <div class="card">
+      <div class="card-head"><h2 id="mkt-title">🌡 Market</h2><span class="muted" id="mkt-meta"></span></div>
+      <p id="mkt-advice"></p>
+      <p class="hint" id="mkt-reasons"></p>
+      <div class="tiles" id="mkt-tiles"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>👀 What to look out for</h2></div>
+      <ul class="messages" id="mkt-lookouts"></ul>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Day by day</h2><span class="muted">per hour the bot was running, so downtime doesn't look like a crash</span></div>
+      <div class="table-wrap"><table id="mkt-days"></table></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Trending themes</h2><span class="muted" id="mkt-themes-meta"></span></div>
+      <div class="table-wrap"><table id="mkt-themes"></table></div>
+      <p class="hint" id="mkt-words"></p>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Launchpads</h2><span class="muted">hype coins over the last 3 days</span></div>
+      <div class="table-wrap"><table id="mkt-pads"></table></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Most traded memecoins now</h2><span class="muted">Jupiter, 24h</span></div>
+      <div class="table-wrap"><table id="mkt-top"></table></div>
     </div>
   </section>
 

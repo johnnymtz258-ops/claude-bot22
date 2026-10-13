@@ -127,6 +127,22 @@ trade; buys halt after repeated failures or when the RPC/stream is down; size fo
 a pulled pool triggers an emergency exit; late-landing sells are booked instead of sold twice; crashed loops restart
 by themselves; `/health` shows all of it.
 
+## Market pulse (`/market`, the Market tab)
+
+Memecoins move as a crowd, so the bot reads the market every 15 minutes and calls it 🔥 hot · 🟢 healthy · 🟡 choppy ·
+🧊 cold, with the reasons and what to look out for. Inputs: SOL/BTC 24h (CoinGecko), the Crypto Fear & Greed index,
+Jupiter's 100 most traded tokens (how many memecoins are up on the day), new pools per hour, and what the bot itself saw
+— how many hype coins **really** doubled (2x while the pool still had money to sell into; a price printed into an
+emptied pool doesn't count), how many were rugs, how much your whales bought, paper results. Everything the bot measures
+is per hour it was RUNNING, so a sleeping Mac or a dead RPC never reads as a crash, and a whale count only counts while
+the whale feed was up. It also lists rising themes (Chinese/Korean-name coins, AI, animals…) and words, launchpads
+whose coins rug most, and the hours when real pumps were alerted.
+
+A brief arrives every morning at `MARKET_BRIEF_HOUR` (9; −1 turns it off), a note when the market turns, and a
+"🌡 Market" line on hype alerts and the live card. With `MARKET_GUARD` on (default) the live autopilot opens no new real
+trades in a cold market — paper keeps going so the numbers keep coming. Day-by-day history works from your existing
+data; SOL, Fear & Greed and the Jupiter board fill in from the first run of 28.4.
+
 ## Free RPC instead of Helius
 
 Paste any provider's link into `SOLANA_RPC_HTTP=` (Chainstack, Alchemy, dRPC, QuickNode…) — `FREE_RPC.txt` shows the
@@ -265,6 +281,8 @@ Install: Chrome → `chrome://extensions` → turn on *Developer mode* → *Load
 /bought 20 (at 850k)        /sold 5 | 30% | all (at 1.2m) · /positions · /undo
 /stats · /status            what copying returned · health
 /paper                      paper autopilot trades and balance
+/market                     what the market is doing, what's trending, what to look out for
+/health · /tuning           stream, RPCs, live safety · what the self-tuner measured and changed
 /card · /export             re-pin the live card · send a review file (no keys inside)
 /settings · /set NAME VALUE · /pause · /resume
 ```

@@ -37,6 +37,8 @@ class Bot:
         self.hype = HypeScanner(self.cfg, self.db, self.market, self.engine, self.whales, self.notes)
         self.runners.hype = self.engine.hype = self.hype
         self.hype.tuner = self.tuner = Tuner(self.cfg, self.db, self.notes)
+        from fomo.marketpulse import MarketPulse
+        self.pulse = MarketPulse(self.cfg, self.db, self.market, self.notes, self.runners)
         self.scout = WhaleScout(self.cfg, self.db, self.rpc, self.market, self.whales, self.runners, self.notes, lambda: None)
 
     def run(self, coro):

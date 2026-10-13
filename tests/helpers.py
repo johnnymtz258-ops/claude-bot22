@@ -211,6 +211,9 @@ class FakeJupiter:
     async def lists(self):
         return {k: list(v) for k, v in self.listed.items()}
 
+    async def board(self):
+        return list(getattr(self, "board_data", []))
+
     async def stats(self, mints):
         self.calls += 1
         return {m: self.data[m] for m in mints if m in self.data}

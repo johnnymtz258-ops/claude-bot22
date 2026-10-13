@@ -373,6 +373,47 @@
       el("b", {}, `${new Date(l.ts * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })} `), l.text)));
   }
 
+  async function renderMarket() {
+    const m = await api("/api/market");
+    if (!m.available) { $("mkt-advice").textContent = "The market pulse isn't running."; return; }
+    const p = (x, d = 0) => (x === null || x === undefined ? "—" : `${(x * 100).toFixed(d)}%`);
+    $("mkt-title").textContent = `🌡 Market: ${m.label}`;
+    $("mkt-meta").textContent = m.ts ? `updated ${ago(m.ts)}` : "";
+    $("mkt-advice").textContent = m.advice;
+    $("mkt-reasons").textContent = m.reasons.length ? `Why: ${m.reasons.join(" · ")}` : "";
+    const lt = m.latest || {}, t = m.today, w = m.week;
+    const tile = (label, value, sub, cls) => el("div", { class: "tile" }, el("div", { class: "label" }, label),
+      el("div", { class: `value ${cls || ""}` }, value), el("div", { class: "sub" }, sub || ""));
+    $("mkt-tiles").replaceChildren(
+      tile("SOL", lt.sol_usd ? usd(lt.sol_usd) : "—", lt.sol_24h !== undefined ? `${lt.sol_24h >= 0 ? "+" : ""}${lt.sol_24h.toFixed(1)}% in 24h` : "", signClass(lt.sol_24h)),
+      tile("Fear & Greed", lt.fng ?? "—", lt.fng_label || ""),
+      tile("Real pumps (2x)", `${t.x2} in 24h`, `${p(t.x2_rate)} of ${t.checked} measured hype coins doubled with a pool to sell into · week ${p(w.x2_rate)}`),
+      tile("Rugs", p(t.rug_rate), `pool emptied within 2h · week ${p(w.rug_rate)}`, t.rug_rate >= 0.4 ? "down" : ""),
+      tile("Your whales", `${t.whale_buys} buys`, `${t.whale_coins} coins in 24h`),
+      tile("Memecoins up today", p(lt.board_up), lt.new_pools_per_hour ? `${lt.new_pools_per_hour} new pools/hour` : ""));
+    $("mkt-lookouts").replaceChildren(...(m.lookouts.length ? m.lookouts.map((x) => el("li", {}, x))
+      : [el("li", { class: "empty" }, "Nothing unusual right now.")]));
+    table($("mkt-days"), ["Day", { label: "Running", num: 1 }, { label: "Hype coins", num: 1 }, { label: "Really 2x", num: 1 }, { label: "Rugs", num: 1 },
+      { label: "Whale buys", num: 1 }, { label: "Paper P/L", num: 1 }, { label: "SOL", num: 1 }, { label: "Fear & Greed", num: 1 }],
+      (m.days || []).slice().reverse().map((d) => el("tr", {}, td(d.day), td(`${d.up_h.toFixed(0)}h`, "num"), td(String(d.hype), "num"),
+        td(d.checked ? `${d.x2} (${p(d.x2_rate)})` : "—", "num"), td(p(d.rug_rate), `num ${d.rug_rate >= 0.4 ? "down" : ""}`),
+        td(String(d.whale_buys), "num"), td(d.paper_n ? usd(d.paper_pnl, true) : "—", `num ${signClass(d.paper_pnl)}`),
+        td(d.sol_usd ? `${usd(d.sol_usd)}${d.sol_24h !== null && d.sol_24h !== undefined ? ` (${d.sol_24h >= 0 ? "+" : ""}${d.sol_24h.toFixed(1)}%)` : ""}` : "—", "num"),
+        td(d.fng ?? "—", "num"))), "No days measured yet.");
+    const n = m.narratives || { themes: [], rising_words: [] };
+    $("mkt-themes-meta").textContent = `${n.coins} trending coins in 24h vs ${n.base_coins} the week before`;
+    table($("mkt-themes"), ["Theme", { label: "Coins (24h)", num: 1 }, { label: "Share", num: 1 }, { label: "Last week", num: 1 }, ""],
+      n.themes.filter((x) => x.key !== "other").map((x) => el("tr", {}, td(x.label), td(String(x.n), "num"), td(p(x.share), "num"),
+        td(p(x.base_share), "num"), td(x.rising ? "↑ rising" : "", "up"))), "No themes yet.");
+    $("mkt-words").textContent = n.rising_words.length ? `Words showing up a lot: ${n.rising_words.map(([wd, c]) => `${wd} ×${c}`).join(", ")}` : "";
+    table($("mkt-pads"), ["Launchpad", { label: "Hype coins", num: 1 }, { label: "Really 2x", num: 1 }, { label: "Rugs", num: 1 }],
+      (m.launchpads || []).map((x) => el("tr", {}, td(x.launchpad), td(String(x.n), "num"), td(p(x.x2_rate), "num"),
+        td(p(x.rug_rate), `num ${x.rug_rate >= 0.5 ? "down" : ""}`))), "No hype coins in the last 3 days.");
+    table($("mkt-top"), ["Coin", { label: "24h", num: 1 }, { label: "Market cap", num: 1 }, "Launchpad"],
+      (m.board_top || []).map((b) => el("tr", { class: "click", onclick: () => openCoin(b.mint) }, td(`$${b.symbol}`),
+        td(pct(b.chg24), `num ${signClass(b.chg24)}`), td(mc(b.mcap), "num"), td(b.launchpad || "—"))), "No board yet (needs Jupiter).");
+  }
+
   async function renderHot() {
     renderHype().catch((e) => { $("hype-meta").textContent = `couldn't load the hype board: ${e.message || e}`; });
     const rows = await api(`/api/hot?hours=${$("hot-hours").value}`);
@@ -837,7 +878,7 @@
   }
 
   // ---------- wiring --------------------------------------------------------------------
-  const renderers = { live: renderLive, hot: renderHot, whales: renderWhales, paper: renderPaper, trades: renderTrades, report: renderReport, exits: renderExits, stats: renderStats, find: renderStatus, settings: renderSettings };
+  const renderers = { live: renderLive, market: renderMarket, hot: renderHot, whales: renderWhales, paper: renderPaper, trades: renderTrades, report: renderReport, exits: renderExits, stats: renderStats, find: renderStatus, settings: renderSettings };
   async function refresh() {
     try {
       if (!["live", "settings", "find"].includes(activeTab)) renderStatus().catch(() => {});   // header on every tab

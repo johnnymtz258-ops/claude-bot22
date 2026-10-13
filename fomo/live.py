@@ -273,6 +273,9 @@ class LiveTrader:
             return "two copies of the bot are running"
         if now < self.halted_until:
             return self.halted_why
+        pulse = getattr(self, "pulse", None)
+        if pulse is not None and self.cfg.flag("MARKET_GUARD") and pulse.regime() == "cold":
+            return "cold market (MARKET_GUARD): few real pumps and more rugs right now — paper keeps testing"
         down = getattr(self.rpc, "primary_down", None)
         if callable(down) and down():
             return "every private RPC is down — not trading on the slow public one"

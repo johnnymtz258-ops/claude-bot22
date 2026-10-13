@@ -363,6 +363,10 @@ class HypeScanner:
                      f"({mc(mcap * plan['tp'])} MC){', ride the rest' if plan['half'] else ''} · "
                      f"stop -{self.cfg.get('HYPE_STOP_PCT'):.0f}% ({mc(mcap * plan['stop'])} MC) · out after "
                      f"{self.cfg.get('HYPE_MAX_MINUTES'):.0f} min. Hype coins spike and fade — take the first move.")
+        pulse = getattr(self, "pulse", None)
+        if pulse is not None and pulse.regime() != "learning":
+            from .marketpulse import REGIMES
+            lines.append(f"🌡 Market today: {REGIMES[pulse.regime()]} (/market)")
         lines.append(f"<code>{mint}</code>")
         links = [(label, url, None) for label, url in messages.token_links(mint, info.get("pair_address", ""))]
         if info.get("x_url"):

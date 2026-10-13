@@ -71,7 +71,6 @@ def test_a_trade_the_poller_finds_twice_makes_the_stream_resubscribe_that_wallet
 
 
 def test_failed_subscriptions_are_retried_and_a_wallet_can_be_resubscribed(monkeypatch):
-    import fomo.rpc as rpcmod
     seen, sockets = [], []
     refused = {"left": 1}
 

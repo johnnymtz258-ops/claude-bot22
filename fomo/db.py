@@ -33,6 +33,7 @@ create table if not exists swaps(
     source text default 'stream', unique(sig, wallet, mint));
 create index if not exists idx_swaps_mint_ts on swaps(mint, ts);
 create index if not exists idx_swaps_wallet_ts on swaps(wallet, ts);
+create index if not exists idx_swaps_ts on swaps(ts);
 
 create table if not exists tokens(
     mint text primary key, symbol text default '', name text default '', decimals integer,

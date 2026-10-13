@@ -75,6 +75,8 @@ TUNABLES = {t.name: t for t in (
     Tunable("HYPE_FRESH_MINUTES", 30, "Hype scanner: hold back pools younger than this many minutes that look seeded to be pulled (market cap under HYPE_FRESH_MIN_MC, or more liquidity than ~market cap) — 87-97% were emptied within 2h in your data (0 = off)", 0, 240),
     Tunable("HYPE_FRESH_MIN_MC", 60000, "Hype scanner: a pool that young needs at least this market cap", 0, 10_000_000),
     Tunable("HYPE_BLOCK_BOTS", 1, "Hype scanner: hold back coins whose buying is mostly bots (Jupiter organic score under 25) — 94% were emptied in your data (1 = on)", 0, 1, True),
+    Tunable("MARKET_BRIEF_HOUR", 9, "Local hour for the morning market brief: what the memecoin market is doing and what to look out for (-1 = off)", -1, 23),
+    Tunable("MARKET_GUARD", 1, "Live autopilot holds new real buys while the market pulse reads cold (few real pumps, more rugs); paper keeps going (1 = on)", 0, 1, True),
     Tunable("HYPE_AUTOTUNE", 1, "Hype filter tunes itself every 6h from what each rule blocked and what it would have made (/tuning; 1 = on)", 0, 1, True),
     Tunable("RUNNER_SETUP", 1, "Flag the setup most of your 10x coins had — whale buys $1K+ of a just-graduated coin at $40K-250K MC — and send it even from flipper whales (1 = on)", 0, 1, True),
     Tunable("RUNNER_SETUP_MIN_BUY_USD", 1000, "Runner setup: smallest whale buy that counts", 100, 100000),

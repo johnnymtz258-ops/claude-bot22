@@ -24,6 +24,7 @@ lines up gets a 🔥 HYPE alert; a whale buy into a hyped coin is marked 🔥�
 /hype — hottest coins right now and which signals have worked
 /tuning — what each hype rule blocked, what those coins would have made, what the filter changed by itself
 /health — live stream, RPC providers, how fast whale trades arrive, live-trading safety state
+/market — what the memecoin market is doing, what's trending, what to look out for (also every morning)
 
 <b>🎯 Insider framework</b>
 New wallets the scanner finds are 👀 watched for 7 days before their buys are sent (they graduate early once their
@@ -447,6 +448,15 @@ class Commands:
                 lines.append(f"{LABELS.get(r['signal'], r['signal'])}: {r['n']} alerts · {r['hit_1_5x'] * 100:.0f}% hit 1.5x · "
                              f"{r['hit_2x'] * 100:.0f}% hit 2x")
         await self.say("\n".join(lines))
+
+    async def cmd_market(self, args, reply_mint):
+        """/market — what the memecoin market is doing, what's trending, what to look out for."""
+        pulse = getattr(self.app, "pulse", None)
+        if pulse is None:
+            await self.say("The market pulse isn't running.")
+            return
+        from .marketpulse import format_report
+        await self.say(format_report(pulse.report(fresh=True)))
 
     async def cmd_health(self, args, reply_mint):
         """/health — is every part of the bot working, and how fast whale trades reach it."""

@@ -48,6 +48,10 @@ FREE RPC (Helius ran out?)
 HEALTH
   /health — live stream, each RPC provider, how fast whale trades arrive, live-trading safety state, crashes.
 
+MARKET PULSE
+  /market (or the Market tab) — is the market hot or cold, why, what's trending, what to look out for. A brief every
+  morning at 9 (MARKET_BRIEF_HOUR) and a note when it turns. In a cold market the live autopilot waits (MARKET_GUARD).
+
 SELF-TUNING
   The hype filter measures what each of its rules blocked and loosens or tightens itself every 6h (you get a
   🧠 note in Telegram for each change). /tuning shows the numbers · /set HYPE_AUTOTUNE 0 stops the changes.
@@ -57,7 +61,7 @@ EVERY ALERT HAS THE SAME PLAN
   Use the 🎯 Ping me at 2x button. The bot also nudges you at 2x / after a 35% drop / at -40%.
 
 USEFUL COMMANDS (optional)
-  /positions   /whales   /paper   /live   /coins   /stats   /analyze WALLET   /find COIN   /export
+  /market   /positions   /whales   /paper   /live   /coins   /stats   /analyze WALLET   /find COIN   /export
   /set NAME VALUE changes a setting (/settings lists them), e.g. /set PAPER_TRADE_USD 25
 
 TO SEND ME DATA FOR TUNING
