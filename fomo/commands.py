@@ -23,6 +23,7 @@ buyers vs sellers, volume surge, your whales, paid boosts, socials, trending, ea
 lines up gets a 🔥 HYPE alert; a whale buy into a hyped coin is marked 🔥🐋 WHALE + HYPE.
 /hype — hottest coins right now and which signals have worked
 /tuning — what each hype rule blocked, what those coins would have made, what the filter changed by itself
+/edge — which setups made money after costs lately; the autopilot trades only those (none = it stands aside)
 /health — live stream, RPC providers, how fast whale trades arrive, live-trading safety state
 /market — what the memecoin market is doing, what's trending, what to look out for (also every morning)
 
@@ -471,6 +472,18 @@ class Commands:
             return
         from .tuner import format_report
         await self.say(format_report(tuner.current()))
+
+    async def cmd_edge(self, args, reply_mint):
+        """/edge — which setups made money after costs on the last 7 days, and what the autopilot trades because of it."""
+        tuner = getattr(self.app, "tuner", None) or getattr(getattr(self.app, "hype", None), "tuner", None)
+        edge = getattr(tuner, "edge", None)
+        if not edge:
+            await self.say("The edge check isn't running.")
+            return
+        from .edge import format_report
+        if not edge.report.get("table"):
+            await edge.evaluate()
+        await self.say(format_report(edge.report, self.app.cfg))
 
     async def cmd_runners(self, args, reply_mint):
         rows = self.app.db.rows("select * from alerts where kind='RUNNER' order by ts desc limit 10")

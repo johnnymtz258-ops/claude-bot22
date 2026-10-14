@@ -190,6 +190,11 @@ def exit_plan(cfg) -> dict:
             "hold": int(cfg.get("HYPE_MAX_MINUTES") * 60), "follow_whale": False}
 
 
+def features(kind: str, info: dict, r: dict, now: float) -> dict:
+    from .edge import features as f   # edge imports the tuner, which imports this module
+    return f(kind, info, r, now)
+
+
 def _age(hours: float) -> str:
     return f"{int(hours * 60)}m" if hours < 1 else f"{hours:.0f}h"
 
@@ -292,6 +297,14 @@ class HypeScanner:
             rule = self.tuner.shadow_rule(mint, info, r, now)
             if rule and not await self._unsafe(mint, info):
                 self.tuner.shadow(mint, info, r, rule, now)
+                edge = getattr(self.tuner, "edge", None)
+                setup = edge.match(features("shadow", info, r, now)) if edge and edge.active() else None
+                if setup:   # a rule held it back from an alert, but it fits a proven setup: the autopilot takes it
+                    trade_id = self.engine.paper.open(alert_id=0, mint=mint, whale=HYPE,
+                                                      symbol=info.get("symbol") or mint[:4], price=num(info["price_usd"]),
+                                                      mc_usd=num(info.get("mc_usd")), ts=now, info=info,
+                                                      signal={"score": r["score"]}, plan=setup["exit"])
+                    edge.record(trade_id, setup)
 
     def recently_alerted(self, mint: str, now: float) -> bool:
         return bool(self.db.scalar("""select 1 from alerts where mint=? and ts>=? and (kind='HYPE'
@@ -336,9 +349,15 @@ class HypeScanner:
                                            num(info.get("price_usd")), f"signals:{keys}", "sent"))
         copies.open_copy(self.db, whale=HYPE, mint=mint, swap_id=0, alert_id=alert_id, price=num(info["price_usd"]),
                          mc_usd=num(info.get("mc_usd")), whale_price=num(info["price_usd"]), ts=now)
-        self.engine.paper.open(alert_id=alert_id, mint=mint, whale=HYPE, symbol=info.get("symbol") or mint[:4],
-                               price=num(info["price_usd"]), mc_usd=num(info.get("mc_usd")), ts=now, info=info,
-                               signal={"score": r["score"]})
+        edge = getattr(self.tuner, "edge", None)
+        trade, setup = (edge.allows(features("alert", info, r, now)) if edge else (True, None))
+        if trade:   # the autopilot (paper, and live behind it) only takes what's proven — see edge.py
+            trade_id = self.engine.paper.open(alert_id=alert_id, mint=mint, whale=HYPE, symbol=info.get("symbol") or mint[:4],
+                                              price=num(info["price_usd"]), mc_usd=num(info.get("mc_usd")), ts=now,
+                                              info=info, signal={"score": r["score"]},
+                                              plan=setup["exit"] if setup else None)
+            if edge:
+                edge.record(trade_id, setup)
         if self.tuner:
             self.tuner.seen_alert(mint, info, r, alert_id, now)
         if not self.cfg.flag("ALERTS_ENABLED"):
@@ -367,12 +386,22 @@ class HypeScanner:
         if pulse is not None and pulse.regime() != "learning":
             from .marketpulse import REGIMES
             lines.append(f"🌡 Market today: {REGIMES[pulse.regime()]} (/market)")
+        quiet = False
+        if edge and self.cfg.flag("EDGE_GATE"):
+            if setup:
+                lines.append(f"🧪 Fits the setup paper is testing: {esc(setup['label'])} — replays "
+                             f"{(setup['avg'] - 1) * 100:+.1f}% a trade on {setup['n']} coins over 7 days. Paper exit: "
+                             f"{esc(setup['exit']['label'])} (/edge)")
+            else:
+                lines.append("📉 No setup has been making money on coins like this lately — the autopilot isn't trading "
+                             "it (/edge)")
+                quiet = self.cfg.flag("EDGE_QUIET_ALERTS")
         lines.append(f"<code>{mint}</code>")
         links = [(label, url, None) for label, url in messages.token_links(mint, info.get("pair_address", ""))]
         if info.get("x_url"):
             links.append(("𝕏", info["x_url"], None))
         msg_id = await self.notify("\n".join(lines), buttons=[links, [("🔎 Find its early whales", None, f"find:{mint}")]],
-                                   mint=mint, wallet=HYPE, kind="HYPE")
+                                   mint=mint, wallet=HYPE, kind="HYPE", silent=quiet)
         if msg_id:
             self.db.run("update alerts set tg_message_id=? where id=?", (msg_id, alert_id))
 

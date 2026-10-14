@@ -23,13 +23,18 @@ def latency(db, hours: float = 24) -> dict:
     """How long whale trades took to reach the bot (seen time − block time), by how they arrived."""
     since = int(time.time() - hours * 3600)
     by: dict[str, list[int]] = {}
-    for r in db.rows("select source, seen_ts - ts d from swaps where is_me=0 and ts>=? and seen_ts>0", (since,)):
+    asleep = 0
+    for r in db.rows("""select source, ts, seen_ts - ts d,
+            (select count(*) from paper_equity e where e.ts between s.ts - 400 and s.ts + 400) up
+            from swaps s where is_me=0 and ts>=? and seen_ts>0""", (since,)):
         by.setdefault(str(r["source"]), []).append(max(0, int(r["d"] or 0)))
+        asleep += int(r["d"] or 0) > 600 and not r["up"]   # it happened while the bot wasn't running at all
     total = sum(len(v) for v in by.values())
     out = {"n": total, "stream_share": len(by.get("stream", [])) / total if total else None, "sources": {}}
     for source, ds in by.items():
         out["sources"][source] = {"n": len(ds), "p50": _pct(ds, 0.5), "p90": _pct(ds, 0.9),
                                   "over_10min": sum(d > 600 for d in ds)}
+    out["asleep"] = asleep
     out["late_alerts"] = int(db.scalar("select count(*) from alerts where kind='BUY' and status='late' and ts>=?",
                                        (since,), default=0))
     return out
@@ -51,7 +56,8 @@ def report(app) -> dict:
         "stream": {"connected": bool(getattr(stream, "connected", False)), "subscribed": getattr(stream, "subscribed", 0),
                    "wanted": len(getattr(stream, "wanted", ()) or ()), "notifications": getattr(stream, "notifications", 0),
                    "reconnects": getattr(stream, "reconnects", 0), "failed_subs": getattr(stream, "failed_subs", 0),
-                   "resubscribed": getattr(stream, "resubscribed", 0)} if stream else {},
+                   "resubscribed": getattr(stream, "resubscribed", 0),
+                   "providers": stream.detail() if hasattr(stream, "detail") else []} if stream else {},
         "ingest": {"fast_buys": getattr(engine, "fast_buys", 0), "queue": engine.queue.qsize(),
                    "poll_every_s": tracker.poll_every() if tracker and hasattr(tracker, "poll_every") else None,
                    "latency_24h": latency(app.db)},
@@ -76,6 +82,11 @@ def format_health(r: dict) -> str:
         lines.append(f"Live stream: {'🟢 connected' if st['connected'] else '🔴 reconnecting'} · {st['subscribed']}/"
                      f"{st['wanted']} wallets subscribed · {st['notifications']} trades pushed · {st['reconnects']} "
                      f"reconnects · {st['resubscribed']} resubscribed after missing trades")
+        for p in st.get("providers") or []:
+            if len(st["providers"]) > 1:
+                lines.append(f"  · {esc(p['name'])}: {'🟢' if p['connected'] else '🔴'} {p['subscribed']}/{p['wanted']} "
+                             f"subscribed · {p['notifications']} trades ({p['first']} first) · {p['reconnects']} reconnects"
+                             f" · {p['failed_subs']} failed subscriptions")
     ing = r.get("ingest") or {}
     lat = ing.get("latency_24h") or {}
     if lat.get("n"):
@@ -83,6 +94,9 @@ def format_health(r: dict) -> str:
                  for src, v in sorted(lat["sources"].items(), key=lambda kv: -kv[1]["n"])]
         lines.append(f"Whale trades, 24h: {lat['n']} · {lat['stream_share'] * 100:.0f}% straight from the stream · "
                      + " · ".join(parts))
+        if lat.get("asleep"):
+            lines.append(f"💤 {lat['asleep']} whale trades happened while the bot wasn't running (computer asleep / "
+                         "offline) — only a server that's always on catches those in time (SERVER_SETUP.txt)")
         if lat.get("late_alerts"):
             lines.append(f"⚠️ {lat['late_alerts']} whale buys reached the bot over 10 minutes late (asleep / RPC down?)")
     lines.append(f"Pump.fun buys read from the stream's logs (no RPC call): {ing.get('fast_buys', 0)} · backup check "

@@ -117,6 +117,35 @@ on boot and restarts by itself. `open_server_dashboard.command` opens its dashbo
 `server_log.command` shows its log. Telegram works exactly as before. If two copies ever run at once (the Mac and the
 server), the bot says so and holds real-money buys until one stops.
 
+## Trade only what's proven (v29, `/edge`)
+
+Your Oct 14 review: 99 honest paper trades since v28.3 lost $336 (-6.8% a trade, 24% won), almost all of it on hype
+alerts. Replaying all 859 coins the scanner saw that week (alerted and held back), buying when a coin was spotted lost
+money in every slice — score, size, pool age, launchpad, hour — with every exit, entry delay or dip-buy tried, after a
+3% cost each way. Coins drift down after they start trending; the alerted ones rugged 40% of the time, the held-back
+ones 9%. Copying whale buys lost too (-13% a trade even when the buy reached the bot within a minute).
+
+So the autopilot no longer buys every alert. Every 6 hours a fixed menu (7 coin types × 4 exit plans) is replayed on the
+last 7 days of coins the scanner saw:
+- **Candidate**: made money on BOTH halves of the week (12+ coins and +2% a trade on each) and without its best coin →
+  the paper autopilot trades only coins that fit it, with its exit plan (a forward test), including coins a filter rule
+  held back from an alert.
+- **Confirmed**: the candidate's own paper trades since then made money (15+ trades, +2% a trade) → only then may the
+  live autopilot follow it.
+- Nothing passing → the autopilot stands aside; hype alerts still arrive, silent and marked "no setup has been making
+  money" (`EDGE_QUIET_ALERTS`). A candidate whose paper trades lose is benched for 3 days.
+
+`EDGE_GATE 0` brings back "trade every alert". `/edge` and the Hype tab show every setup's numbers. On your Oct 14 data
+one candidate passed (pools 1h+ old with liquidity ≥ half the market cap, half out at +30%) — but on 58 coins, resting on
+2 big winners: exactly the kind of result that needs the forward test before money follows.
+
+**Also in v29:** the live wallet stream runs on two providers at once (`STREAM_PROVIDERS`, e.g. Chainstack + Alchemy;
+your health showed 5 of 17 wallets subscribed and 64% of whale trades arriving through the slow backup check);
+subscriptions a provider never answers are retried instead of blocking that wallet forever, and are paced to the plan's
+limit; a frozen price in a pool that still holds real money is no longer counted as a rug (that had skewed the
+self-tuner and the market pulse); `/health` counts whale trades that happened while the bot wasn't running (92 of 236
+late ones — only an always-on server catches those). A new paper period starts with v29.
+
 ## Production hardening (v28)
 
 `HARDENING.md` is the full audit — ingestion, scam filters, execution & MEV, sizing & risk, exits, concurrency and
@@ -282,6 +311,7 @@ Install: Chrome → `chrome://extensions` → turn on *Developer mode* → *Load
 /stats · /status            what copying returned · health
 /paper                      paper autopilot trades and balance
 /market                     what the market is doing, what's trending, what to look out for
+/edge                       which setups made money after costs lately — the autopilot trades only those
 /health · /tuning           stream, RPCs, live safety · what the self-tuner measured and changed
 /card · /export             re-pin the live card · send a review file (no keys inside)
 /settings · /set NAME VALUE · /pause · /resume

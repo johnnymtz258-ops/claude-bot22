@@ -105,6 +105,7 @@ create table if not exists paper_trades(
 create index if not exists idx_paper_status on paper_trades(status);
 
 create table if not exists paper_equity(ts integer primary key, equity real);
+create table if not exists health_log(ts integer primary key, data text);
 
 create table if not exists whale_profiles(
     address text primary key, data text, updated_ts integer default 0);
@@ -155,6 +156,8 @@ class Database:
             self.conn.execute("alter table paper_trades add column entry_liq real default 0")
         if "paper_proceeds" not in paper_cols:   # what paper first booked, kept when a sale into an emptied pool is corrected
             self.conn.execute("alter table paper_trades add column paper_proceeds real")
+        if "plan" not in paper_cols:   # the exit plan of the proven setup this trade was taken for (edge.py)
+            self.conn.execute("alter table paper_trades add column plan text default ''")
         live_cols = {r[1] for r in self.conn.execute("pragma table_info(live_trades)")}
         for name, kind in (("retries", "integer default 0"), ("retry_ts", "integer default 0"),
                            ("rent_back", "real default 0"), ("pending_sig", "text default ''"),

@@ -77,6 +77,9 @@ TUNABLES = {t.name: t for t in (
     Tunable("HYPE_BLOCK_BOTS", 1, "Hype scanner: hold back coins whose buying is mostly bots (Jupiter organic score under 25) — 94% were emptied in your data (1 = on)", 0, 1, True),
     Tunable("MARKET_BRIEF_HOUR", 9, "Local hour for the morning market brief: what the memecoin market is doing and what to look out for (-1 = off)", -1, 23),
     Tunable("MARKET_GUARD", 1, "Live autopilot holds new real buys while the market pulse reads cold (few real pumps, more rugs); paper keeps going (1 = on)", 0, 1, True),
+    Tunable("EDGE_GATE", 1, "Trade only what's proven: the paper and live autopilots take a hype coin only when it matches a setup that made money after costs on BOTH halves of the last 7 days of honest replays (/edge); otherwise they stand aside and keep measuring (1 = on)", 0, 1, True),
+    Tunable("EDGE_QUIET_ALERTS", 1, "Hype alerts that match no proven setup arrive silently and marked 'no proven edge' (1 = on)", 0, 1, True),
+    Tunable("STREAM_PROVIDERS", 2, "Live wallet stream: subscribe your whales on this many providers at once (your RPC links that have a websocket); a subscription one drops is covered by the other", 1, 3),
     Tunable("HYPE_AUTOTUNE", 1, "Hype filter tunes itself every 6h from what each rule blocked and what it would have made (/tuning; 1 = on)", 0, 1, True),
     Tunable("RUNNER_SETUP", 1, "Flag the setup most of your 10x coins had — whale buys $1K+ of a just-graduated coin at $40K-250K MC — and send it even from flipper whales (1 = on)", 0, 1, True),
     Tunable("RUNNER_SETUP_MIN_BUY_USD", 1000, "Runner setup: smallest whale buy that counts", 100, 100000),
@@ -136,6 +139,7 @@ class Config:
     rpc_http: list = field(default_factory=list)
     rpc_wss: str = ""
     rpc_wss_fallback: str = ""
+    rpc_wss_extra: list = field(default_factory=list)   # other private providers' websockets (redundant streams)
     my_wallets: list = field(default_factory=list)
     state_dir: Path = Path(".")
     db_path: Path = Path("whales.db")
@@ -199,6 +203,10 @@ def provider_name(url: str) -> str:
     return next((name for key, name in PROVIDERS if key in host), host or "RPC")
 
 
+def _host(url: str) -> str:
+    return url.split("://", 1)[-1].split("/", 1)[0].split("?", 1)[0]
+
+
 def wss_for(url: str) -> str:
     """The websocket address that goes with an RPC link (same address with wss://, except where a provider differs)."""
     if not url.startswith(("https://", "http://")):
@@ -239,6 +247,14 @@ def load(env_file: Path | None = None) -> Config:
     rpc_wss = (_env("SOLANA_RPC_WSS") or wss_for(own)
                or (f"wss://mainnet.helius-rpc.com/?api-key={helius}" if helius else "") or PUBLIC_WSS)
     rpc_wss_fallback = PUBLIC_WSS if rpc_wss != PUBLIC_WSS else ""
+    # the same wallets on a second private provider's websocket: a subscription one drops is covered by the other
+    hosts = {_host(rpc_wss)}
+    rpc_wss_extra = []
+    for url in rpc_http:
+        ws = wss_for(url)
+        if ws and url != PUBLIC_RPC and _host(ws) not in hosts:
+            hosts.add(_host(ws))
+            rpc_wss_extra.append(ws)
 
     wallets_text = _env("MY_WALLETS") or _env("PUBLIC_SOLANA_WALLET_ADDRESS")
     my_wallets = [w.strip() for w in wallets_text.replace(";", ",").split(",") if is_address(w.strip())]
@@ -264,6 +280,7 @@ def load(env_file: Path | None = None) -> Config:
         rpc_http=rpc_http,
         rpc_wss=rpc_wss,
         rpc_wss_fallback=rpc_wss_fallback,
+        rpc_wss_extra=rpc_wss_extra,
         my_wallets=my_wallets,
         state_dir=state_dir,
         db_path=db_path,

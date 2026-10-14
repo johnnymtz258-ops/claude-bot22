@@ -366,6 +366,9 @@ class LiveTrader:
                                   "open real positions are still managed.", silent=True, kind="LIVE")
             return 0
         allowed, why = self.type_allowed(whale)
+        edge = getattr(self, "edge", None)
+        if allowed and whale == "hype" and edge is not None and self.cfg.flag("EDGE_GATE"):
+            allowed, why = edge.confirmed(paper_id)   # real money only follows a setup its paper trades confirmed
         if not allowed:
             day = datetime.now().strftime("%Y-%m-%d")
             key = f"live_type_skip:{'hype' if whale == 'hype' else 'whales'}"

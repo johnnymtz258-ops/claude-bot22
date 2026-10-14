@@ -43,6 +43,11 @@ STEP 2 — Alchemy (needed: the background work and what Chainstack's free plan 
     SOLANA_RPC_HTTP=https://solana-mainnet.core.chainstack.com/0123abcd…
     SOLANA_RPC_FALLBACKS=https://solana-mainnet.g.alchemy.com/v2/YOUR-KEY
 
+TWO LIVE STREAMS AT ONCE
+  With a second link in SOLANA_RPC_FALLBACKS, the bot subscribes your whales on BOTH providers' websockets
+  (STREAM_PROVIDERS, 2 by default): a subscription one drops is covered by the other, and each trade is still handled
+  once. The self-check shows "second … live wallet stream working"; /health shows each one.
+
 WHAT IF ONE RUNS OUT
   The bot notices ("limit exceeded", HTTP 401/402/403, credits used up), rests that RPC for 30 minutes and uses the
   next one. If every private RPC is out, it falls back to the public Solana RPC (slow but working), pauses the whale

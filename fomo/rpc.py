@@ -12,7 +12,9 @@ from .scam import token_traps
 from .util import is_address
 
 # JSON-RPC errors that mean "this node can't answer right now" -> try the next node / later.
-RETRYABLE_RPC_CODES = {-32004, -32005, -32007, -32009, -32014, -32016, 429}
+# temporary node-side failures: another node (or a second try) usually answers. -32019 is "failed to query long-term
+# storage" (a node without the archive for that range): it must not empty the backup poller's answer for a wallet
+RETRYABLE_RPC_CODES = {-32004, -32005, -32007, -32009, -32014, -32016, -32019, 429}
 
 # "the plan's monthly allowance is used up": rest that node 30 minutes. Only clear words — "upgrade your plan" alone
 # is also how providers word a requests-per-second limit (Chainstack's free plan: 3 a second), which is NOT this.
@@ -347,6 +349,14 @@ class SolanaRPC:
         return all(self._cool_until.get(u, 0) > now for u in private)
 
 
+SUB_ANSWER_WAIT = 20      # seconds a provider has to answer a subscribe request before it's sent again
+
+
+def _stream_name(url: str) -> str:
+    from .config import provider_name
+    return provider_name(url.replace("wss://", "https://").replace("ws://", "http://").replace("/ogws", "/ogrpc"))
+
+
 class WalletStream:
     """Subscribes to every watched wallet with `logsSubscribe` and reports new signatures.
 
@@ -354,9 +364,11 @@ class WalletStream:
     every notification: pump.fun buys are read straight from them (no RPC call).
     """
 
-    def __init__(self, url: str, on_signature, fallback: str = ""):
+    def __init__(self, url: str, on_signature, fallback: str = "", name: str = ""):
         self.url = url
         self.primary = url
+        self.name = name or _stream_name(url)
+        self.first = 0              # trades this stream delivered before any other (with several streams)
         self.fallback = fallback
         self._failures = 0
         self._fallback_until = 0.0
@@ -366,6 +378,7 @@ class WalletStream:
         self.sub_of: dict[str, int] = {}
         self.wallet_of: dict[int, str] = {}
         self.pending: dict[int, tuple[str, str]] = {}
+        self._sent_at: dict[int, float] = {}
         self.connected = False
         self.last_message_ts = 0.0
         self.reconnects = 0
@@ -399,17 +412,34 @@ class WalletStream:
     async def _send(self, method: str, params: list, wallet: str, kind: str) -> None:
         self._req += 1
         self.pending[self._req] = (wallet, kind)
+        self._sent_at[self._req] = time.time()
         await self._ws.send(json.dumps({"jsonrpc": "2.0", "id": self._req, "method": method, "params": params}))
+
+    def _expire_pending(self) -> None:
+        """A request the provider never answered (dropped under its rate limit) must not block that wallet forever:
+        after SUB_ANSWER_WAIT seconds it counts as failed and is sent again on the next check."""
+        now = time.time()
+        for req, sent in list(self._sent_at.items()):
+            if now - sent >= SUB_ANSWER_WAIT:
+                self._sent_at.pop(req, None)
+                if self.pending.pop(req, (None, ""))[1] == "sub":
+                    self.failed_subs += 1
+                    self.last_error = f"{time.strftime('%H:%M:%S')} a subscription got no answer — retrying"
+
+    def _in_flight(self) -> set[str]:
+        return {w for w, kind in self.pending.values() if kind == "sub"}
 
     async def _sync(self) -> None:
         self._changed.clear()
         self._last_sync = time.time()
+        self._expire_pending()
+        gap = max(0.05, _gap_for(self.url) * 1.2)   # under the plan's requests-a-second (Chainstack free: 3 a second)
         while self._stale:
             await self._send("logsUnsubscribe", [self._stale.pop()], "", "unsub")
-        in_flight = {w for w, kind in self.pending.values() if kind == "sub"}
-        for i, wallet in enumerate(sorted(self.wanted - set(self.sub_of) - in_flight)):
+            await asyncio.sleep(gap)
+        for i, wallet in enumerate(sorted(self.wanted - set(self.sub_of) - self._in_flight())):
             if i:
-                await asyncio.sleep(0.05)   # paced: a burst of 50 subscriptions can trip a provider's limit
+                await asyncio.sleep(gap)
             await self._send("logsSubscribe", [{"mentions": [wallet]}, {"commitment": "confirmed"}], wallet, "sub")
         for wallet in list(set(self.sub_of) - self.wanted):
             sub = self.sub_of.pop(wallet)
@@ -419,6 +449,7 @@ class WalletStream:
     async def _handle(self, raw: str) -> None:
         msg = json.loads(raw)
         if "id" in msg and msg["id"] in self.pending:
+            self._sent_at.pop(msg["id"], None)
             wallet, kind = self.pending.pop(msg["id"])
             if kind == "sub":
                 if isinstance(msg.get("result"), int):
@@ -455,12 +486,13 @@ class WalletStream:
                     self.connected = True
                     if self.url == self.primary:
                         self._failures = 0
-                    self.sub_of.clear(); self.wallet_of.clear(); self.pending.clear()
+                    self.sub_of.clear(); self.wallet_of.clear(); self.pending.clear(); self._sent_at.clear()
                     backoff = 1.0
                     await self._sync()
                     self.connected_since = time.time()
                     while True:
-                        missing = self.wanted - set(self.sub_of) - {w for w, k in self.pending.values() if k == "sub"}
+                        self._expire_pending()
+                        missing = self.wanted - set(self.sub_of) - self._in_flight()
                         if self._changed.is_set() or (missing and time.time() - self._last_sync >= 30):
                             await self._sync()   # new wallets, or subscriptions that failed: (re)subscribe
                         try:
@@ -481,3 +513,85 @@ class WalletStream:
             self.reconnects += 1
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
+
+
+class MultiStream:
+    """The same wallets subscribed on several providers at once (e.g. Chainstack + Alchemy): a subscription one
+    provider drops, or a reconnect, is covered by the other. Every signature still goes through the engine once (it
+    skips one it already has). Looks like one WalletStream to the rest of the bot."""
+
+    def __init__(self, streams: list[WalletStream], on_signature):
+        self.streams = streams
+        self.on_signature = on_signature
+        self._seen: dict[str, str] = {}
+        self._unique = 0
+        self._resubscribed = 0
+        for s in streams:
+            s.on_signature = self._tap(s)
+
+    def _tap(self, stream: WalletStream):
+        async def on_signature(wallet: str, signature: str, logs=None):
+            if signature not in self._seen:
+                self._seen[signature] = stream.name
+                self._unique += 1
+                stream.first += 1
+                if len(self._seen) > 5000:   # bounded: keep the most recent half
+                    self._seen = dict(list(self._seen.items())[-2500:])
+            await self.on_signature(wallet, signature, logs=logs)
+        return on_signature
+
+    # -- what the rest of the bot reads ------------------------------------------------------------
+    @property
+    def connected(self) -> bool:
+        return any(s.connected for s in self.streams)
+
+    @property
+    def subscribed(self) -> int:
+        """Wallets covered by at least one live subscription."""
+        return len(set().union(*(set(s.sub_of) for s in self.streams if s.connected)))
+
+    @property
+    def wanted(self) -> set[str]:
+        return self.streams[0].wanted if self.streams else set()
+
+    @property
+    def notifications(self) -> int:
+        return self._unique if len(self.streams) > 1 else sum(s.notifications for s in self.streams)
+
+    @property
+    def reconnects(self) -> int:
+        return sum(s.reconnects for s in self.streams)
+
+    @property
+    def failed_subs(self) -> int:
+        return sum(s.failed_subs for s in self.streams)
+
+    @property
+    def resubscribed(self) -> int:
+        return self._resubscribed
+
+    @property
+    def last_error(self) -> str:
+        return next((f"{s.name}: {s.last_error}" for s in self.streams if s.last_error and not s.connected), "") or \
+            next((f"{s.name}: {s.last_error}" for s in self.streams if s.last_error), "")
+
+    @property
+    def last_message_ts(self) -> float:
+        return max((s.last_message_ts for s in self.streams), default=0.0)
+
+    def detail(self) -> list[dict]:
+        return [{"name": s.name, "connected": s.connected, "subscribed": s.subscribed, "wanted": len(s.wanted),
+                 "notifications": s.notifications, "first": s.first, "reconnects": s.reconnects,
+                 "failed_subs": s.failed_subs} for s in self.streams]
+
+    def set_wallets(self, wallets) -> None:
+        for s in self.streams:
+            s.set_wallets(wallets)
+
+    def resubscribe(self, wallet: str) -> None:
+        self._resubscribed += 1
+        for s in self.streams:
+            s.resubscribe(wallet)
+
+    async def run(self) -> None:
+        await asyncio.gather(*(s.run() for s in self.streams))

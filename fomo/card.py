@@ -57,6 +57,11 @@ def build_card(app, now: float | None = None) -> str:
     rep = pulse.report(int(now)) if pulse is not None else {}
     if rep and rep.get("regime") != "learning":
         lines.append(f"🌡 Market: {rep['label']}" + (f" · {esc(rep['reasons'][0])}" if rep.get("reasons") else ""))
+    edge = getattr(getattr(app, "tuner", None), "edge", None)
+    if edge is not None and cfg.flag("EDGE_GATE") and (edge.report or {}).get("table"):
+        act = edge.report.get("active")
+        lines.append(f"🧪 Hype autopilot testing: {esc(act['label'])} (/edge)" if act else
+                     "🛑 Hype autopilot standing aside — no setup is making money lately (/edge)")
     # paper autopilot
     if cfg.flag("PAPER_TRADING"):
         s = app.engine.paper.summary()

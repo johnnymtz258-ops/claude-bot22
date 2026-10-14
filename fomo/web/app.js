@@ -351,6 +351,22 @@
         td(r.avg_1h === null ? "—" : pct(r.avg_1h), `num ${signClass(r.avg_1h)}`))),
       "No hype alerts yet — results appear here as they come in.");
     renderTuning(h.tuning || {});
+    renderEdge(h.edge || {});
+  }
+
+  function renderEdge(e) {
+    const x = (v) => pct((v - 1) * 100, 1);
+    $("edge-meta").textContent = e.ts ? `${e.coins} coins · ${(e.slip * 100).toFixed(1)}% cost each way · updated ${ago(e.ts)}` : "measuring — every 6 hours";
+    const act = e.active, fw = e.forward || {};
+    $("edge-state").textContent = !e.table ? "" : act
+      ? `🧪 Paper is testing: ${act.label} · ${act.plan_label} — replays ${x(act.avg)} a trade on ${act.n} coins. Its paper trades since: ${fw.n || 0}${fw.n ? ` at ${x(fw.avg)}` : ""}${fw.confirmed ? " — ✅ confirmed, real money may follow" : " — real money waits for 15+ at +2% or better"}.`
+      : `🛑 Standing aside: no setup made money after costs on both halves of the week${e.gate ? "" : " (EDGE_GATE is off — paper trades every alert anyway)"}.`;
+    table($("edge-table"), ["Setup", "Exit", { label: "1st half", num: 1 }, { label: "2nd half", num: 1 }, { label: "Without best", num: 1 }, ""],
+      (e.table || []).slice(0, 10).map((t) => el("tr", {}, td(t.setup_label, "wrap"), td(t.plan_label, "wrap"),
+        td(t.first.n ? `${x(t.first.avg)} (${t.first.n})` : "—", `num ${signClass(t.first.avg - 1)}`),
+        td(t.second.n ? `${x(t.second.avg)} (${t.second.n})` : "—", `num ${signClass(t.second.avg - 1)}`),
+        td(t.all.n ? x(t.all.wo_best) : "—", `num ${signClass(t.all.wo_best - 1)}`),
+        td(t.proven ? "✅ passes" : "", "up"))), "Not measured yet.");
   }
 
   function renderTuning(t) {
@@ -737,9 +753,12 @@
       const secs = (s) => s === null || s === undefined ? "—" : s < 120 ? `${s}s` : s < 7200 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`;
       if (lat.n) h.push(["Whale trades (24h)", `${lat.n} · ${Math.round(lat.stream_share * 100)}% straight from the stream · `
         + Object.entries(lat.sources).map(([k, v]) => `${k}: typical ${secs(v.p50)}, slowest 10% ${secs(v.p90)}`).join(" · ")
-        + (lat.late_alerts ? ` · ${lat.late_alerts} reached the bot 10+ min late` : "")]);
+        + (lat.late_alerts ? ` · ${lat.late_alerts} reached the bot 10+ min late` : "")
+        + (lat.asleep ? ` · 💤 ${lat.asleep} happened while the bot wasn't running (asleep/offline — a server catches those)` : "")]);
       const st = hl.stream || {};
       h.push(["Stream detail", `${st.subscribed}/${st.wanted} wallets · ${st.notifications} pushed · ${st.reconnects} reconnects · ${st.resubscribed} resubscribed · ${hl.ingest.fast_buys} pump.fun buys read from logs`]);
+      const provs = st.providers || [];
+      if (provs.length > 1) for (const p of provs) h.push([`Stream · ${p.name}`, `${p.connected ? "🟢" : "🔴"} ${p.subscribed}/${p.wanted} subscribed · ${p.notifications} trades (${p.first} first) · ${p.reconnects} reconnects · ${p.failed_subs} failed subscriptions`]);
       for (const n of (hl.rpc || {}).nodes || []) h.push([`RPC · ${n.name}`, `${(n.ok ?? 0).toLocaleString()} answered of ${n.calls.toLocaleString()} · ${n.avg_ms ?? "—"} ms · ${n.resting_s ? `resting ${secs(n.resting_s)}` : "ok"}`
         + (n.per_second ? ` · up to ${n.per_second}/s` : "")
         + ((n.not_on_plan || []).length ? ` · not on its plan (sent elsewhere): ${n.not_on_plan.join(", ")}` : "")

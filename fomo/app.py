@@ -19,7 +19,7 @@ from .engine import Engine
 from .live import LiveTrader
 from .market import Market
 from .portfolio import Portfolio
-from .rpc import SolanaRPC, WalletStream
+from .rpc import MultiStream, SolanaRPC, WalletStream
 from .hype import HypeScanner
 from .runners import RunnerScanner
 from .scout import WhaleScout
@@ -70,11 +70,22 @@ class App:
                 self.db.run("delete from meta where key=?", (f"tune:changed:{name}",))   # re-decide on honest replays
             self.db.set_meta("tune:last_run", 0)
             self.db.set_meta("rug_audit_v28_3", "1")
+        if self.db.get_meta("quiet_rugs_v29") != "1":   # replays counted quiet coins as rugs: re-decide on fixed ones
+            self.db.run("delete from meta where key like 'tune:changed:%'")
+            self.db.set_meta("tune:last_run", 0)
+            # the autopilot now trades only setups that made money (edge.py): a new paper period measures exactly that
+            from .paper import PaperTrader
+            paper = PaperTrader(self.db, cfg, None)
+            s_ = paper.summary()
+            if s_["closed"]:
+                self.v29_note = {"n": s_["closed"], "pnl": s_["realized"], "balance": s_["equity"], "won": s_["won"]}
+                paper.new_period("v29: the autopilot trades only setups that made money after costs (/edge)")
+            self.db.set_meta("quiet_rugs_v29", "1")
         if self.db.get_meta("runner_alerts_off_v22_4") != "1":   # community runners averaged -71% on your data
             self.db.set_meta("setting:RUNNER_ALERTS", 0)
             cfg.set("RUNNER_ALERTS", 0)
             self.db.set_meta("runner_alerts_off_v22_4", "1")
-        self.stream: WalletStream | None = None
+        self.stream: MultiStream | None = None
         self.crashes: dict[str, int] = {}
         self.last_crash = ""
         self.find_task: asyncio.Task | None = None
@@ -194,7 +205,10 @@ class App:
             if int(time.time()) % 600 < 60:   # every 10 minutes: a health snapshot (it goes into /export)
                 try:
                     from .health import report
-                    self.db.set_meta("health:last", json.dumps(report(self)))
+                    snap = json.dumps(report(self))
+                    self.db.set_meta("health:last", snap)
+                    self.db.run("insert or replace into health_log(ts, data) values(?, ?)", (int(time.time()), snap))
+                    self.db.run("delete from health_log where ts<?", (int(time.time()) - 8 * 86400,))
                 except Exception as exc:
                     print(f"[health] {type(exc).__name__}: {exc}")
             if self.db.get_meta("backup_day") != today:
@@ -237,7 +251,10 @@ class App:
             self.scout = WhaleScout(cfg, self.db, self.rpc, self.market, self.whales, self.runners, self.notify,
                                     self.refresh_wallets, self.engine.profiles)
             self.commands = Commands(self)
-            self.stream = WalletStream(cfg.rpc_wss, self.engine.enqueue, cfg.rpc_wss_fallback)
+            streams = [WalletStream(cfg.rpc_wss, self.engine.enqueue, cfg.rpc_wss_fallback)]
+            streams += [WalletStream(ws, self.engine.enqueue)
+                        for ws in cfg.rpc_wss_extra[:max(0, int(cfg.get("STREAM_PROVIDERS")) - 1)]]
+            self.stream = MultiStream(streams, self.engine.enqueue)
             self.engine.on_stream_miss = self.stream.resubscribe
             self.tracker.stream = self.stream
 
@@ -252,6 +269,7 @@ class App:
             self.engine.paper.live = self.live
             self.live.set_setting = lambda name, value: self.set_setting(name, value, by_tuner=True)
             self.live.market, self.live.stream = self.market, self.stream
+            self.live.edge = self.tuner.edge
             self.card = LiveCard(self)
             from .marketpulse import MarketPulse
             self.pulse = MarketPulse(cfg, self.db, self.market, self.notify, self.runners)
@@ -300,6 +318,13 @@ class App:
                          f"got {audit['real_pnl']:+,.0f}$. The honest balance was {audit.get('balance_was', 0):,.0f}$; a new "
                          "paper period starts now at the usual balance, with honest fills. That setup is now blocked before "
                          "entry. Don't trade real money until the new period is in profit.")
+        v29 = getattr(self, "v29_note", None)
+        if v29:
+            lines.append(f"🎯 <b>The autopilot now trades only what's proven.</b> Last paper period: {v29['n']} trades, "
+                         f"{v29['won']} won, {v29['pnl']:+,.0f}$ (balance {v29['balance']:,.0f}$) — buying every hype "
+                         "alert lost money. Each setup is now replayed on a week of coins; paper tests one only if it "
+                         "made money on both halves, real money only after paper confirms it. A new paper period "
+                         "starts now. /edge")
         lines += [
                  f"Following {n} whale{'s' if n != 1 else ''}" + (f" ({imported} imported from the old bot)"
                                                                    if imported else "")]
@@ -311,6 +336,9 @@ class App:
         else:
             lines.append(f"RPC: {esc(self.cfg.rpc_name)}" + (f" (+{len(self.cfg.rpc_http) - 2} backup)"
                                                              if len(self.cfg.rpc_http) > 2 else ""))
+        streams = [x.name for x in getattr(self.stream, "streams", [])]
+        if len(streams) > 1:
+            lines.append(f"Live wallet stream on {len(streams)} providers at once: {esc(' + '.join(streams))}")
         if self.cfg.dashboard_enabled:
             lines.append(f"Dashboard: http://localhost:{self.cfg.dashboard_port}")
         for symbol in getattr(self, "coins_moved", []):

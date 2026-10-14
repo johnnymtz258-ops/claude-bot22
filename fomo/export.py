@@ -12,7 +12,8 @@ from pathlib import Path
 
 DAYS = 10
 FULL = ("alerts", "copies", "whales", "tokens", "my_trades", "watches", "position_notes", "whale_candidates",
-        "paper_trades", "paper_equity", "live_trades", "hype_seen", "hype_watch")
+        "paper_trades", "paper_equity", "live_trades", "hype_seen", "hype_watch", "market_pulse", "edge_trades",
+        "health_log")
 
 
 def build_review_zip(db_path: Path, out_zip: Path, days: int = DAYS) -> Path:
@@ -38,7 +39,8 @@ def build_review_zip(db_path: Path, out_zip: Path, days: int = DAYS) -> Path:
                     (since, since - 86400) + ((since - 86400,) if shadows else ()))
         # your settings and what the self-tuner changed (no keys or tokens live in this table)
         con.execute("""create table out.settings as select key, value from main.meta
-            where key like 'setting:%' or key like 'tune:%' or key like 'health:%'""")
+            where key like 'setting:%' or key like 'tune:%' or key like 'health:%' or key like 'edge:%'
+            or key like 'paper_%' or key like 'market_%' or key like 'pulse_%' or key like 'rug_audit%'""")
         con.commit()
         con.execute("detach database out")
     finally:

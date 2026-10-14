@@ -141,3 +141,16 @@ Fixed:
   points; the live autopilot never buys them.
 
 Go live only once the new paper period is in profit over a real number of trades; `LIVE_PROFITABLE_ONLY` enforces it.
+
+## v29 — what the Oct 14 review showed
+
+- **Stream:** 5 of 17 wallets subscribed at times; 64% of whale trades came through the backup check (typical 80 min
+  late). Cause: Chainstack's free plan allows 3 requests a second, the stream sent subscriptions 20 a second after each
+  reconnect, and a subscribe request the provider never answered blocked that wallet forever. Fixed: subscriptions are
+  paced to the provider's limit, an unanswered one is retried after 20 s, and the same wallets are subscribed on a
+  second provider at once (`STREAM_PROVIDERS`). 92 of 236 late trades happened while the bot wasn't running at all —
+  only an always-on server fixes those; `/health` now counts them.
+- **Replays:** a price that didn't move for 10 minutes was treated as a rug even with $40K still in the pool (144 of
+  859 coins). Only a thin pool (under $5K, or unknown depth) counts now. The self-tuner re-decides its rules and exit.
+- **Strategy:** buying every hype alert lost money on honest fills. The autopilot now trades only setups that made
+  money on both halves of the last week of replays, forward-tested on paper before real money follows (`fomo/edge.py`).

@@ -24,13 +24,13 @@ import statistics
 import time
 from datetime import datetime
 
-from .tuner import dead_from
+from .tuner import THIN_LIQ, dead_from
 from .util import esc, num
 
 SNAP_EVERY = 900
 REPORT_CACHE = 300
 FATE_SPAN = 7200        # a hype coin's fate: the 2 hours after its alert (the hype exit plan's longest hold)
-SELLABLE_LIQ = 5_000    # a price only counts as a pump if the pool had at least this much in it
+SELLABLE_LIQ = THIN_LIQ  # a price only counts as a pump if the pool had at least this much in it
 COINGECKO = ("https://api.coingecko.com/api/v3/simple/price?ids=solana,bitcoin&vs_currencies=usd"
              "&include_24hr_change=true")
 FEAR_GREED = "https://api.alternative.me/fng/?limit=1"

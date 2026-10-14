@@ -215,3 +215,19 @@ def test_paper_hype_ladder_and_liquidity_pull_exit(bot):
     bot.run(bot.tracker.tick(NOW + 135))
     t = bot.db.row("select * from paper_trades where whale='hype'")
     assert t["status"] == "closed" and "liquidity pulled" in t["close_reason"]
+
+
+def test_a_quiet_coin_with_a_full_pool_is_not_a_rug():
+    from fomo.tuner import dead_from
+    t0 = 1_000_000
+    quiet = [(t0 + 60 * i, 1.0, 40_000.0) for i in range(15)]           # no trades for 15 minutes, pool still $40K
+    assert dead_from(quiet) is None
+    thin = [(t0 + 60 * i, 1.0, 3_000.0) for i in range(15)]             # frozen in a $3K pool: emptied
+    assert dead_from(thin) == 0
+    old = [(t0 + 60 * i, 1.0) for i in range(15)]                       # older records without liquidity
+    assert dead_from(old) == 0
+    pulled = [(t0, 1.0, 40_000.0), (t0 + 60, 1.1, 800.0)]
+    assert dead_from(pulled) == 1
+    plan = {"tp": 1.2, "stop": 0.75, "hold": 1800}
+    path = quiet + [(t0 + 60 * (15 + i), 1.0 + 0.05 * i, 40_000.0) for i in range(1, 8)]
+    assert replay(1.0, path, t0, plan, 0.0) > 1.15                        # it woke up and hit the take-profit

@@ -46,19 +46,23 @@ SETTINGS = {"zone": ("HYPE_AVOID_MC_HI",), "profile": ("HYPE_SKIP_PROFILE",), "l
             "score": ("HYPE_MIN_SCORE",), "exit": ("HYPE_TP_PCT", "HYPE_STOP_PCT", "HYPE_MAX_MINUTES", "HYPE_HALF_AT_TP")}
 
 
-FROZEN_MARKS = 10       # the same price for 10 minutes in a row: nobody can trade it — the pool was emptied
+FROZEN_MARKS = 10       # the same price for 10 minutes in a row in a thin pool: nobody can trade it — it was emptied
 DEAD_LIQ = 1_000        # under $1K of liquidity left: there is nothing to sell into
+THIN_LIQ = 5_000        # a frozen price only means "rugged" when the pool is this thin (or its depth wasn't recorded)
 
 
 def dead_from(path: list[tuple], entry_liq: float = 0.0) -> int | None:
     """Index in the path from which the coin can't be sold any more (liquidity pulled), or None.
-    Seen two ways: the recorded liquidity collapses, or (older records without liquidity) the price freezes."""
+    Seen two ways: the recorded liquidity collapses, or the price freezes in a thin pool (or in older records without
+    liquidity). A quiet coin whose pool still holds real money is NOT a rug — v28.3 counted those as rugs (144 of
+    859 coins in the Oct 14 review), which made every longer hold look worse than it was."""
     run = 1
     for i, point in enumerate(path):
         liq = point[2] if len(point) > 2 else None
         if liq is not None and liq >= 0 and (liq < DEAD_LIQ or (entry_liq > 0 and liq < 0.1 * entry_liq)):
             return i
-        if i and point[1] == path[i - 1][1]:
+        thin = liq is None or liq < THIN_LIQ
+        if i and point[1] == path[i - 1][1] and thin:
             run += 1
             if run >= FROZEN_MARKS:
                 return i - run + 1
@@ -116,6 +120,8 @@ class Tuner:
         self.set_setting = set_setting or (lambda name, value: cfg.set(name, value))
         self.report: dict = {}
         self.last_error = ""
+        from .edge import Edge
+        self.edge = Edge(cfg, db, notify)   # trade only what's proven (measured on the same coins, every 6h)
         db.run("""create table if not exists hype_seen(id integer primary key autoincrement, ts integer, mint text,
             kind text, rule text default '', score real default 0, price real default 0, mc real default 0,
             h1 real default 0, keys text default '', alert_id integer default 0)""")
@@ -352,6 +358,7 @@ class Tuner:
     async def tick(self, now: int | None = None) -> list[str]:
         """Every 6 hours: measure, and (HYPE_AUTOTUNE on) make the changes the numbers call for."""
         now = int(now or time.time())
+        await self.edge.tick(now)
         if now - int(num(self.db.get_meta("tune:last_run", "0"))) < EVERY:
             return []
         self.db.set_meta("tune:last_run", now)

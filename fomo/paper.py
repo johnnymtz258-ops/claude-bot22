@@ -11,6 +11,7 @@ A price that jumps 8x+ in one reading must be seen twice before it counts (DexSc
 """
 from __future__ import annotations
 
+import json
 import time
 
 from . import playbook
@@ -113,7 +114,7 @@ class PaperTrader:
 
     # -- trading --------------------------------------------------------------------------------
     def open(self, *, alert_id: int, mint: str, whale: str, symbol: str, price: float, mc_usd: float,
-             ts: int | None = None, info: dict | None = None, signal: dict | None = None) -> int:
+             ts: int | None = None, info: dict | None = None, signal: dict | None = None, plan: dict | None = None) -> int:
         if not (self.cfg.flag("PAPER_TRADING") or self.cfg.flag("LIVE_TRADING")) or price <= 0:
             return 0
         if self.db.scalar("select 1 from paper_trades where mint=? and status='open'", (mint,)):
@@ -125,12 +126,26 @@ class PaperTrader:
             return 0
         entry = price * (1 + self._slip())
         trade_id = self.db.insert("""insert into paper_trades(alert_id,mint,whale,symbol,open_ts,entry_price,entry_mc,
-                size_usd,tokens,remaining,proceeds_usd,peak_x,last_price,status,entry_liq) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                size_usd,tokens,remaining,proceeds_usd,peak_x,last_price,status,entry_liq,plan)
+                values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                                   (alert_id, mint, whale, symbol, int(ts or time.time()), entry, mc_usd, size,
-                                   size / entry, 1.0, 0.0, 1.0, price, "open", num((info or {}).get("liquidity_usd"))))
+                                   size / entry, 1.0, 0.0, 1.0, price, "open", num((info or {}).get("liquidity_usd")),
+                                   json.dumps(plan) if plan else ""))
         if trade_id and self.live and self.live.ready()[0]:
             self.live.spawn(self.live.buy(trade_id, mint, symbol, whale, info=info, signal=signal))
         return trade_id
+
+    @staticmethod
+    def _own_plan(t: dict) -> dict | None:
+        try:
+            plan = json.loads(t.get("plan") or "null")
+        except ValueError:
+            return None
+        if not isinstance(plan, dict) or not plan.get("tp"):
+            return None
+        return {"half": bool(plan.get("half")), "follow_whale": False, "label": plan.get("label", ""),
+                "tp": num(plan["tp"]), "stop": num(plan.get("stop"), 0.75), "hold": int(num(plan.get("hold"), 1800)),
+                "trail": num(plan.get("trail"), 35)}
 
     def _accept(self, t: dict, price: float, now: int) -> float | None:
         last = num(t["last_price"])
@@ -188,7 +203,7 @@ class PaperTrader:
                 limit = MAX_HOLD
                 if t["whale"] == "hype":
                     from .hype import exit_plan
-                    limit = exit_plan(self.cfg)["hold"]
+                    limit = (self._own_plan(t) or exit_plan(self.cfg))["hold"]
                 if now - t["open_ts"] >= limit and num(t["last_price"]) > 0:   # no usable price: the limit still applies
                     done.append(self._sell(t, 1.0, num(t["last_price"]), "time limit (no fresh price)", now))
                 continue
@@ -204,9 +219,13 @@ class PaperTrader:
             peak = max(num(t["peak_x"]), x)
             self.db.run("update paper_trades set last_price=?, peak_x=? where id=?", (price, peak, t["id"]))
             t.update(last_price=price, peak_x=peak)
+            trail = self.cfg.get("PROTECT_TRAIL_PCT")
             if t["whale"] == "hype":
-                from .hype import exit_plan
-                plan = exit_plan(self.cfg)                       # hype coins: take the first move
+                plan = self._own_plan(t)                         # the proven setup's exit plan (edge.py)…
+                if plan is None:
+                    from .hype import exit_plan
+                    plan = exit_plan(self.cfg)                   # …else the hype plan: take the first move
+                trail = num(plan.get("trail"), trail)
             else:
                 plan = playbook.plan_for(self.db, t["whale"])   # this whale's own winning exit plan, if it has one
             if plan and not plan["half"] and x >= plan["tp"]:

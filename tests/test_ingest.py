@@ -139,3 +139,94 @@ def test_the_poller_speeds_up_only_while_the_stream_is_missing_trades(bot):
     assert bot.tracker.poll_every() in (45, 120)
     Stream.connected = False
     assert bot.tracker.poll_every() == 15
+
+
+def test_a_subscription_the_provider_never_answers_is_sent_again(monkeypatch):
+    """Chainstack under its 3-a-second limit can drop a subscribe request without answering: that wallet must not
+    stay 'in flight' forever (it did — 5 of 17 wallets subscribed for hours)."""
+    import fomo.rpc as rpcmod
+    monkeypatch.setattr(rpcmod, "SUB_ANSWER_WAIT", 0.3)
+    seen, sockets = [], []
+    ignored = {"left": 1}
+
+    async def ws_handler(request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        sockets.append(ws)
+        async for msg in ws:
+            data = json.loads(msg.data)
+            seen.append(data["method"])
+            if data["method"] == "logsSubscribe" and ignored["left"]:
+                ignored["left"] -= 1
+                continue                                           # dropped: no answer at all
+            await ws.send_json({"jsonrpc": "2.0", "id": data["id"], "result": 300 + len(seen)})
+        return ws
+
+    async def run():
+        app = web.Application()
+        app.router.add_get("/", ws_handler)
+        srv = TestServer(app)
+        await srv.start_server()
+
+        async def on_sig(wallet, sig, logs=None):
+            pass
+
+        stream = WalletStream(str(srv.make_url("/")).replace("http", "ws"), on_sig)
+        stream.set_wallets([WHALE])
+        task = asyncio.create_task(stream.run())
+        for _ in range(80):                                          # the stream checks every 2s at most
+            await asyncio.sleep(0.05)
+            if stream.failed_subs:
+                break
+        assert stream.subscribed == 0 and stream.failed_subs == 1   # counted as failed once the wait ran out
+        stream._last_sync -= 31
+        for _ in range(60):
+            await asyncio.sleep(0.05)
+            if stream.subscribed == 1:
+                break
+        assert stream.subscribed == 1 and seen.count("logsSubscribe") == 2
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        for ws in sockets:
+            await ws.close()
+        await asyncio.wait_for(srv.close(), timeout=5)
+
+    asyncio.run(run())
+
+
+def test_two_providers_cover_each_other_and_a_trade_is_handled_once():
+    from fomo.rpc import MultiStream
+    got = []
+
+    async def on_sig(wallet, sig, logs=None):
+        got.append((wallet, sig))
+
+    a, b = WalletStream("wss://solana-mainnet.core.chainstack.com/x", None), WalletStream(
+        "wss://solana-mainnet.g.alchemy.com/v2/x", None)
+    multi = MultiStream([a, b], on_sig)
+    assert (a.name, b.name) == ("Chainstack", "Alchemy")
+    multi.set_wallets([WHALE, WHALE2])
+    a.connected = b.connected = True
+    a.sub_of, b.sub_of = {WHALE: 1}, {WHALE2: 7}                    # each one lost a different wallet…
+    assert multi.subscribed == 2 and multi.connected                 # …together both are covered
+    a.wallet_of, b.wallet_of = {1: WHALE}, {7: WHALE2, 8: WHALE}
+    note = {"jsonrpc": "2.0", "method": "logsNotification",
+            "params": {"subscription": 1, "result": {"value": {"signature": "SIG1", "err": None, "logs": []}}}}
+    asyncio.run(a._handle(json.dumps(note)))
+    note["params"]["subscription"] = 8
+    asyncio.run(b._handle(json.dumps(note)))                         # the same trade from the second provider
+    assert a.first == 1 and b.first == 0 and multi.notifications == 1
+    assert [p["first"] for p in multi.detail()] == [1, 0]
+    multi.resubscribe(WHALE)
+    assert multi.resubscribed == 1 and WHALE not in a.sub_of
+
+
+def test_the_second_stream_comes_from_another_provider(monkeypatch):
+    from fomo import config
+    monkeypatch.setenv("SOLANA_RPC_HTTP", "https://solana-mainnet.core.chainstack.com/abc")
+    monkeypatch.setenv("SOLANA_RPC_FALLBACKS", "https://solana-mainnet.g.alchemy.com/v2/k,https://solana-mainnet.core.chainstack.com/def")
+    monkeypatch.setenv("HELIUS_API_KEY", "")
+    monkeypatch.setenv("SOLANA_RPC_WSS", "")
+    cfg = config.load(env_file=None)
+    assert cfg.rpc_wss.startswith("wss://solana-mainnet.core.chainstack.com/")
+    assert cfg.rpc_wss_extra == ["wss://solana-mainnet.g.alchemy.com/v2/k"]   # not a second Chainstack, not public

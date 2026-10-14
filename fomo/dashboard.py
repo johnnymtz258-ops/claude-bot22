@@ -96,7 +96,9 @@ class Dashboard:
         return _json({"board": hype.board, "record": hype.record(), "signals": hype.signal_results(),
                       "min_score": self.app.cfg.get("HYPE_MIN_SCORE"), "enabled": self.app.cfg.flag("HYPE_ALERTS"),
                       "last_scan": hype.last_scan,
-                      "tuning": hype.tuner.current() if getattr(hype, "tuner", None) else {}})
+                      "tuning": hype.tuner.current() if getattr(hype, "tuner", None) else {},
+                      "edge": {**(getattr(getattr(hype, "tuner", None), "edge", None) and hype.tuner.edge.report or {}),
+                               "gate": self.app.cfg.flag("EDGE_GATE")}})
 
     async def market_view(self, request):
         pulse = getattr(self.app, "pulse", None)
@@ -479,7 +481,7 @@ async def start_dashboard(app) -> None:
 
 GROUP_ORDER = ["Automation", "Live trading (real money)", "Which buys get sent", "Selling", "Scoring", "Other"]
 _GROUPS = {
-    "Automation": ("HYPE_", "AUTO_", "WHALE_PICKS", "PAPER_", "LIVE_CARD", "RUNNER_ALERTS", "MARKET_"),
+    "Automation": ("HYPE_", "AUTO_", "WHALE_PICKS", "PAPER_", "LIVE_CARD", "RUNNER_ALERTS", "MARKET_", "EDGE_"),
     "Live trading (real money)": ("LIVE_TRADING", "LIVE_DRY_RUN", "LIVE_TRADE", "LIVE_MAX", "LIVE_DAILY", "LIVE_SLIP",
                                   "LIVE_PRIO", "LIVE_MIN_SLIP", "LIVE_JITO", "LIVE_DYNAMIC", "LIVE_KILL", "LIVE_PROFITABLE"),
     "Which buys get sent": ("MIN_WHALE", "MAX_ENTRY", "CONFIRM_", "LATE_CHASE", "DUMP_GATE", "BLOCK_FLIPPERS",

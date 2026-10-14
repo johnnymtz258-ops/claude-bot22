@@ -61,21 +61,33 @@ async def online_checks(cfg):
 
 
 async def stream_check(cfg):
-    """The live wallet stream: can it subscribe to a wallet on this websocket?"""
+    """The live wallet stream: can it subscribe to a wallet on each websocket the bot will use?"""
+    extra = cfg.rpc_wss_extra[:max(0, int(cfg.get("STREAM_PROVIDERS")) - 1)]
+    await _one_stream(cfg.rpc_wss, "")
+    for ws in extra:
+        await _one_stream(ws, "second ")
+    if not extra and cfg.get("STREAM_PROVIDERS") > 1:
+        line(None, "Only one provider with a websocket — a second link in SOLANA_RPC_FALLBACKS (Alchemy, dRPC…) gives "
+                   "the live stream a backup (FREE_RPC.txt)")
+
+
+async def _one_stream(url: str, label: str):
     from fomo.config import provider_name
-    name = provider_name(cfg.rpc_wss.replace("wss://", "https://").replace("/ogws", "/ogrpc"))
+    name = label + provider_name(url.replace("wss://", "https://").replace("/ogws", "/ogrpc"))
     try:
         import websockets
-        async with websockets.connect(cfg.rpc_wss, open_timeout=8, close_timeout=2) as ws:
+        async with websockets.connect(url, open_timeout=8, close_timeout=2) as ws:
             await ws.send(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "logsSubscribe", "params": [
                 {"mentions": ["11111111111111111111111111111111"]}, {"commitment": "confirmed"}]}))
             reply = json.loads(await asyncio.wait_for(ws.recv(), 8))
         ok = "result" in reply
         line(ok, f"{name} live wallet stream (websocket) working" if ok else
-             f"{name} websocket refused the wallet stream: {str(reply.get('error'))[:100]} — set SOLANA_RPC_WSS")
+             f"{name} websocket refused the wallet stream: {str(reply.get('error'))[:100]}"
+             + (" — the first stream still covers your whales" if label else " — set SOLANA_RPC_WSS"))
     except Exception as exc:
-        line(False, f"{name} websocket not reachable ({type(exc).__name__}) — the bot uses the public stream instead; "
-                    "check SOLANA_RPC_WSS")
+        line(False, f"{name} websocket not reachable ({type(exc).__name__})"
+             + (" — the first stream still covers your whales" if label else
+                " — the bot uses the public stream instead; check SOLANA_RPC_WSS"))
 
 
 def main():
