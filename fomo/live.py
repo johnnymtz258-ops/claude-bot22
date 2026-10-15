@@ -367,7 +367,7 @@ class LiveTrader:
             return 0
         allowed, why = self.type_allowed(whale)
         edge = getattr(self, "edge", None)
-        if allowed and whale == "hype" and edge is not None and self.cfg.flag("EDGE_GATE"):
+        if allowed and edge is not None and self.cfg.flag("EDGE_GATE"):
             allowed, why = edge.confirmed(paper_id)   # real money only follows a setup its paper trades confirmed
         if not allowed:
             day = datetime.now().strftime("%Y-%m-%d")
@@ -388,6 +388,13 @@ class LiveTrader:
                     self.db.set_meta("live_loss_stop", datetime.now().strftime("%Y-%m-%d"))
                     await self.notify(f"🛑 <b>Live autopilot paused for today</b>\nRealized loss today reached "
                                       f"{limit:g} SOL (LIVE_DAILY_LOSS_SOL). It starts again tomorrow.", kind="LIVE")
+                return 0
+            created = num((info or {}).get("pair_created_ts"))
+            floor_h = (self.cfg.get("HYPE_MIN_POOL_MINUTES") / 60 if whale == "hype"
+                       else self.cfg.get("WHALE_MIN_POOL_HOURS"))
+            if info is not None and floor_h > 0 and (not created or time.time() - created < floor_h * 3600):
+                await self._skip(symbol, mint, "brand-new pool — real money never buys a launch younger than "
+                                               f"{floor_h:g}h (insider / sniper territory)")
                 return 0
             from .hype import seeded_pool
             if info and seeded_pool(info, self.cfg):

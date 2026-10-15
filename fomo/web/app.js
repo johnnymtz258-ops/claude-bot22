@@ -356,18 +356,24 @@
 
   function renderEdge(e) {
     const x = (v) => pct((v - 1) * 100, 1);
-    $("edge-meta").textContent = e.ts ? `${e.coins} coins · ${(e.slip * 100).toFixed(1)}% cost each way · updated ${ago(e.ts)}` : "measuring — every 6 hours";
-    const act = e.active, fw = e.forward || {};
-    $("edge-state").textContent = !e.table ? "" : act
-      ? `🧪 Paper is testing: ${act.label} · ${act.plan_label} — replays ${x(act.avg)} a trade on ${act.n} coins. Its paper trades since: ${fw.n || 0}${fw.n ? ` at ${x(fw.avg)}` : ""}${fw.confirmed ? " — ✅ confirmed, real money may follow" : " — real money waits for 15+ at +2% or better"}.`
-      : `🛑 Standing aside: no setup made money after costs on both halves of the week${e.gate ? "" : " (EDGE_GATE is off — paper trades every alert anyway)"}.`;
-    table($("edge-table"), ["Setup", "Exit", { label: "1st half", num: 1 }, { label: "2nd half", num: 1 }, { label: "Without best", num: 1 }, ""],
-      (e.table || []).slice(0, 10).map((t) => el("tr", {}, td(t.setup_label, "wrap"), td(t.plan_label, "wrap"),
+    $("edge-meta").textContent = e.ts ? `${(e.slip * 100).toFixed(1)}% cost each way · updated ${ago(e.ts)}` : "measuring — every 6 hours";
+    const state = (fam, name) => {
+      const act = fam.active, fw = fam.forward || {};
+      if (!fam.table) return "";
+      return act
+        ? `🧪 ${name}: paper is testing ${act.label} · ${act.plan_label} — replays ${x(act.avg)} a trade over ${act.n}. Its paper trades since: ${fw.n || 0}${fw.n ? ` at ${x(fw.avg)}` : ""}${fw.confirmed ? " — ✅ confirmed, real money may follow" : " — real money waits for 15+ at +2% or better"}.`
+        : `🛑 ${name}: standing aside — nothing made money after costs on both halves of the week (${fam.coins || 0} replayed)${e.gate ? "" : " (EDGE_GATE is off — paper trades every alert anyway)"}.`;
+    };
+    $("edge-state").textContent = [state(e, "Hype coins"), state(e.whale || {}, "Whale buys")].filter(Boolean).join("  ");
+    const rows = [...(e.table || []).slice(0, 6).map((t) => ["🔥", t]), ...((e.whale || {}).table || []).slice(0, 6).map((t) => ["🐋", t])];
+    table($("edge-table"), ["", "Setup", "Exit", { label: "1st half", num: 1 }, { label: "2nd half", num: 1 }, { label: "Without best", num: 1 }, ""],
+      rows.map(([icon, t]) => el("tr", {}, td(icon), td(t.setup_label, "wrap"), td(t.plan_label, "wrap"),
         td(t.first.n ? `${x(t.first.avg)} (${t.first.n})` : "—", `num ${signClass(t.first.avg - 1)}`),
         td(t.second.n ? `${x(t.second.avg)} (${t.second.n})` : "—", `num ${signClass(t.second.avg - 1)}`),
         td(t.all.n ? x(t.all.wo_best) : "—", `num ${signClass(t.all.wo_best - 1)}`),
         td(t.proven ? "✅ passes" : "", "up"))), "Not measured yet.");
   }
+
 
   function renderTuning(t) {
     const x = (v) => pct((v - 1) * 100, 1);

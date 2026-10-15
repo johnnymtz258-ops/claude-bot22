@@ -520,6 +520,13 @@ class Engine:
         if chase is not None and chase < -self.cfg.get("DUMP_GATE_PCT"):
             status("dumping")
             return  # already falling below the whale's own price within a minute: usually a rug or a bot dump
+        min_h = self.cfg.get("WHALE_MIN_POOL_HOURS")
+        pool_h = (time.time() - created) / 3600 if created else None
+        if min_h > 0 and (micro is not None or pool_h is None or pool_h < min_h):
+            status("fresh_launch")
+            # launch-sniper / insider territory: across your exports 58% of whale buys into pools under 30 minutes old
+            # were down half within the hour (67% within 6h); of those 6h+ old, 3%. Copied and scored, never sent.
+            return
         if not self.whales.is_alerting(whale):
             status("muted")
             return
@@ -554,6 +561,14 @@ class Engine:
         if micro is not None and not self.cfg.flag("MICRO_ALERTS"):
             status("micro")
             return  # micro-caps / bonding-curve coins: the alerts that rugged most — tracked and scored, not sent
+        edge = getattr(getattr(self.hype, "tuner", None), "edge", None) if self.hype else None
+        copy_it, picked = (edge.allows(edge.whale_features(wallet, info, c["usd_value"], len(confluence), time.time()))
+                           if edge else (True, None))
+        if edge and self.cfg.flag("EDGE_GATE"):
+            reasons.append((True, f"🧪 Fits the whale setup paper is testing: {picked['label']} — replays "
+                                  f"{(picked['avg'] - 1) * 100:+.1f}% a trade over {picked['n']} (/edge)") if picked else
+                           (None, "📉 No whale setup has been making money lately — the autopilot isn't copying this one "
+                                  "(/edge)"))
         text = messages.buy_alert(
             symbol=info.get("symbol") or self.market.symbol(mint), mint=mint, whale_name=whale.get("name") or wallet[:6],
             whale_addr=wallet, stats=stats, grade=grade, reasons=reasons, usd_value=c["usd_value"],
@@ -579,9 +594,14 @@ class Engine:
         msg_id = await self.notify(text, buttons=buttons, silent=silent, mint=mint, wallet=wallet, kind="BUY")
         self.db.run("update alerts set tg_message_id=?, status=? where id=?",
                     (msg_id or 0, "silent" if silent else "sent", alert_id))
-        self.paper.open(alert_id=alert_id, mint=mint, whale=wallet, symbol=info.get("symbol") or self.market.symbol(mint),
-                        price=entry_price, mc_usd=num(info.get("mc_usd")) or c["trade_mc"], info=info,
-                        signal={"grade": grade, "score": hyped["score"] if hyped else None})
+        if copy_it:   # the autopilot (paper, and live behind it) copies only what's proven — see edge.py
+            trade_id = self.paper.open(alert_id=alert_id, mint=mint, whale=wallet,
+                                       symbol=info.get("symbol") or self.market.symbol(mint), price=entry_price,
+                                       mc_usd=num(info.get("mc_usd")) or c["trade_mc"], info=info,
+                                       signal={"grade": grade, "score": hyped["score"] if hyped else None},
+                                       plan=picked["exit"] if picked else None)
+            if edge:
+                edge.record(trade_id, picked)
 
     def runner_setup(self, c: dict, info: dict) -> bool:
         """The pattern behind most 10x coins in your data: a whale buying $1K+ of a coin that just left the pump.fun

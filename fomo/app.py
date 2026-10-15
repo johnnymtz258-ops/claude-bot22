@@ -81,6 +81,22 @@ class App:
                 self.v29_note = {"n": s_["closed"], "pnl": s_["realized"], "balance": s_["equity"], "won": s_["won"]}
                 paper.new_period("v29: the autopilot trades only setups that made money after costs (/edge)")
             self.db.set_meta("quiet_rugs_v29", "1")
+        if self.db.get_meta("fresh_launch_v30") != "1":
+            # whales buying brand-new launches were the rugs: unproven auto-followed wallets go back to being picks,
+            # the runner setup (a fresh-launch pattern) is off, and the scanner stops spending RPC calls every hour
+            trial = [r["address"] for r in self.db.rows("""select w.address from whales w join whale_candidates c
+                on c.address=w.address where w.active=1 and w.source in ('auto','linked') and c.reason like '%on trial%'""")]
+            for address in trial:
+                self.db.run("update whales set active=0, note=? where address=?",
+                            ("unfollowed by v30: followed on trial, never proven copyable", address))
+            self.v30_note = {"unfollowed": len(trial)}
+            for name, value in (("RUNNER_SETUP", 0),):
+                self.db.set_meta(f"setting:{name}", value)
+                cfg.set(name, value)
+            if cfg.get("AUTO_SCOUT_HOURS") < 6:
+                self.db.set_meta("setting:AUTO_SCOUT_HOURS", 6)
+                cfg.set("AUTO_SCOUT_HOURS", 6)
+            self.db.set_meta("fresh_launch_v30", "1")
         if self.db.get_meta("runner_alerts_off_v22_4") != "1":   # community runners averaged -71% on your data
             self.db.set_meta("setting:RUNNER_ALERTS", 0)
             cfg.set("RUNNER_ALERTS", 0)
@@ -318,6 +334,15 @@ class App:
                          f"got {audit['real_pnl']:+,.0f}$. The honest balance was {audit.get('balance_was', 0):,.0f}$; a new "
                          "paper period starts now at the usual balance, with honest fills. That setup is now blocked before "
                          "entry. Don't trade real money until the new period is in profit.")
+        v30 = getattr(self, "v30_note", None)
+        if v30 is not None:
+            lines.append("🛡 <b>No more brand-new launches.</b> Whale buys into pools under "
+                         f"{self.cfg.get('WHALE_MIN_POOL_HOURS'):.0f}h old and hype coins under "
+                         f"{self.cfg.get('HYPE_MIN_POOL_MINUTES'):.0f} min are never alerted or traded — across your "
+                         "exports 58% of whale buys into pools under 30 min were down half within the hour (3% of those "
+                         "6h+ old). Whale copies now go through /edge like hype coins."
+                         + (f" {v30['unfollowed']} wallets the scanner had followed 'on trial' were unfollowed (they're "
+                            "picks again)." if v30["unfollowed"] else ""))
         v29 = getattr(self, "v29_note", None)
         if v29:
             lines.append(f"🎯 <b>The autopilot now trades only what's proven.</b> Last paper period: {v29['n']} trades, "

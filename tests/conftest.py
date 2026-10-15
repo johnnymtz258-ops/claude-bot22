@@ -24,6 +24,7 @@ class Bot:
         self.cfg.set("QUIET_UPDATE_MINUTES", "0")  # tested on its own in test_report  # judge whale buys at once in tests (test_gates covers the wait)
         self.cfg.set("QUALITY_GATE", "0")  # small test buys; the gate has its own tests in test_gates
         self.cfg.set("EDGE_GATE", "0")  # every hype alert trades on paper, as before; test_edge covers the gate
+        self.cfg.set("WHALE_MIN_POOL_HOURS", "0")  # sample coins are young pools; test_gates covers the pool-age gate
         self.db = Database(":memory:")
         self.rpc = FakeRPC()
         self.market = FakeMarket(self.db, self.rpc)

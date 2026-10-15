@@ -154,3 +154,12 @@ Go live only once the new paper period is in profit over a real number of trades
   859 coins). Only a thin pool (under $5K, or unknown depth) counts now. The self-tuner re-decides its rules and exit.
 - **Strategy:** buying every hype alert lost money on honest fills. The autopilot now trades only setups that made
   money on both halves of the last week of replays, forward-tested on paper before real money follows (`fomo/edge.py`).
+
+## v30 — the fake-whale rugs
+
+Merged every export: whale buys into pools under 30 min old were down half within the hour 58% of the time (pools 6h+:
+3%). The followed "whales" in those coins are launch snipers / insiders (7yuq 77% of buys within 30 min of a pool
+opening, 9ab9 60%, 6qRT 58%). Fixed: a hard pool-age floor for whale buys (`WHALE_MIN_POOL_HOURS`, 6) and hype coins
+(`HYPE_MIN_POOL_MINUTES`, 60) with no whale exception, checked again by the live trader; whale copies go through the
+edge gate; the scanner rejects launch snipers and no longer auto-follows unproven wallets. Airdropped tokens can't fake
+a whale buy: a buy needs the whale's own SOL to leave its wallet (checked in `fomo/swaps.py`).

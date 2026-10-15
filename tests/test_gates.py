@@ -107,3 +107,31 @@ def test_whale_building_a_position_in_small_pieces_is_judged_on_the_total(bot):
     assert "Accumulating: 2 buys" in bot.notes.sent[0]["text"]
     bot.feed(WHALE, pump_buy(new=False, pre_tokens=6_000_000))           # more adds: no second alert
     assert bot.notes.kinds().count("BUY") == 1
+
+
+def test_whale_buys_into_brand_new_pools_are_never_sent_or_traded(bot):
+    """The rugs that kept coming: "whales" buying a launch minutes old — insiders and launch snipers. Across the
+    exports 58% of those were down half within the hour; of buys into pools 6h+ old, 3%."""
+    import time
+    bot.cfg.set("WHALE_MIN_POOL_HOURS", "6")
+    bot.whales.add(WHALE, "Rocket")
+    bot.market.set_pair(mint=MINT, price=WHALE_PRICE, mc=75_000, created_ms=int((time.time() - 20 * 60) * 1000))
+    bot.feed(WHALE, pump_buy())
+    assert bot.notes.kinds() == []
+    assert bot.db.scalar("select status from alerts where kind='BUY'") == "fresh_launch"
+    assert bot.db.scalar("select count(*) from paper_trades") == 0
+    assert bot.db.scalar("select count(*) from copies") == 1                  # still scored, so the data keeps coming
+
+
+def test_whale_buys_into_settled_pools_are_sent(bot):
+    import time
+    bot.cfg.set("WHALE_MIN_POOL_HOURS", "6")
+    bot.whales.add(WHALE, "Rocket")
+    bot.market.set_pair(mint=MINT, price=WHALE_PRICE, mc=75_000, created_ms=int((time.time() - 3 * 86400) * 1000))
+    bot.feed(WHALE, pump_buy())
+    assert bot.notes.kinds() == ["BUY"]
+
+
+def test_fresh_launches_are_explained_in_the_funnel(bot):
+    from fomo.reports import FUNNEL_LABELS
+    assert "insider" in FUNNEL_LABELS["fresh_launch"]

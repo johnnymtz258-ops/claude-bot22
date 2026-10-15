@@ -186,15 +186,39 @@ def test_scanner_follows_copyable_holders_and_skips_flippers(bot, monkeypatch):
     monkeypatch.setattr(bot.scout.discovery, "analyze_wallet", analyze)
     monkeypatch.setattr(bot.scout, "pick_coins", lambda limit=3: [MINT])
     s = bot.run(bot.scout.scout(now))
-    assert s == {"ts": now, "coins": [MINT], "checked": 3, "followed": 2, "picked": 0}
+    assert s == {"ts": now, "coins": [MINT], "checked": 3, "followed": 1, "picked": 1}
     w = bot.whales.get(WHALE)
     assert w["source"] == "auto" and w["active"] == 1
     assert bot.engine.profiles.get(WHALE)["style"] == "HOLDER"
     assert bot.whales.get(WHALE2) is None
     cand = bot.db.row("select status, reason from whale_candidates where address=?", (WHALE2,))
     assert cand["status"] == "rejected" and "Flipper" in cand["reason"]
-    assert bot.notes.kinds() == ["AUTO", "AUTO"]                  # no candles to replay → followed on trial
-    assert bot.whales.get(THIRD)["source"] == "auto" and "on trial" in bot.notes.sent[1]["text"]
+    assert bot.notes.kinds() == ["AUTO", "PICKS"]                 # no candles to replay → only suggested, you decide
+    assert bot.whales.get(THIRD) is None and THIRD in bot.notes.sent[1]["text"]
+
+
+def test_scanner_never_follows_a_launch_sniper(bot, monkeypatch):
+    """Wallets "early in winners" are often insiders: they buy their coins minutes after the pool opens."""
+    now = int(time.time())
+    coin = {"ok": True, "symbol": "RUN", "candidates": [
+        {"wallet": WHALE, "tracked": False, "flags": [], "entry_mc": 90_000, "to_peak": 12}]}
+    trips = trips_for(bot, WHALE, now, 4 * 3600, [1.0, 1.05, 1.3, 1.7, 2.2, 2.6, 3.0, 3.2, 3.1])
+    for t in trips:                                                 # every coin bought 5 minutes after its pool opened
+        bot.market.set_pair(mint=t["mint"], created_ms=(t["buy_ts"] - 300) * 1000)
+
+    async def research(mint, progress=None):
+        return coin
+
+    async def analyze(wallet, progress=None):
+        return {**GOOD, "trip_list": trips, "last_trade_ts": now - 600}
+
+    monkeypatch.setattr(bot.scout.discovery, "research_coin", research)
+    monkeypatch.setattr(bot.scout.discovery, "analyze_wallet", analyze)
+    monkeypatch.setattr(bot.scout, "pick_coins", lambda limit=3: [MINT])
+    s = bot.run(bot.scout.scout(now))
+    assert s["followed"] == 0 and bot.whales.get(WHALE) is None
+    cand = bot.db.row("select status, reason from whale_candidates where address=?", (WHALE,))
+    assert cand["status"] == "rejected" and "launch sniper" in cand["reason"]
 
 
 def test_scanner_only_suggests_when_auto_follow_is_off(bot, monkeypatch):
@@ -318,8 +342,9 @@ def test_scanner_checks_wallets_early_in_several_winners_first(bot, monkeypatch)
     monkeypatch.setattr(bot.scout, "pick_coins", lambda limit=16: list(coins))
     bot.run(bot.scout.scout(now))
     assert order[0] == THIRD                                       # early in 2 winners beats a bigger one-off buy
-    assert bot.whales.get(THIRD)["source"] == "auto"
-    assert "early in 2 winners" in bot.db.row("select reason from whale_candidates where address=?", (THIRD,))["reason"]
+    cand = bot.db.row("select status, reason from whale_candidates where address=?", (THIRD,))
+    assert cand["status"] == "picked" and "early in 2 winners" in cand["reason"]   # no history to prove it: suggested
+    assert bot.whales.get(THIRD) is None
 
 
 def test_new_whale_whose_first_copies_dump_is_dropped_fast(bot):

@@ -212,7 +212,7 @@ class Tracker:
             left join whales w on w.address=a.wallet where a.kind='BUY' and a.ts>=? order by a.ts desc""", (since,))
         why = {"flipper": "flipper whale", "weak_whale": "losing whale", "chased": "already ran", "dumping": "dumping",
                "micro": "bonding curve", "whale_only": "no real holders", "muted": "muted whale", "late": "seen too late",
-               "unsafe": "unsafe token", "paused": "alerts paused"}
+               "unsafe": "unsafe token", "paused": "alerts paused", "fresh_launch": "brand-new launch (insider risk)"}
         lines = [f"🔍 <b>Last {minutes:g} min</b> — no entry worth sending yet"]
         if trades.get("n"):
             lines.append(f"Saw {trades['n']} trades from {trades['w']} of your whales ({int(num(trades['buys']))} buys).")

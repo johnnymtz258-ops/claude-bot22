@@ -48,6 +48,10 @@ FREE RPC (Helius ran out?)
 HEALTH
   /health — live stream, each RPC provider, how fast whale trades arrive, live-trading safety state, crashes.
 
+NO BRAND-NEW LAUNCHES (v30) — see REVIEW.md
+  Whale buys into pools under 6 hours old, and hype coins under 1 hour, are never alerted or traded: that's where the
+  insider / sniper rugs were (58% down half within the hour). WHALE_MIN_POOL_HOURS / HYPE_MIN_POOL_MINUTES.
+
 ONLY WHAT'S PROVEN (v29)
   The autopilot no longer buys every hype alert (that lost money). /edge shows which setups made money after costs
   on the last 7 days; paper tests one only when it won on both halves of the week, real money only after paper

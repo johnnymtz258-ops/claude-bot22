@@ -16,7 +16,7 @@ CARD_BUTTONS = [[("📒 Positions", None, "cmd:positions"), ("🐋 Whales", None
 FUNNEL_SHORT = {"sent": "sent", "silent": "sent quietly", "flipper": "flipper", "weak_whale": "weak whale",
                 "chased": "already ran", "dumping": "dumping", "micro": "bonding curve", "whale_only": "whale-only",
                 "late": "seen late", "muted": "muted", "unsafe": "unsafe", "too_small": "dust", "too_big": "too big",
-                "paused": "paused", "scalp": "scalp"}
+                "paused": "paused", "scalp": "scalp", "fresh_launch": "brand-new launch"}
 
 
 def build_card(app, now: float | None = None) -> str:
@@ -58,10 +58,11 @@ def build_card(app, now: float | None = None) -> str:
     if rep and rep.get("regime") != "learning":
         lines.append(f"🌡 Market: {rep['label']}" + (f" · {esc(rep['reasons'][0])}" if rep.get("reasons") else ""))
     edge = getattr(getattr(app, "tuner", None), "edge", None)
-    if edge is not None and cfg.flag("EDGE_GATE") and (edge.report or {}).get("table"):
-        act = edge.report.get("active")
-        lines.append(f"🧪 Hype autopilot testing: {esc(act['label'])} (/edge)" if act else
-                     "🛑 Hype autopilot standing aside — no setup is making money lately (/edge)")
+    if edge is not None and cfg.flag("EDGE_GATE") and (edge.report or {}).get("table") is not None:
+        hype_act, whale_act = edge.report.get("active"), (edge.report.get("whale") or {}).get("active")
+        parts = [f"{name} {('testing ' + esc(act['label'])) if act else 'standing aside'}"
+                 for name, act in (("hype", hype_act), ("whales", whale_act))]
+        lines.append(("🧪 " if hype_act or whale_act else "🛑 ") + "Autopilot: " + " · ".join(parts) + " (/edge)")
     # paper autopilot
     if cfg.flag("PAPER_TRADING"):
         s = app.engine.paper.summary()

@@ -6,9 +6,10 @@ Every AUTO_SCOUT_HOURS:
   3. Read each candidate's recent trades and replay them as a copier who buys COPY_DELAY_SECONDS late
      (GeckoTerminal minute candles), with the exit plan. A wallet qualifies only if it is a 🟢 holder or
      🔵 swing trader (not a 🟠 flipper that dumps within minutes), is profitable itself, and copying it at
-     your speed made money: avg ≥ 1.10x over 4+ coins, 35%+ won.
+     your speed made money: avg ≥ 1.10x over 4+ coins, 35%+ won. A launch sniper (half or more of its recent buys
+     within 30 minutes of a pool opening) never qualifies: that's insider territory, where the rugs are.
   4. AUTO_WHALES on: strong ones are followed automatically (you're told, with an Unfollow button).
-     Off, or no candle data: they're sent to you as picks with ➕ Follow buttons.
+     Off, unscored (no candle data), or not proven: they're sent to you as picks with ➕ Follow buttons.
 Every day it re-checks the whales it added (never the ones you added) and drops any that turned into a
 flipper, stopped being copyable, went COLD, or stopped trading. Whales you added that turn out to be
 flippers or losers are muted for entries automatically, and you get one message saying why.
@@ -38,6 +39,7 @@ MAX_CHECKS_PER_RUN = 15      # each wallet replay costs ~30 GeckoTerminal calls 
 SMALL_BUDGET = {"pages": 30, "samples": 40, "dense": 160, "holders": 15, "wallet_txs": 200}
 
 
+SNIPER_SHARE = 0.5          # half or more of its buys at launch: an insider / sniper, not a whale you can copy
 COPY_MIN_COINS = 4
 COPY_MIN_AVG = 1.10
 COPY_MIN_WIN = 0.35
@@ -87,6 +89,7 @@ class WhaleScout:
     def __init__(self, cfg, db, rpc, market, whales, runners, notify, refresh_wallets, profiler=None):
         self.cfg = cfg
         self.db = db
+        self.market = market
         self.whales = whales
         self.runners = runners
         self.notify = notify
@@ -216,11 +219,16 @@ class WhaleScout:
             level, why = ("no", reason)
             prof = None
             if ok:
+                sniper = await self.launch_share(result.get("trip_list") or [])
+                if sniper is not None and sniper >= SNIPER_SHARE:
+                    ok, reason = False, (f"🎯 launch sniper: {sniper * 100:.0f}% of its recent buys came within 30 min of "
+                                         "the pool opening — insider territory, where the rugs are")
+            if ok:
                 prof = await self.profiler.profile_history(cand["wallet"], result) if result.get("trip_list") else None
                 level, why = copyable(prof)
                 reason = why if level != "unscored" else f"{reason} · {why}"
-            if level == "unscored" and auto:
-                level, reason = "strong", f"on trial — {reason}"   # follow now; dropped if it turns out a flipper/loser
+            # an unscored wallet is only suggested (you decide): following them "on trial" added 10 wallets on Oct 14
+            # alone, and auto-followed wallets were the worst source of buys in your data
             if level == "strong" and auto:
                 name = f"auto-{short(cand['wallet'])[:4]}"
                 added, _ = self.whales.add(cand["wallet"], name, source="auto")
@@ -257,6 +265,22 @@ class WhaleScout:
         summary = {"ts": now, "coins": coins, "checked": checked, "followed": len(followed), "picked": len(picks)}
         self.db.set_meta("scout_last_summary", json.dumps(summary))
         return summary
+
+    async def launch_share(self, trips: list[dict]) -> float | None:
+        """Share of a wallet's recent buys made within 30 minutes of the coin's pool opening (or before it, on the
+        launch curve), or None when too few coins have a known pool age."""
+        mints = list({t["mint"] for t in trips})[:30]
+        if not mints or not hasattr(self.market, "tokens"):
+            return None
+        try:
+            infos = await self.market.tokens(mints, max_age=3600)
+        except Exception:
+            return None
+        known = [(t["buy_ts"], num((infos.get(t["mint"]) or {}).get("pair_created_ts"))) for t in trips]
+        known = [(b, c) for b, c in known if c > 0 and b > 0]
+        if len(known) < 4:
+            return None
+        return sum(b - c < 1800 for b, c in known) / len(known)
 
     async def _last_trade_ts(self, wallet: str) -> int:
         sigs = await self.discovery.rpc.signatures(wallet, limit=1)

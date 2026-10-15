@@ -65,8 +65,17 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
     if mcap <= 0 or num(info.get("price_usd")) <= 0:
         out["blocked"], out["rule"] = "no price", "price"
         return out
+    created = num(info.get("pair_created_ts"))
+    pool_min = (now - created) / 60 if created else None
+    floor = cfg.get("HYPE_MIN_POOL_MINUTES")
     if mcap > cfg.get("HYPE_MAX_MC_USD"):
         out["blocked"], out["rule"] = f"market cap {mc(mcap)} — past early", "mc"
+    elif floor > 0 and (pool_min is None or pool_min < floor):
+        # no whale can override this one: launch snipers are "your whales" in exactly these coins, and that is how
+        # the seed-pump-pull coins got through before (whales present switched the fresh-pool rule off)
+        out["blocked"] = (f"brand-new pool ({int(pool_min)} min old)" if pool_min is not None else "pool age unknown") + \
+            f" — nothing under {floor:.0f} min is alerted (most were emptied within 2 hours)"
+        out["rule"] = "newpool"
     elif liq < cfg.get("HYPE_MIN_LIQ_USD") or liq < 0.03 * mcap:
         out["blocked"], out["rule"] = f"liquidity too thin ({usd(max(liq, 0))})", "liquidity"
     elif m5 < -15 or h1 < -35:
@@ -74,7 +83,7 @@ def score(info: dict, cfg, *, whales: list | None = None, lists: dict | None = N
     elif m5 > 40 or h1 > cfg.get("HYPE_MAX_H1_PCT"):
         out["blocked"] = f"late — already {pct(h1)} this hour ({pct(m5)} in 5 min)"
         out["rule"] = "late" if m5 <= 40 else "late5"
-    elif seeded_pool(info, cfg, now) and cfg.get("HYPE_FRESH_MINUTES") > 0 and not whales:
+    elif seeded_pool(info, cfg, now) and cfg.get("HYPE_FRESH_MINUTES") > 0:   # whales in it don't excuse it
         # 134 hype alerts measured honestly: pools under 10 min old were emptied within 2h 87% of the time, under $20K MC
         # 90%, liquidity >= market cap 97% — the creator seeds a pool, bots pump it, the liquidity is pulled
         out["blocked"] = (f"pool {seeded_pool(info, cfg, now)} min old at {mc(mcap)} with {usd(max(liq, 0))} liquidity — "

@@ -101,7 +101,11 @@ def test_cores_a_bundled_eight_minute_old_launch_is_not_a_93(bot):
     """$CORES: 8 minutes old, 173 buys in 5 min — and the dev's bundle holding the supply. It dumped 93% minutes later."""
     _cores(bot, 8, [26_000_000] * 5)                          # 5 wallets with ~49% of the supply
     assert bot.notes.kinds() == []
-    assert "seed-pump-pull" in bot.hype.board[0]["blocked"]   # 8 minutes old at $53.5K: the pool-rug setup
+    assert "brand-new pool" in bot.hype.board[0]["blocked"]   # 8 minutes old: under the hard pool-age floor
+    bot.cfg.set("HYPE_MIN_POOL_MINUTES", "0")
+    bot.market._cache.clear()
+    _cores(bot, 8, [26_000_000] * 5)
+    assert "seed-pump-pull" in bot.hype.board[0]["blocked"]   # floor off: 8 minutes old at $53.5K, the pool-rug setup
     bot.cfg.set("HYPE_FRESH_MINUTES", "0")
     bot.market._cache.clear()
     _cores(bot, 8, [26_000_000] * 5)
@@ -167,12 +171,25 @@ def test_jupiter_trending_coins_are_scanned_and_its_data_reaches_the_alert(bot):
 def test_young_pools_seeded_to_be_pulled_and_bot_volume_are_held_back(bot):
     """134 alerts measured honestly: pools under 10 min old were emptied within 2h 87% of the time; liquidity >= market
     cap 97%; Jupiter 'bot volume' 94%."""
+    young = score(info_of(mc=12_000, liq=20_000, created_ms=int((NOW - 3 * 60) * 1000)), bot.cfg, now=NOW)
+    assert young["rule"] == "newpool"                         # 3 minutes old: under the hard floor
+    bot.cfg.set("HYPE_MIN_POOL_MINUTES", "0")                 # floor off: the seeded-pool rule still catches it
     seeded = score(info_of(mc=12_000, liq=20_000, created_ms=int((NOW - 3 * 60) * 1000)), bot.cfg, now=NOW)
     assert seeded["rule"] == "fresh" and "seed-pump-pull" in seeded["blocked"]
     migrated = score(info_of(mc=90_000, liq=30_000, created_ms=int((NOW - 3 * 60) * 1000)), bot.cfg, now=NOW)
     assert migrated["rule"] != "fresh"                        # a graduation: young pool, real market cap
     with_whales = score(info_of(mc=12_000, liq=20_000, created_ms=int((NOW - 3 * 60) * 1000)), bot.cfg, now=NOW,
                         whales=[{"name": "Rocket"}])
-    assert with_whales["rule"] != "fresh"                     # your whales in it: their call
+    assert with_whales["rule"] == "fresh"                     # whales in it are no excuse: snipers are in these
     bots = score({**info_of(), "jup": {"organic": 8}}, bot.cfg, now=NOW)
     assert bots["rule"] == "bots" and not alertable(bots, bot.cfg)
+
+
+def test_no_whale_can_switch_the_new_pool_floor_off(bot):
+    """The rugs that got through: launch snipers ARE "your whales" in those coins, and whales present used to skip the
+    fresh-pool and zone rules. The floor has no exception."""
+    r = score(info_of(created_ms=int((NOW - 10 * 60) * 1000)), bot.cfg, now=NOW,
+              whales=[{"wallet": WHALE, "name": "Rocket", "entry_mc": 1}, {"wallet": WHALE2, "name": "Moon", "entry_mc": 1}])
+    assert r["rule"] == "newpool" and not alertable(r, bot.cfg)
+    r = score(info_of(created_ms=int((NOW - 90 * 60) * 1000)), bot.cfg, now=NOW)
+    assert r["rule"] != "newpool"

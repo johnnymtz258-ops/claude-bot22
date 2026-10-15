@@ -58,6 +58,7 @@ FUNNEL_LABELS = {
     "low_quality": "not sent: grade C (QUALITY_GATE)",
     "accumulated": "held back at first, re-judged as the whale kept buying",
     "watching": "not sent: new wallet in its watch period (counts for stacking and hype)",
+    "fresh_launch": "not sent: pool younger than WHALE_MIN_POOL_HOURS — where the insider / sniper rugs are",
 }
 
 

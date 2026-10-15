@@ -117,6 +117,19 @@ on boot and restarts by itself. `open_server_dashboard.command` opens its dashbo
 `server_log.command` shows its log. Telegram works exactly as before. If two copies ever run at once (the Mac and the
 server), the bot says so and holds real-money buys until one stops.
 
+## No brand-new launches (v30) — read REVIEW.md
+
+`REVIEW.md` goes over the whole month: every export merged, what the data shows, what was wrong and what changed.
+The short of it: the rugs that kept coming were whale buys into brand-new pools — launch snipers and insiders. Across
+your exports 58% of whale buys into pools under 30 minutes old were down half within the hour; of those 6 hours or
+older, 3%. So:
+- whale buys into pools younger than `WHALE_MIN_POOL_HOURS` (6) or still on the launch curve are never alerted or
+  traded (status "brand-new launch"; still scored), and hype coins younger than `HYPE_MIN_POOL_MINUTES` (60) never
+  are — whoever is in them (your whales being in a coin used to switch the fresh-pool rule off);
+- whale copies go through `/edge` like hype coins: paper copies a whale buy only when a whale setup made money on a
+  week of replays, real money only after paper confirms it;
+- the whale scanner rejects launch snipers, no longer follows unproven wallets "on trial", and runs every 6 hours.
+
 ## Trade only what's proven (v29, `/edge`)
 
 Your Oct 14 review: 99 honest paper trades since v28.3 lost $336 (-6.8% a trade, 24% won), almost all of it on hype

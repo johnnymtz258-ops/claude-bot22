@@ -201,9 +201,11 @@ class PaperTrader:
             price = self._accept(t, num((infos.get(t["mint"]) or {}).get("price_usd")), now)
             if price is None:
                 limit = MAX_HOLD
-                if t["whale"] == "hype":
+                if self._own_plan(t):
+                    limit = self._own_plan(t)["hold"]
+                elif t["whale"] == "hype":
                     from .hype import exit_plan
-                    limit = (self._own_plan(t) or exit_plan(self.cfg))["hold"]
+                    limit = exit_plan(self.cfg)["hold"]
                 if now - t["open_ts"] >= limit and num(t["last_price"]) > 0:   # no usable price: the limit still applies
                     done.append(self._sell(t, 1.0, num(t["last_price"]), "time limit (no fresh price)", now))
                 continue
@@ -220,14 +222,14 @@ class PaperTrader:
             self.db.run("update paper_trades set last_price=?, peak_x=? where id=?", (price, peak, t["id"]))
             t.update(last_price=price, peak_x=peak)
             trail = self.cfg.get("PROTECT_TRAIL_PCT")
-            if t["whale"] == "hype":
-                plan = self._own_plan(t)                         # the proven setup's exit plan (edge.py)…
-                if plan is None:
-                    from .hype import exit_plan
-                    plan = exit_plan(self.cfg)                   # …else the hype plan: take the first move
+            plan = self._own_plan(t)                             # the picked setup's exit plan (edge.py)…
+            if plan is not None:
                 trail = num(plan.get("trail"), trail)
+            elif t["whale"] == "hype":
+                from .hype import exit_plan
+                plan = exit_plan(self.cfg)                       # …else the hype plan: take the first move
             else:
-                plan = playbook.plan_for(self.db, t["whale"])   # this whale's own winning exit plan, if it has one
+                plan = playbook.plan_for(self.db, t["whale"])   # …or this whale's own winning exit plan, if it has one
             if plan and not plan["half"] and x >= plan["tp"]:
                 why = "hype take-profit" if t["whale"] == "hype" else "whale's playbook"
                 done.append(self._sell(t, 1.0, price, f"all out at {plan['tp']:g}x ({why})", now, liq))

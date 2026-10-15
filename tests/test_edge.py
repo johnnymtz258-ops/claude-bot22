@@ -147,3 +147,54 @@ def test_the_review_export_carries_the_edge_paper_period_and_health_history(tmp_
     assert {"paper_period_ts", "edge:report"} <= keys and "tg_offset" not in keys
     tables = {r[0] for r in con.execute("select name from sqlite_master where type='table'")}
     assert {"health_log", "edge_trades"} <= tables
+
+
+def whale_buy(bot, ts, i, *, wins, age_h=48.0, mc=300_000.0, usd=1_500.0, wallet="W" * 44, confluence=1):
+    mint = coin(i, "W")
+    bot.db.run("insert or replace into tokens(mint, symbol, pair_created_ts) values(?,?,?)", (mint, f"W{i}", ts - age_h * 3600))
+    sid = bot.db.insert("""insert into swaps(sig,wallet,is_me,ts,seen_ts,side,mint,token_amount,base,base_amount,usd_value)
+        values(?,?,0,?,?,'BUY',?,1,'SOL',1,?)""", (f"ws{i}", wallet, ts - 50, ts - 49, mint, usd))
+    bot.db.insert("""insert into alerts(ts,kind,mint,wallet,swap_id,grade,mc_usd,price_usd,confluence,status)
+        values(?,?,?,?,?,?,?,?,?,?)""", (ts, "BUY", mint, wallet, sid, "B", mc, 1.0, confluence, "late"))
+    for j in range(1, 380):
+        price = 1.0 + 0.01 * j if wins else max(0.3, 1.0 - 0.004 * j)
+        bot.db.run("insert or ignore into price_marks(mint, ts, price, liq) values(?,?,?,?)", (mint, ts + 60 * j, price, 60_000.0))
+    return mint
+
+
+def test_whale_buys_are_measured_too_and_fresh_launches_never_count(bot):
+    bot.cfg.set("EDGE_GATE", "1")
+    bot.cfg.set("WHALE_MIN_POOL_HOURS", "6")
+    for i in range(30):                          # a week of whale buys into settled $100K+ pools: they work
+        whale_buy(bot, NOW - 7 * 86400 + 8 * H + int(i * 5 * H), i, wins=True)
+    for i in range(30, 40):                      # buys into 10-minute-old pools: never tradable, never counted
+        whale_buy(bot, NOW - 6 * 86400 + int((i - 30) * 9 * H), i, wins=False, age_h=0.2)
+    rep = bot.run(bot.tuner.edge.evaluate(NOW))
+    w = rep["whale"]
+    assert w["coins"] == 30 and w["active"] and w["active"]["setup"].startswith("w_")
+    f = bot.tuner.edge.whale_features("W" * 44, {"mc_usd": 300_000, "liquidity_usd": 60_000,
+                                                 "pair_created_ts": NOW - 2 * 86400}, 1500, 1, NOW)
+    m = bot.tuner.edge.match(f)
+    assert m and m["exit"]["tp"] > 1
+    assert "Whale buys" in format_report(rep, bot.cfg)
+
+
+def test_a_whale_copy_is_paper_traded_only_when_a_whale_setup_is_being_tested(bot):
+    import time as _t
+    from tests.helpers import WHALE, pump_buy
+    bot.cfg.set("EDGE_GATE", "1")
+    bot.whales.add(WHALE, "Rocket")
+    bot.market.set_pair(mint=MINT, price=0.000075, mc=150_000, created_ms=int((_t.time() - 3 * 86400) * 1000))
+    bot.feed(WHALE, pump_buy())                                            # nothing proven: alert, but no paper copy
+    assert bot.notes.kinds() == ["BUY"] and "No whale setup has been making money" in bot.notes.sent[0]["text"]
+    assert bot.db.scalar("select count(*) from paper_trades") == 0
+    bot.tuner.edge.report = {"table": [], "active": None, "whale": {"table": [{}], "active": {
+        "setup": "w_all", "plan": "swing", "label": "Whale buys into settled pools", "plan_label": "x", "avg": 1.08,
+        "n": 30, "worst_half": 1.04}}}
+    other = "Other" + "1" * 39
+    bot.market.set_pair(mint=other, price=0.000075, mc=150_000, created_ms=int((_t.time() - 3 * 86400) * 1000))
+    bot.feed(WHALE, pump_buy(mint=other))                                  # a setup is being tested: paper copies it
+    assert "Fits the whale setup paper is testing" in bot.notes.sent[-1]["text"]
+    assert bot.db.scalar("select setup from edge_trades") == "w_all"
+    plan = bot.engine.paper._own_plan(bot.db.row("select * from paper_trades"))
+    assert plan["half"] and plan["tp"] == 2.0 and plan["hold"] == 21600
