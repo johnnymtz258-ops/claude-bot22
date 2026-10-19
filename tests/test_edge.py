@@ -42,9 +42,15 @@ def test_with_nothing_making_money_the_autopilot_stands_aside(bot):
     bot.market.set_pair(**hot_pair())
     bot.market.boosted = [MINT]
     bot.run(bot.runners.tick(NOW))
-    hype = [m for m in bot.notes.sent if m["kind"] == "HYPE"]
-    assert hype and hype[0]["silent"] and "isn't trading it" in hype[0]["text"]     # sent, but quiet and marked
+    assert not [m for m in bot.notes.sent if m["kind"] == "HYPE"]                  # no setup it fits: not pinged…
+    assert bot.db.scalar("select status from alerts where kind='HYPE'") == "no_edge"   # …but recorded
     assert bot.db.scalar("select count(*) from paper_trades where whale='hype'") == 0
+    bot.cfg.set("HYPE_ALERTS_NEED_EDGE", "0")                                      # opt back in: quiet and marked
+    bot.db.run("delete from alerts")
+    bot.market._cache.clear()
+    bot.run(bot.runners.tick(NOW + 7 * 3600))
+    hype = [m for m in bot.notes.sent if m["kind"] == "HYPE"]
+    assert hype and hype[0]["silent"] and "isn't trading it" in hype[0]["text"]
 
 
 def test_a_setup_that_won_both_halves_is_tested_on_paper_with_its_own_exit(bot):
@@ -198,3 +204,24 @@ def test_a_whale_copy_is_paper_traded_only_when_a_whale_setup_is_being_tested(bo
     assert bot.db.scalar("select setup from edge_trades") == "w_all"
     plan = bot.engine.paper._own_plan(bot.db.row("select * from paper_trades"))
     assert plan["half"] and plan["tp"] == 2.0 and plan["hold"] == 21600
+
+
+def test_a_coins_age_is_its_oldest_pool_not_its_newest():
+    """$Pluto: days old, but a new pool made it look minutes old — and v30 blocked the whale buy as a launch."""
+    from fomo.market import best_pairs
+    from tests.helpers import pair
+    old = pair(mint=MINT, liq=10_000, created_ms=(NOW - 5 * 86400) * 1000)
+    new = pair(mint=MINT, liq=40_000, created_ms=(NOW - 600) * 1000, pair_addr="NewPool" + "1" * 37)
+    info = best_pairs([old, new])[MINT]
+    assert info["liquidity_usd"] == 40_000                      # prices from the deepest pool…
+    assert NOW - info["pair_created_ts"] >= 5 * 86400 - 5        # …age from the oldest
+
+
+def test_the_backup_stream_prefers_a_provider_that_still_has_credits(monkeypatch):
+    from fomo import config
+    monkeypatch.setenv("SOLANA_RPC_HTTP", "https://solana-mainnet.core.chainstack.com/abc")
+    monkeypatch.setenv("HELIUS_API_KEY", "k")
+    monkeypatch.setenv("SOLANA_RPC_FALLBACKS", "https://solana-mainnet.g.alchemy.com/v2/k")
+    monkeypatch.setenv("SOLANA_RPC_WSS", "")
+    cfg = config.load(env_file=None)
+    assert cfg.rpc_wss_extra[0].startswith("wss://solana-mainnet.g.alchemy.com")

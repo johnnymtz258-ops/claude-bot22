@@ -371,6 +371,11 @@ class HypeScanner:
             self.tuner.seen_alert(mint, info, r, alert_id, now)
         if not self.cfg.flag("ALERTS_ENABLED"):
             return
+        if edge and self.cfg.flag("EDGE_GATE") and not setup and self.cfg.flag("HYPE_ALERTS_NEED_EDGE"):
+            # followed by hand, hype alerts that fit no setup lost 7-11% a trade in the Oct 15-19 data: recorded and
+            # measured (dashboard, /edge), not pinged
+            self.db.run("update alerts set status='no_edge' where id=?", (alert_id,))
+            return
         created = num(info.get("pair_created_ts"))
         mcap = num(info.get("mc_usd"))
         lines = [f"<b>🔥 HYPE BUILDING · ${esc(info.get('symbol'))} · score {r['score']}/100</b>",

@@ -80,6 +80,7 @@ TUNABLES = {t.name: t for t in (
     Tunable("WHALE_MIN_POOL_HOURS", 6, "Whale buys into pools younger than this (or still on the pump.fun curve) are never alerted or traded — that's where the insider / launch-sniper rugs are: in your data 58% of whale buys into pools under 30 min old were down half within the hour, 3% of those 6h+ old (0 = off)", 0, 720),
     Tunable("HYPE_MIN_POOL_MINUTES", 60, "Hype scanner: never alert or trade a pool younger than this, whoever is in it (54% of hype coins under 30 min old were emptied within 2h) (0 = off)", 0, 1440),
     Tunable("EDGE_GATE", 1, "Trade only what's proven: the paper and live autopilots take a hype coin only when it matches a setup that made money after costs on BOTH halves of the last 7 days of honest replays (/edge); otherwise they stand aside and keep measuring (1 = on)", 0, 1, True),
+    Tunable("HYPE_ALERTS_NEED_EDGE", 1, "Only send a hype alert when the coin fits a setup that's been making money (/edge); the rest are recorded on the dashboard, not pinged — followed by hand they lost 7-11% a trade (1 = on)", 0, 1, True),
     Tunable("EDGE_QUIET_ALERTS", 1, "Hype alerts that match no proven setup arrive silently and marked 'no proven edge' (1 = on)", 0, 1, True),
     Tunable("STREAM_PROVIDERS", 2, "Live wallet stream: subscribe your whales on this many providers at once (your RPC links that have a websocket); a subscription one drops is covered by the other", 1, 3),
     Tunable("HYPE_AUTOTUNE", 1, "Hype filter tunes itself every 6h from what each rule blocked and what it would have made (/tuning; 1 = on)", 0, 1, True),
@@ -252,7 +253,8 @@ def load(env_file: Path | None = None) -> Config:
     # the same wallets on a second private provider's websocket: a subscription one drops is covered by the other
     hosts = {_host(rpc_wss)}
     rpc_wss_extra = []
-    for url in rpc_http:
+    # Helius last: its free credits run out first, and a stream on a provider that's out of credits never connects
+    for url in sorted(rpc_http, key=lambda u: "helius" in u):
         ws = wss_for(url)
         if ws and url != PUBLIC_RPC and _host(ws) not in hosts:
             hosts.add(_host(ws))

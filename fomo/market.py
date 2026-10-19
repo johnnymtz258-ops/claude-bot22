@@ -79,16 +79,25 @@ def pair_to_info(pair: dict) -> dict:
 def best_pairs(pairs: list) -> dict[str, dict]:
     """For each base token keep the pair with the deepest known liquidity."""
     best: dict[str, dict] = {}
+    oldest: dict[str, int] = {}
     for pair in pairs or []:
         if not isinstance(pair, dict) or str(pair.get("chainId") or "solana") != "solana":
             continue
         info = pair_to_info(pair)
         mint = info["mint"]
-        if not mint or info["price_usd"] <= 0:
+        if not mint:
+            continue
+        if info["pair_created_ts"] > 0:
+            oldest[mint] = min(oldest.get(mint, info["pair_created_ts"]), info["pair_created_ts"])
+        if info["price_usd"] <= 0:
             continue
         cur = best.get(mint)
         if cur is None or info["liquidity_usd"] > cur["liquidity_usd"]:
             best[mint] = info
+    for mint, info in best.items():
+        # the coin's age, not its newest pool's: a graduation or a new pool must not make a days-old coin look like a
+        # brand-new launch (v30 blocked whale buys of settled coins that way)
+        info["pair_created_ts"] = oldest.get(mint, info["pair_created_ts"])
     return best
 
 
