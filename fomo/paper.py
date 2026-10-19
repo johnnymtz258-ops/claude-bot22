@@ -96,7 +96,9 @@ class PaperTrader:
     def by_type(self, days: int = 7) -> list[dict]:
         """Closed paper trades over the last `days`, split by alert type: which alerts actually make the money."""
         out = []
-        for kind, label, cond in (("hype", "🔥 Hype alerts", "whale='hype'"), ("whales", "🐋 Whale alerts", "whale<>'hype'")):
+        for kind, label, cond in (("hype", "🔥 Hype alerts", "whale='hype'"),
+                                  ("whales", "🐋 Whale alerts", "whale not in ('hype','radar','swing')"),
+                                  ("swing", "♻️ Second legs", "whale='swing'"), ("radar", "🛰 Radar (newborn coins)", "whale='radar'")):
             rows = self.db.rows(f"""select size_usd, proceeds_usd from paper_trades where status='closed' and {cond}
                 and close_ts>=? and coalesce(interrupted,0)=0""", (int(time.time()) - days * 86400,))
             pnl = [num(r["proceeds_usd"]) - num(r["size_usd"]) for r in rows]

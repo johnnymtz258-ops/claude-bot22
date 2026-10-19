@@ -231,7 +231,11 @@ class FakeMarket(Market):
         self.gecko_every = 0.0
         self.other_pairs: dict[str, list] = {}   # chain -> DexScreener pairs on chains other than Solana
         self.paths: dict[str, list] = {}   # mint -> [(ts, price)] served as GeckoTerminal candles
+        self.candle_data: dict[str, list] = {}   # pool address -> [(ts, o, h, l, c, v)] (15-minute candles)
         self.jup = FakeJupiter()
+
+    async def candles(self, pool, minutes=15, limit=288):
+        return list(self.candle_data.get(pool, []))
 
     async def price_path(self, mint, start_ts, end_ts):
         return [(t, p) for t, p in self.paths.get(mint, []) if start_ts <= t <= end_ts]

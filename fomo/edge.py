@@ -72,11 +72,12 @@ WHALE_PLANS = PLANS + [
 ]
 FAMILIES = {"hype": (HYPE_SETUPS, PLANS), "whale": (WHALE_SETUPS, WHALE_PLANS)}
 SETUP_LABEL = {k: label for k, label, _ in HYPE_SETUPS + WHALE_SETUPS}
+SETUP_LABEL["s_second_leg"] = "Second legs (pumped, pulled back, held a floor, buyers back)"
 PLAN_OF = {k: (label, plan) for k, label, plan in WHALE_PLANS}
 
 
 def family_of(setup: str) -> str:
-    return "whale" if setup.startswith("w_") else "hype"
+    return "whale" if setup.startswith("w_") else "swing" if setup.startswith("s_") else "hype"
 
 
 def features(kind: str, info: dict, r: dict, now: float) -> dict:
@@ -314,8 +315,10 @@ class Edge:
         row = self.db.row("select setup, plan from edge_trades where trade_id=?", (trade_id,))
         if not row:
             return False, "it fits no setup that's being tested (/edge)"
-        key = "edge:whale:active_since" if family_of(row["setup"]) == "whale" else "edge:active_since"
-        fw = self.forward(row["setup"], row["plan"], int(num(self.db.get_meta(key, "0"))))
+        family = family_of(row["setup"])
+        key = {"whale": "edge:whale:active_since", "hype": "edge:active_since"}.get(family)
+        # second legs can't be replayed (they need days of candles), so they're judged on paper alone, from the start
+        fw = self.forward(row["setup"], row["plan"], int(num(self.db.get_meta(key, "0"))) if key else 0)
         label = SETUP_LABEL.get(row["setup"], row["setup"])
         if fw["n"] >= CONFIRM_N and fw["avg"] >= CONFIRM_AVG and fw["wo_best"] > 1.0:
             return True, ""

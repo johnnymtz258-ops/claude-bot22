@@ -25,6 +25,7 @@ class Bot:
         self.cfg.set("QUALITY_GATE", "0")  # small test buys; the gate has its own tests in test_gates
         self.cfg.set("EDGE_GATE", "0")  # every hype alert trades on paper, as before; test_edge covers the gate
         self.cfg.set("WHALE_MIN_POOL_HOURS", "0")  # sample coins are young pools; test_gates covers the pool-age gate
+        self.cfg.set("BUY_CHECK", "0")  # your-buy checks run in the background; test_assist awaits them directly
         self.db = Database(":memory:")
         self.rpc = FakeRPC()
         self.market = FakeMarket(self.db, self.rpc)
@@ -39,8 +40,13 @@ class Bot:
         self.hype = HypeScanner(self.cfg, self.db, self.market, self.engine, self.whales, self.notes)
         self.runners.hype = self.engine.hype = self.hype
         self.hype.tuner = self.tuner = Tuner(self.cfg, self.db, self.notes)
+        from fomo.swing import SwingScanner
+        self.runners.swing = self.swing = SwingScanner(self.cfg, self.db, self.market, self.engine, self.notes, self.hype)
         from fomo.marketpulse import MarketPulse
         self.pulse = MarketPulse(self.cfg, self.db, self.market, self.notes, self.runners)
+        from fomo.buycheck import BuyCheck
+        self.engine.buycheck = self.buycheck = BuyCheck(self.cfg, self.db, self.market, self.engine, self.whales,
+                                                        pulse=self.pulse, hype=self.hype)
         self.scout = WhaleScout(self.cfg, self.db, self.rpc, self.market, self.whales, self.runners, self.notes, lambda: None)
 
     def run(self, coro):

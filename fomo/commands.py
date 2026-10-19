@@ -22,8 +22,13 @@ Every minute it scores new, trending, boosted and whale-bought coins on what a r
 buyers vs sellers, volume surge, your whales, paid boosts, socials, trending, early market cap. A coin that
 lines up gets a 🔥 HYPE alert; a whale buy into a hyped coin is marked 🔥🐋 WHALE + HYPE.
 /hype — hottest coins right now and which signals have worked
+♻️ SECOND LEG alerts: a coin ran 3x+, pulled back 50-85%, held a floor for hours, and buyers are back — with an
+   entry, a stop under the floor and targets. 🛰 RADAR (silent): newborn coins with real traction and none of the
+   warning signs, risk spelled out. Paper trades both; /paper shows how each type is doing.
 /tuning — what each hype rule blocked, what those coins would have made, what the filter changed by itself
 /edge — which setups made money after costs lately; the autopilot trades only those (none = it stands aside)
+/check COIN — 🧾 buy check: launch age, rug signs, sell-back test, holders, chasing — 🟢/🟡/🔴 with a plan
+   (or just paste a coin address; with MY_WALLETS set, every buy you make is checked automatically)
 /health — live stream, RPC providers, how fast whale trades arrive, live-trading safety state
 /market — what the memecoin market is doing, what's trending, what to look out for (also every morning)
 
@@ -143,6 +148,9 @@ class Commands:
         elif action == "analyze":
             await tg.answer(cq["id"], "Reading wallet history…")
             await self.cmd_analyze([arg], "")
+        elif action == "check":
+            await tg.answer(cq["id"], "Checking the coin…")
+            await self.cmd_check([arg], "")
         elif action == "find":
             await tg.answer(cq["id"], "Researching early buyers…")
             try:
@@ -514,7 +522,21 @@ class Commands:
                 await self.say(f"Wallet <code>{address}</code>", [[("🔎 Analyze", None, f"analyze:{address}"),
                                                                    ("➕ Follow", None, f"track:{address}")]])
             return
-        await self.cmd_coin([address], reply_mint)
+        await self.cmd_check([address], reply_mint)
+
+    async def cmd_check(self, args, reply_mint):
+        """/check COIN — buy check: everything that says "careful" about a coin, in one verdict, with a plan."""
+        mint = await self._mint(args, reply_mint)
+        bc = getattr(self.app, "buycheck", None)
+        if bc is None:
+            await self.cmd_coin([mint], reply_mint)
+            return
+        from .buycheck import format_check
+        res = await bc.check(mint)
+        info = res.get("info") or {}
+        text = format_check(res) + "\n" + bc.plan(res) + f"\n<code>{mint}</code>"
+        links = [(label, url, None) for label, url in messages.token_links(mint, info.get("pair_address", ""))]
+        await self.say(text, [links, [("🐋 Whales in coin", None, f"coin:{mint}"), ("🎯 Ping me at 2x", None, f"x2:{mint}")]])
 
     async def _is_wallet(self, address: str) -> bool:
         info = await self.app.rpc.mint_info(address)
@@ -724,7 +746,8 @@ class Commands:
 
 
 ALIASES = {"start": "help", "pos": "positions", "p": "positions", "w": "whales", "track": "add", "follow": "add",
-           "unfollow": "remove", "buy": "bought", "sell": "sold", "leaderboard": "whales"}
+           "unfollow": "remove", "buy": "bought", "sell": "sold", "leaderboard": "whales", "buycheck": "check",
+           "c": "check"}
 
 
 def _is_number_word(text: str) -> bool:

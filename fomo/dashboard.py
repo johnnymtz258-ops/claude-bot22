@@ -137,6 +137,9 @@ class Dashboard:
             if t["kind"] == "offline":
                 t["live_ok"], t["live_why"] = None, "not a strategy result — keep the bot running (Mac awake, or a server)"
                 continue
+            if t["kind"] == "radar":
+                t["live_ok"], t["live_why"] = False, "never — newborn coins are paper only"
+                continue
             t["live_ok"], t["live_why"] = live.type_allowed("hype" if t["kind"] == "hype" else "") if live else (True, "")
         return _json({"summary": s, "curve": curve, "closed": closed, "enabled": a.cfg.flag("PAPER_TRADING"),
                       "types": types, "hype_exit": {"tp": a.cfg.get("HYPE_TP_PCT"), "stop": a.cfg.get("HYPE_STOP_PCT"),
@@ -481,7 +484,8 @@ async def start_dashboard(app) -> None:
 
 GROUP_ORDER = ["Automation", "Live trading (real money)", "Which buys get sent", "Selling", "Scoring", "Other"]
 _GROUPS = {
-    "Automation": ("HYPE_", "AUTO_", "WHALE_PICKS", "PAPER_", "LIVE_CARD", "RUNNER_ALERTS", "MARKET_", "EDGE_"),
+    "Automation": ("HYPE_", "AUTO_", "WHALE_PICKS", "PAPER_", "LIVE_CARD", "RUNNER_ALERTS", "MARKET_", "EDGE_", "RADAR_",
+                   "SWING_", "BUY_CHECK"),
     "Live trading (real money)": ("LIVE_TRADING", "LIVE_DRY_RUN", "LIVE_TRADE", "LIVE_MAX", "LIVE_DAILY", "LIVE_SLIP",
                                   "LIVE_PRIO", "LIVE_MIN_SLIP", "LIVE_JITO", "LIVE_DYNAMIC", "LIVE_KILL", "LIVE_PROFITABLE"),
     "Which buys get sent": ("MIN_WHALE", "MAX_ENTRY", "CONFIRM_", "LATE_CHASE", "DUMP_GATE", "BLOCK_FLIPPERS",

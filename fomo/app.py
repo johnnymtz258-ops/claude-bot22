@@ -97,6 +97,13 @@ class App:
                 self.db.set_meta("setting:AUTO_SCOUT_HOURS", 6)
                 cfg.set("AUTO_SCOUT_HOURS", 6)
             self.db.set_meta("fresh_launch_v30", "1")
+        if self.db.get_meta("assistant_v31") != "1":
+            # paper goes back to trading every alert — your market gauge — so its balance starts fresh
+            from .paper import PaperTrader
+            PaperTrader(self.db, cfg, None).new_period("v31: paper trades every alert again (market gauge); real money "
+                                                       "only follows proven setups")
+            self.v31_note = True
+            self.db.set_meta("assistant_v31", "1")
         if self.db.get_meta("runner_alerts_off_v22_4") != "1":   # community runners averaged -71% on your data
             self.db.set_meta("setting:RUNNER_ALERTS", 0)
             cfg.set("RUNNER_ALERTS", 0)
@@ -291,6 +298,11 @@ class App:
             self.pulse = MarketPulse(cfg, self.db, self.market, self.notify, self.runners)
             self.live.pulse = self.hype.pulse = self.pulse
             self.pulse.stream = self.stream
+            from .buycheck import BuyCheck
+            from .swing import SwingScanner
+            self.engine.buycheck = self.buycheck = BuyCheck(cfg, self.db, self.market, self.engine, self.whales,
+                                                            live=self.live, pulse=self.pulse, hype=self.hype)
+            self.runners.swing = self.swing = SwingScanner(cfg, self.db, self.market, self.engine, self.notify, self.hype)
             loops = [("wallet stream", self.stream.run), ("prices", self.tracker.run_prices),
                      ("backup poller", self.tracker.run_poller), ("telegram", self.telegram_loop),
                      ("daily", self.daily_loop), ("hype scanner", self.runners.run), ("whale scanner", self.scout.run),
@@ -334,6 +346,13 @@ class App:
                          f"got {audit['real_pnl']:+,.0f}$. The honest balance was {audit.get('balance_was', 0):,.0f}$; a new "
                          "paper period starts now at the usual balance, with honest fills. That setup is now blocked before "
                          "entry. Don't trade real money until the new period is in profit.")
+        if getattr(self, "v31_note", False):
+            lines.append("🧭 <b>New: your assistant.</b> 🧾 Paste any coin (or /check) for a buy check — and with "
+                         "MY_WALLETS set, every buy you make is checked at once. ♻️ Second-leg alerts: coins that ran, "
+                         "pulled back, held a floor, and buyers are back — with entry, stop and targets. 🛰 Radar: newborn "
+                         "coins with real traction and none of the warning signs, risk spelled out. The paper autopilot "
+                         "trades every alert again as your market gauge (fresh balance); real money stays off until a "
+                         "setup proves itself.")
         v30 = getattr(self, "v30_note", None)
         if v30 is not None:
             lines.append("🛡 <b>No more brand-new launches.</b> Whale buys into pools under "

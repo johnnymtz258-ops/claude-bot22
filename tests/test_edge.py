@@ -33,7 +33,8 @@ def week(bot, strong_wins=True):
         seen(bot, ts, i, score=75 if i % 2 == 0 else 50, wins=strong_wins and i % 2 == 0)
 
 
-def test_with_nothing_making_money_the_autopilot_stands_aside(bot):
+def test_with_nothing_making_money_paper_still_trades_but_real_money_stands_aside(bot):
+    """Paper is the market gauge: it trades every alert. Only real money waits for a proven setup."""
     bot.cfg.set("EDGE_GATE", "1")
     week(bot, strong_wins=False)
     rep = bot.run(bot.tuner.edge.evaluate(NOW))
@@ -42,15 +43,18 @@ def test_with_nothing_making_money_the_autopilot_stands_aside(bot):
     bot.market.set_pair(**hot_pair())
     bot.market.boosted = [MINT]
     bot.run(bot.runners.tick(NOW))
-    assert not [m for m in bot.notes.sent if m["kind"] == "HYPE"]                  # no setup it fits: not pinged…
-    assert bot.db.scalar("select status from alerts where kind='HYPE'") == "no_edge"   # …but recorded
-    assert bot.db.scalar("select count(*) from paper_trades where whale='hype'") == 0
-    bot.cfg.set("HYPE_ALERTS_NEED_EDGE", "0")                                      # opt back in: quiet and marked
+    hype = [m for m in bot.notes.sent if m["kind"] == "HYPE"]
+    assert hype and hype[0]["silent"] and "paper only, no real money" in hype[0]["text"]   # sent quietly, marked
+    tid = bot.db.scalar("select id from paper_trades where whale='hype'")
+    assert tid                                                                     # paper trades it (the gauge)…
+    assert not bot.tuner.edge.confirmed(tid)[0]                                    # …real money would not follow
+    bot.cfg.set("HYPE_ALERTS_NEED_EDGE", "1")                                      # opt in: only proven setups ping
     bot.db.run("delete from alerts")
     bot.market._cache.clear()
+    before = len(bot.notes.sent)
     bot.run(bot.runners.tick(NOW + 7 * 3600))
-    hype = [m for m in bot.notes.sent if m["kind"] == "HYPE"]
-    assert hype and hype[0]["silent"] and "isn't trading it" in hype[0]["text"]
+    assert not [m for m in bot.notes.sent[before:] if m["kind"] == "HYPE"]
+    assert bot.db.scalar("select status from alerts where kind='HYPE'") == "no_edge"
 
 
 def test_a_setup_that_won_both_halves_is_tested_on_paper_with_its_own_exit(bot):
@@ -185,15 +189,17 @@ def test_whale_buys_are_measured_too_and_fresh_launches_never_count(bot):
     assert "Whale buys" in format_report(rep, bot.cfg)
 
 
-def test_a_whale_copy_is_paper_traded_only_when_a_whale_setup_is_being_tested(bot):
+def test_a_whale_copy_gets_the_tested_setups_exit_and_real_money_only_follows_that(bot):
     import time as _t
     from tests.helpers import WHALE, pump_buy
     bot.cfg.set("EDGE_GATE", "1")
     bot.whales.add(WHALE, "Rocket")
     bot.market.set_pair(mint=MINT, price=0.000075, mc=150_000, created_ms=int((_t.time() - 3 * 86400) * 1000))
-    bot.feed(WHALE, pump_buy())                                            # nothing proven: alert, but no paper copy
-    assert bot.notes.kinds() == ["BUY"] and "No whale setup has been making money" in bot.notes.sent[0]["text"]
-    assert bot.db.scalar("select count(*) from paper_trades") == 0
+    bot.feed(WHALE, pump_buy())                                            # nothing proven: paper copies it as the gauge
+    assert bot.notes.kinds() == ["BUY"] and "paper only, no real money" in bot.notes.sent[0]["text"]
+    first = bot.db.scalar("select id from paper_trades")
+    assert first and not bot.tuner.edge.confirmed(first)[0]
+    bot.db.run("delete from paper_trades")
     bot.tuner.edge.report = {"table": [], "active": None, "whale": {"table": [{}], "active": {
         "setup": "w_all", "plan": "swing", "label": "Whale buys into settled pools", "plan_label": "x", "avg": 1.08,
         "n": 30, "worst_half": 1.04}}}

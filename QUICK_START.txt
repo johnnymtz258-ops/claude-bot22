@@ -48,6 +48,13 @@ FREE RPC (Helius ran out?)
 HEALTH
   /health — live stream, each RPC provider, how fast whale trades arrive, live-trading safety state, crashes.
 
+YOUR ASSISTANT (v31)
+  🧾 Paste any coin address (or /check COIN) → buy check: 🟢 clean / 🟡 careful / 🔴 avoid, with reasons and a plan.
+     With MY_WALLETS in .env, every buy you make is checked the moment it lands.
+  ♻️ SECOND LEG alerts: ran 3x+, pulled back, held a floor, buyers back → entry, stop under the floor, targets.
+  🛰 RADAR (silent): newborn coins with real traction and none of the warning signs, with the risk spelled out.
+  The paper autopilot trades every alert as your market gauge (/paper); real money only after /edge proves a setup.
+
 NO BRAND-NEW LAUNCHES (v30) — see REVIEW.md
   Whale buys into pools under 6 hours old, and hype coins under 1 hour, are never alerted or traded: that's where the
   insider / sniper rugs were (58% down half within the hour). WHALE_MIN_POOL_HOURS / HYPE_MIN_POOL_MINUTES.

@@ -87,8 +87,10 @@ def test_set_and_pause(chat):
     assert chat.cfg.flag("ALERTS_ENABLED")
 
 
-def test_pasting_an_address_shows_the_coin(chat):
-    assert "Tracked whales" in chat.say(COINS["CASHED"][0])
+def test_pasting_an_address_shows_the_buy_check(chat):
+    out = chat.say(COINS["CASHED"][0])
+    assert "Buy check · $CASHED" in out and "of your whales" in out and "Size:" in out
+    assert "Tracked whales" in chat.say(f"/coin {COINS['CASHED'][0]}")      # the full whale list is still one tap away
 
 
 def test_bad_input_is_explained_not_crashing(chat):

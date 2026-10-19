@@ -117,6 +117,29 @@ on boot and restarts by itself. `open_server_dashboard.command` opens its dashbo
 `server_log.command` shows its log. Telegram works exactly as before. If two copies ever run at once (the Mac and the
 server), the bot says so and holds real-money buys until one stops.
 
+## Your assistant (v31)
+
+What the bot is for now: keep your buys in check, spot things early while you're not watching the feeds, and keep a
+paper record of how the market is treating every kind of alert.
+
+- **🧾 Buy check** — paste any coin address (or `/check COIN`, or tap 🧾 on an alert): 🟢 CLEAN / 🟡 CAREFUL /
+  🔴 AVOID with the reasons — launch age (from the coin's oldest pool), freeze/mint authority, Token-2022 traps,
+  RugCheck dangers, a sell-back test (Jupiter quotes for buying and selling straight back: fees, price impact, hidden
+  tax), liquidity, holder concentration, bots vs real buyers, the dev's history, chasing a run, your whales in or out,
+  the market — and a plan (size, stop, take-profit). With `MY_WALLETS` set, **every buy you make is checked the moment
+  it lands** (`BUY_CHECK`), with your buys so far today; an 🔴 one pings you.
+- **♻️ Second legs** (`SWING_ALERTS`) — "pumps at the beginning, drops, pumps again": a coin 6h+ old that ran 3x+
+  (`SWING_MIN_FIRST_LEG`), pulled back 50-85%, held a floor for 2h+, and now has buyers back (volume 2x+ the floor's,
+  more buys than sells) with 1.6x+ room to its old peak. 15-minute candles from GeckoTerminal. The alert is a plan:
+  entry, stop 10% under the floor, half at +50%, the rest toward the old peak with a trailing stop, out within 24h.
+- **🛰 Radar** (`RADAR_ALERTS`, silent) — newborn coins (under an hour) gaining real traction with none of the warning
+  signs: no seeded pool, no bot volume, no bundled supply, no freeze authority, real liquidity. In your data newborns
+  like these rugged 6% of the time (20%+ for the rest) and 18% really doubled — the radar says that on every alert.
+  X itself isn't read (its API is paid); Jupiter's "smart Crypto-Twitter likes" are used as the X signal.
+- **Paper autopilot = your market gauge** — it trades every alert again (hype, whale, second leg, radar), each with
+  its own exit plan; `/paper` and the Paper tab show how each type is doing. Real money stays behind `/edge`: it only
+  follows a setup that made money on replays and then on paper.
+
 ## No brand-new launches (v30) — read REVIEW.md
 
 `REVIEW.md` goes over the whole month: every export merged, what the data shows, what was wrong and what changed.

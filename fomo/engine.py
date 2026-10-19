@@ -338,6 +338,10 @@ class Engine:
                                               trade_mc, ts)
             if swap["side"] == "BUY" and source == "stream":
                 await self._rebuy_guard(swap["mint"], ts, info)
+                if self.cfg.flag("BUY_CHECK") and getattr(self, "buycheck", None) is not None:
+                    task = asyncio.create_task(self._own_buy_check(swap["mint"], usd_value, ts))
+                    self._tasks.add(task)
+                    task.add_done_callback(self._tasks.discard)
             return
         self.db.run("update whales set last_trade_ts=max(coalesce(last_trade_ts,0),?) where address=?", (ts, wallet))
         ctx = {"wallet": wallet, "swap": swap, "swap_id": swap_id, "usd_value": usd_value, "price": price,
@@ -562,13 +566,12 @@ class Engine:
             status("micro")
             return  # micro-caps / bonding-curve coins: the alerts that rugged most — tracked and scored, not sent
         edge = getattr(getattr(self.hype, "tuner", None), "edge", None) if self.hype else None
-        copy_it, picked = (edge.allows(edge.whale_features(wallet, info, c["usd_value"], len(confluence), time.time()))
-                           if edge else (True, None))
+        picked = (edge.match(edge.whale_features(wallet, info, c["usd_value"], len(confluence), time.time()))
+                  if edge and self.cfg.flag("EDGE_GATE") else None)
         if edge and self.cfg.flag("EDGE_GATE"):
             reasons.append((True, f"🧪 Fits the whale setup paper is testing: {picked['label']} — replays "
                                   f"{(picked['avg'] - 1) * 100:+.1f}% a trade over {picked['n']} (/edge)") if picked else
-                           (None, "📉 No whale setup has been making money lately — the autopilot isn't copying this one "
-                                  "(/edge)"))
+                           (None, "📉 No whale setup has been making money lately — paper only, no real money (/edge)"))
         text = messages.buy_alert(
             symbol=info.get("symbol") or self.market.symbol(mint), mint=mint, whale_name=whale.get("name") or wallet[:6],
             whale_addr=wallet, stats=stats, grade=grade, reasons=reasons, usd_value=c["usd_value"],
@@ -594,14 +597,14 @@ class Engine:
         msg_id = await self.notify(text, buttons=buttons, silent=silent, mint=mint, wallet=wallet, kind="BUY")
         self.db.run("update alerts set tg_message_id=?, status=? where id=?",
                     (msg_id or 0, "silent" if silent else "sent", alert_id))
-        if copy_it:   # the autopilot (paper, and live behind it) copies only what's proven — see edge.py
-            trade_id = self.paper.open(alert_id=alert_id, mint=mint, whale=wallet,
-                                       symbol=info.get("symbol") or self.market.symbol(mint), price=entry_price,
-                                       mc_usd=num(info.get("mc_usd")) or c["trade_mc"], info=info,
-                                       signal={"grade": grade, "score": hyped["score"] if hyped else None},
-                                       plan=picked["exit"] if picked else None)
-            if edge:
-                edge.record(trade_id, picked)
+        # paper copies every sent whale buy (your market gauge); real money only follows a proven setup (edge.py)
+        trade_id = self.paper.open(alert_id=alert_id, mint=mint, whale=wallet,
+                                   symbol=info.get("symbol") or self.market.symbol(mint), price=entry_price,
+                                   mc_usd=num(info.get("mc_usd")) or c["trade_mc"], info=info,
+                                   signal={"grade": grade, "score": hyped["score"] if hyped else None},
+                                   plan=picked["exit"] if picked else None)
+        if edge:
+            edge.record(trade_id, picked)
 
     def runner_setup(self, c: dict, info: dict) -> bool:
         """The pattern behind most 10x coins in your data: a whale buying $1K+ of a coin that just left the pump.fun
@@ -665,6 +668,27 @@ class Engine:
         msg_id = await self.notify(text, mint=mint, kind="REBUY")
         self.db.insert("insert into alerts(ts,kind,mint,wallet,tg_message_id,status) values(?,?,?,?,?,?)",
                        (now, "REBUY", mint, "", msg_id or 0, "rebuy"))
+
+    async def _own_buy_check(self, mint: str, usd_value: float, ts: int) -> None:
+        """You just bought a coin: check it at once and say plainly what you're holding, with a plan."""
+        now = int(time.time())
+        if self.db.scalar("select 1 from alerts where kind='CHECK' and mint=? and ts>=?", (mint, now - 1800)):
+            return   # several fills of one buy: one check
+        try:
+            from .buycheck import RED, format_check
+            res = await self.buycheck.check(mint)
+            day = self.buycheck.day_so_far()
+            sym = esc((res.get("info") or {}).get("symbol") or self.market.symbol(mint))
+            word = {"🔴": "AVOID", "🟡": "CAREFUL", "🟢": "CLEAN"}[res["verdict"]]
+            header = f"<b>🧾 You bought {usd(usd_value)} of ${sym} · {res['verdict']} {word}</b>"
+            text = (format_check(res, header) + "\n" + self.buycheck.plan(res)
+                    + f"\n📅 Today: {day['buys']} buy{'s' if day['buys'] != 1 else ''}, {usd(day['spent'])} in"
+                    + f"\n<code>{mint}</code>")
+            msg_id = await self.notify(text, mint=mint, kind="CHECK", silent=res["verdict"] != RED)
+            self.db.insert("insert into alerts(ts,kind,mint,wallet,tg_message_id,status) values(?,?,?,?,?,?)",
+                           (now, "CHECK", mint, "", msg_id or 0, res["verdict"]))
+        except Exception as exc:   # a check that fails must never touch your trade handling
+            self.last_error = f"{time.strftime('%H:%M:%S')} buy check {type(exc).__name__}: {exc}"
 
     async def _maybe_add_alert(self, c: dict) -> None:
         """A whale buying MORE of a coin you hold is a hold signal — tell you (at most every 30 min)."""

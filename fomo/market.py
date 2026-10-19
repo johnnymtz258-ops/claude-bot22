@@ -183,6 +183,17 @@ class Market:
                 best = path
         return best
 
+    async def candles(self, pool: str, minutes: int = 15, limit: int = 288) -> list[tuple]:
+        """[(ts, open, high, low, close, volume_usd)] for one pool, oldest first (GeckoTerminal, free)."""
+        if not pool:
+            return []
+        data = await self._gecko(f"/networks/solana/pools/{pool}/ohlcv/minute?aggregate={int(minutes)}"
+                                 f"&limit={int(limit)}&currency=usd")
+        rows = ((((data or {}).get("data") or {}).get("attributes") or {}).get("ohlcv_list")) or []
+        out = [(int(num(c[0])), num(c[1]), num(c[2]), num(c[3]), num(c[4]), num(c[5])) for c in rows
+               if isinstance(c, (list, tuple)) and len(c) >= 6 and num(c[4]) > 0]
+        return sorted(out)
+
     # -- SOL price ------------------------------------------------------------------------
     async def sol_usd(self) -> float:
         price, ts = self._sol

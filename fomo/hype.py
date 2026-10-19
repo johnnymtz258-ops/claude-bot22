@@ -290,7 +290,91 @@ class HypeScanner:
             sent.append(mint)
         if self.tuner:
             await self._shadows(scored, now)
+        await self._radar(scored, now)
         return sent
+
+    # -- radar: newborn coins with real traction, flagged early (never real money) -----------------------------------
+    def radar_odds(self, now: int) -> dict:
+        """What newborn coins like these did lately (fates of the radar's and the scanner's sub-1h coins, 7 days)."""
+        cached = getattr(self, "_radar_odds", None)
+        if cached and now - cached[0] < 1800:
+            return cached[1]
+        pulse = getattr(self, "pulse", None)
+        rows = self.db.rows("""select h.mint, h.ts, h.price from hype_seen h left join tokens t on t.mint=h.mint
+            where h.ts>=? and h.ts<=? and h.price>0 and t.pair_created_ts>0 and h.ts - t.pair_created_ts < 3600
+            order by h.ts desc limit 300""", (now - 7 * 86400, now - 7300))
+        fates = [f for f in (pulse.fate(r["mint"], int(r["ts"]), num(r["price"]), now) for r in rows) if f] if pulse else []
+        odds = {"n": len(fates), "rug": sum(f["rug"] for f in fates) / len(fates) if fates else None,
+                "x2": sum(f["x2"] for f in fates) / len(fates) if fates else None}
+        self._radar_odds = (now, odds)
+        return odds
+
+    async def _radar(self, scored: list, now: int) -> list[str]:
+        if not (self.cfg.flag("RADAR_ALERTS") and self.cfg.flag("HYPE_ALERTS")):
+            return []
+        sent = []
+        for mint, info, r in scored:
+            if r.get("rule") != "newpool":
+                continue
+            created = num(info.get("pair_created_ts"))
+            age_min = (now - created) / 60 if created else -1
+            mcap, liq = num(info.get("mc_usd")), num(info.get("liquidity_usd"), -1)
+            keys = {k for k, _, _ in r["signals"]}
+            if (age_min < self.cfg.get("RADAR_MIN_MINUTES") or not keys & {"rush", "pressure", "loading"}
+                    or keys & {"bundle", "bots", "sus", "fresh"} or liq < max(15_000, self.cfg.get("HYPE_MIN_LIQ_USD"))
+                    or liq >= 0.5 * mcap):
+                continue   # in your data the newborns without these warning signs rugged 6% of the time, the rest 20%+
+            if int(num(self.db.scalar("select count(*) from alerts where kind='RADAR' and ts>=?", (now - 3600,),
+                                      default=0))) >= self.cfg.get("RADAR_MAX_PER_HOUR"):
+                break
+            if self.db.scalar("select 1 from alerts where kind='RADAR' and mint=? and ts>=?", (mint, now - COOLDOWN)):
+                continue
+            holders = await self._holders(mint, info)
+            if holders:
+                r = score({**info, "mint": mint}, self.cfg, whales=self.whales_in(mint, now), lists=self.lists, now=now,
+                          peak_mc=self.peak_of(mint), holders=holders)
+                if {k for k, _, _ in r["signals"]} & {"bundle"}:
+                    continue
+            if await self._unsafe(mint, info):
+                continue
+            await self.radar_alert(mint, info, r, age_min, holders, now)
+            sent.append(mint)
+        return sent
+
+    async def radar_alert(self, mint: str, info: dict, r: dict, age_min: float, holders: dict | None, now: int) -> None:
+        price, mcap = num(info.get("price_usd")), num(info.get("mc_usd"))
+        alert_id = self.db.insert("""insert into alerts(ts,kind,mint,wallet,grade,mc_usd,price_usd,reasons,status)
+            values(?,?,?,?,?,?,?,?,?)""", (now, "RADAR", mint, "radar", "R", mcap, price,
+                                           "signals:" + ",".join(k for k, _, _ in r["signals"]), "sent"))
+        self.db.insert("insert into hype_seen(ts,mint,kind,rule,score,price,mc,h1,keys) values(?,?,?,?,?,?,?,?,?)",
+                       (now, mint, "radar", "newpool", r["score"], price, mcap, num(info.get("change_h1")),
+                        ",".join(k for k, _, _ in r["signals"])))
+        plan = {"tp": 1.3, "stop": 0.75, "hold": 3600, "half": True, "trail": 25,
+                "label": "half at +30%, the rest rides (-25% stop, trail 25%), 1h"}
+        self.engine.paper.open(alert_id=alert_id, mint=mint, whale="radar", symbol=info.get("symbol") or mint[:4],
+                               price=price, mc_usd=mcap, ts=now, info=info, signal={"score": r["score"]}, plan=plan)
+        if not self.cfg.flag("ALERTS_ENABLED"):
+            return
+        odds = self.radar_odds(now)
+        lines = [f"<b>🛰 RADAR · ${esc(info.get('symbol'))} · {int(age_min)} min old</b>",
+                 f"{mc(mcap)} MC · liq {usd(info.get('liquidity_usd'))} · 5m {pct(info.get('change_m5'))} · "
+                 f"1h {pct(info.get('change_h1'))}"]
+        lines += [esc(t) for _, t, _ in r["signals"]]
+        if holders and num(holders.get("top10_pct"), -1) >= 0:
+            lines.append(f"Top 10 wallets hold {num(holders['top10_pct']):.0f}% · no freeze authority, no token traps")
+        risk = ("🔴 Brand-new coin: you're early, and so are the insiders."
+                + (f" Of the {odds['n']} newborn coins measured this week, {odds['rug'] * 100:.0f}% were emptied within "
+                   f"2 hours and {odds['x2'] * 100:.0f}% really doubled." if odds.get("n", 0) >= 10 else "")
+                + " Never more than you can lose; use the buy check, take profit fast.")
+        lines.append(risk)
+        lines.append(f"<code>{mint}</code>")
+        links = [(label, url, None) for label, url in messages.token_links(mint, info.get("pair_address", ""))]
+        if info.get("x_url"):
+            links.append(("𝕏", info["x_url"], None))
+        msg_id = await self.notify("\n".join(lines), buttons=[links, [("🧾 Buy check", None, f"check:{mint}")]],
+                                   mint=mint, wallet="radar", kind="RADAR", silent=True)
+        if msg_id:
+            self.db.run("update alerts set tg_message_id=? where id=?", (msg_id, alert_id))
 
     async def _shadows(self, scored: list, now: int) -> None:
         """Coins kept out by ONE adjustable rule are priced for two hours as if alerted — that's how the tuner knows
@@ -359,14 +443,13 @@ class HypeScanner:
         copies.open_copy(self.db, whale=HYPE, mint=mint, swap_id=0, alert_id=alert_id, price=num(info["price_usd"]),
                          mc_usd=num(info.get("mc_usd")), whale_price=num(info["price_usd"]), ts=now)
         edge = getattr(self.tuner, "edge", None)
-        trade, setup = (edge.allows(features("alert", info, r, now)) if edge else (True, None))
-        if trade:   # the autopilot (paper, and live behind it) only takes what's proven — see edge.py
-            trade_id = self.engine.paper.open(alert_id=alert_id, mint=mint, whale=HYPE, symbol=info.get("symbol") or mint[:4],
-                                              price=num(info["price_usd"]), mc_usd=num(info.get("mc_usd")), ts=now,
-                                              info=info, signal={"score": r["score"]},
-                                              plan=setup["exit"] if setup else None)
-            if edge:
-                edge.record(trade_id, setup)
+        setup = edge.match(features("alert", info, r, now)) if edge and self.cfg.flag("EDGE_GATE") else None
+        # paper trades every alert (your market gauge); real money only follows a proven setup (edge.py)
+        trade_id = self.engine.paper.open(alert_id=alert_id, mint=mint, whale=HYPE, symbol=info.get("symbol") or mint[:4],
+                                          price=num(info["price_usd"]), mc_usd=num(info.get("mc_usd")), ts=now,
+                                          info=info, signal={"score": r["score"]}, plan=setup["exit"] if setup else None)
+        if edge:
+            edge.record(trade_id, setup)
         if self.tuner:
             self.tuner.seen_alert(mint, info, r, alert_id, now)
         if not self.cfg.flag("ALERTS_ENABLED"):
@@ -407,8 +490,8 @@ class HypeScanner:
                              f"{(setup['avg'] - 1) * 100:+.1f}% a trade on {setup['n']} coins over 7 days. Paper exit: "
                              f"{esc(setup['exit']['label'])} (/edge)")
             else:
-                lines.append("📉 No setup has been making money on coins like this lately — the autopilot isn't trading "
-                             "it (/edge)")
+                lines.append("📉 No setup has been making money on coins like this lately — paper only, no real money "
+                             "(/edge)")
                 quiet = self.cfg.flag("EDGE_QUIET_ALERTS")
         lines.append(f"<code>{mint}</code>")
         links = [(label, url, None) for label, url in messages.token_links(mint, info.get("pair_address", ""))]
