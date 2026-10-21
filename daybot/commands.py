@@ -388,6 +388,10 @@ class Commands:
 
     async def cmd_connect(self, rest: str, now: float) -> list[dict]:
         broker = self.app.broker
+        if not broker.ok and self.app.cfg.snaptrade_client_id:
+            return [reply("Almost there: your SnapTrade Client ID is set, the Consumer Key isn't. Get it in the SnapTrade "
+                          "dashboard (it asks for a 2-step code first), then double-click daybot_setup.command, paste "
+                          "it, press Enter through the rest, and restart DayBot.")]
         if not broker.ok:
             return [reply("To read your Robinhood / Chase trades, DayBot uses SnapTrade (read-only, free for personal "
                           "use):\n1. Sign up at snaptrade.com → Personal → copy your Client ID and Consumer Key\n"

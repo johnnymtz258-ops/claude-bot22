@@ -314,6 +314,9 @@ class App:
                 what += " — link Robinhood / Chase with /connect"
             lines.append(f"{icon} Your trades: {what}"
                          + (f" · ⚠️ re-link: {', '.join(self.broker.disabled)}" if self.broker.disabled else ""))
+        elif self.cfg.snaptrade_client_id and not self.cfg.snaptrade_consumer_key:
+            lines.append("⚪ Your trades: the SnapTrade consumer key is missing — double-click daybot_setup.command, "
+                         "paste it, press Enter through the rest, then restart DayBot")
         else:
             lines.append("❌ Your trades: not connected (/connect)")
         lines.append(("✅" if self.ai.ok else "⚪") + f" AI (charts, /ask, coach): {esc(self.ai.status())}")
