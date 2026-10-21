@@ -56,7 +56,8 @@ create index if not exists idx_alerts_day on alerts(day, symbol);
 create table if not exists paper(
   id integer primary key, alert_id integer, day text, symbol text, setup text, direction text, opened_ts integer,
   entry real, stop real, t1 real, t2 real, qty real, half_done integer default 0, stop_now real, closed_ts integer,
-  exit_price real, r_mult real, pnl real, reason text default '', status text default 'open', seen_ts integer default 0);
+  exit_price real, r_mult real, pnl real, reason text default '', status text default 'open', seen_ts integer default 0,
+  auto integer default 0, auto_note text default '', half_ts integer default 0);
 
 -- backtest results per setup (latest run kept with history)
 create table if not exists backtests(

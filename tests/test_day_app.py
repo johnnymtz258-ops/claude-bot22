@@ -53,6 +53,45 @@ def test_a_full_day_plan_alerts_paper_and_report():
     assert "Market gauge" in app.notes.last("REPORT")["text"]
 
 
+def test_the_autopilot_follows_the_alerts_with_pretend_money():
+    app = _day_app()
+    _walk(app, "06:30", "16:20")
+    auto = app.db.rows("select * from paper where auto=1")
+    assert {t["symbol"] for t in auto} == {"GAPR", "TEST"}                  # the alerts you were sent
+    assert all(t["status"] == "closed" for t in auto)
+    assert all(t["qty"] * t["entry"] <= 1000.01 for t in auto)               # never more than its cash
+    notes = [m["text"] for m in app.notes.sent if m["kind"] == "AUTO"]
+    assert any("Autopilot bought" in n for n in notes) and any("Autopilot closed" in n for n in notes)
+    assert all(m["silent"] for m in app.notes.sent if m["kind"] == "AUTO")
+    sm = app.autopilot.summary(at(DAY, "16:20"))
+    assert sm["n"] == len(auto) and abs(sm["balance"] - (1000 + sum(t["pnl"] for t in auto))) < 1e-6
+    assert sm["balance"] > 1000 and sm["by_setup"] and len(sm["curve"]) == sm["n"] + 1
+    assert "Too early to judge" in sm["verdict"]
+    text = asyncio.run(app.commands.text("/autopilot", at(DAY, "16:20")))[0]["text"]
+    assert "Last trades" in text and "By setup" in text
+    assert "Autopilot today" in app.notes.last("REPORT")["text"]
+
+
+def test_the_autopilot_respects_its_limits_and_resets():
+    from daybot.setups import Signal
+    app = _day_app()
+    app.cfg.set("AUTOPILOT_MAX_OPEN", "1")
+    now = at(DAY, "10:30")
+    asyncio.run(app.scanner.alert(Signal("vwap", "long", "TEST", int(now), 100.0, 99.0, 101.0, 102.0, "x"), now))
+    asyncio.run(app.scanner.alert(Signal("orb", "long", "GAPR", int(now), 50.0, 49.0, 51.0, 52.0, "x"), now))
+    late = at(DAY, "15:45")
+    asyncio.run(app.scanner.alert(Signal("vwap", "long", "NEWS", int(late), 20.0, 19.5, 20.5, 21.0, "x"), late))
+    rows = {r["symbol"]: r for r in app.db.rows("select * from paper")}
+    assert rows["TEST"]["auto"] == 1 and rows["GAPR"]["auto"] == 0 and "already open" in rows["GAPR"]["auto_note"]
+    assert rows["NEWS"]["auto"] == 0 and rows["NEWS"]["auto_note"] == "too late in the day"
+    assert rows["TEST"]["qty"] == 9      # risk would allow 10 ($10 at $1 a share) but $1,000 cash buys 9 at $100
+    out = asyncio.run(app.commands.text("/autopilot reset 500", now))[0]["text"]
+    assert "$500" in out and app.autopilot.start() == 500 and not app.autopilot.open_rows()
+    app.cfg.set("AUTOPILOT", "0")
+    asyncio.run(app.scanner.alert(Signal("vwap", "long", "SPY", int(now) + 60, 100.0, 99.0, 101.0, 102.0, "x"), now + 60))
+    assert app.db.row("select auto from paper where symbol='SPY'")["auto"] == 0
+
+
 def test_a_proven_setup_pings_with_size_and_an_option_idea():
     sym = occ("TEST", "2026-10-23", "C", 103)
     chain = {"TEST": {sym: option_snapshot(1.20, 1.25, 0.52, gamma=0.08)}}
@@ -66,6 +105,20 @@ def test_a_proven_setup_pings_with_size_and_an_option_idea():
     assert not msg["silent"] and "✅ proven setup" in msg["text"]
     assert "Option idea: TEST 10/23 103C" in msg["text"] and "backtest 90 trades" in msg["text"]
     assert "Your $10,000 cash buys 9" in msg["text"]        # 1% risk would be ~400 shares: more than the cash buys
+
+
+def test_a_setup_that_wins_live_gets_promoted():
+    import random
+    from daybot.backtest import describe
+    app = _day_app()
+    rnd = random.Random(3)
+    for i in range(36):
+        r = 1.3 if rnd.random() < 0.5 else -0.8
+        app.db.insert("""insert into paper(day, symbol, setup, direction, opened_ts, closed_ts, r_mult, status)
+                         values(?, 'X', 'orb', 'long', ?, ?, ?, 'closed')""", (DAY, 1000 + i, 2000 + i, r if i % 3 else 1.3))
+    st = app.edge.status("orb", "long")
+    assert st["proven"] and st["live"] and "proven live" in describe(st)
+    assert not app.edge.status("vwap", "long")["proven"]
 
 
 def test_known_losers_are_paper_only():
@@ -183,7 +236,7 @@ def test_commands_answer():
     assert "No closed trades" in say("/journal")[0]["text"]
     assert "Market data" in say("/status")[0]["text"]
     assert "read-only" in say("/connect")[0]["text"]
-    assert "Paper autopilot" in say("/paper")[0]["text"]
+    assert "🤖 Autopilot" in say("/paper")[0]["text"] and "No trades yet" in say("/autopilot")[0]["text"]
     assert "Today's setups" in say("/alerts")[0]["text"] or "No setup alerts" in say("/alerts")[0]["text"]
     assert "paused" in say("/pause")[0]["text"] and not app.cfg.flag("ALERTS_ENABLED")
     assert "on" in say("/resume")[0]["text"] and app.cfg.flag("ALERTS_ENABLED")

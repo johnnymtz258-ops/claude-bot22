@@ -199,19 +199,34 @@ class Edge:
 
     def paper(self, setup: str, direction: str, since: int = 0) -> dict:
         rows = self.db.rows("""select r_mult from paper where setup=? and direction=? and status='closed'
-                               and closed_ts>=?""", (setup, direction, since))
+                               and closed_ts>=? order by closed_ts""", (setup, direction, since))
         rs = [num(r["r_mult"]) for r in rows]
-        return {"n": len(rs), "avg_r": (sum(rs) / len(rs)) if rs else 0.0,
-                "won": (sum(1 for r in rs if r > 0) / len(rs)) if rs else 0.0}
+        half = len(rs) // 2
+        avg = (lambda xs: sum(xs) / len(xs) if xs else 0.0)
+        return {"n": len(rs), "avg_r": avg(rs), "won": (sum(1 for r in rs if r > 0) / len(rs)) if rs else 0.0,
+                "half1": avg(rs[:half]), "half2": avg(rs[half:]),
+                "no_best": avg(sorted(rs)[:-3]) if len(rs) > 3 else 0.0}
 
     def status(self, setup: str, direction: str) -> dict:
         bt = self.backtest().get(f"{setup}_{direction}")
         since = int(num(self.db.get_meta("backtest_ts"), 0)) - 30 * 86400
         paper = self.paper(setup, direction, max(since, 0))
         st = bt["status"] if bt else "untested"
+        live = False
         if paper["n"] >= self.BENCH_N and paper["avg_r"] <= self.BENCH_R:
             st = "benched"
-        return {"status": st, "proven": st == "proven", "backtest": bt, "paper": paper}
+        elif st != "proven" and self.proven_live(paper):
+            st, live = "proven", True              # it earned it live, the same bar the backtest has to clear
+        return {"status": st, "proven": st == "proven", "backtest": bt, "paper": paper, "live": live}
+
+    LIVE_N = 30
+    LIVE_R = 0.12
+
+    def proven_live(self, paper: dict) -> bool:
+        """Winning in live paper trading: 30+ trades, +0.12R or better on average, positive in both halves and
+        still positive without its 3 best trades."""
+        return (paper["n"] >= self.LIVE_N and paper["avg_r"] >= self.LIVE_R and paper["half1"] > 0
+                and paper["half2"] > 0 and paper["no_best"] > 0)
 
     def table(self) -> list[dict]:
         from .setups import SETUP_NAMES
@@ -227,7 +242,8 @@ def describe(edge_status: dict) -> str:
     """One line about a setup's record, for alerts."""
     bt = edge_status.get("backtest")
     paper = edge_status.get("paper") or {}
-    parts = [STATUS_TEXT.get(edge_status.get("status"), edge_status.get("status", ""))]
+    parts = ["✅ proven live" if edge_status.get("live") else
+             STATUS_TEXT.get(edge_status.get("status"), edge_status.get("status", ""))]
     if bt and bt.get("n"):
         parts.append(f"backtest {int(bt['n'])} trades, {num(bt['avg_r']):+.2f}R avg, {num(bt['won']) * 100:.0f}% won")
     if paper.get("n"):

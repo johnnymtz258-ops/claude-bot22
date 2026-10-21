@@ -33,6 +33,7 @@ from .db import Database
 from .earnings import Earnings
 from .ledger import NOT_HOLDING, Ledger
 from .monitor import Monitor
+from .autopilot import Autopilot
 from .paper import Paper
 from .plan import build as build_plan
 from .scanner import Scanner
@@ -65,6 +66,8 @@ class App:
                 telegram.chat_id = owner
         self.notify = notify or Notifier(telegram, self.db)
         self.paper = Paper(cfg, self.db, self.data, self.market)
+        self.autopilot = Autopilot(cfg, self.db, self.data, self.market, self.notify)
+        self.paper.auto = self.autopilot
         if charts is False:
             self.charts = None
         else:
@@ -146,14 +149,14 @@ class App:
                 await self.scanner.premarket(now)          # the final gap list now that the open printed
             self.scanner.extra = list(dict.fromkeys(self.monitor.symbols() + self.paper.symbols()))
             await self.scanner.tick(now)
-            self.paper.update(now)
+            await self.autopilot.announce(self.paper.update(now))
             await self.monitor.tick(now)
             if open_ts + 900 <= now <= self.market.close_ts(day) - 3600 and self.every("discover", 600, now):
                 await self.scanner.discover(now)
         if session in {"post", "closed"} and now >= self.market.close_ts(day):
             if self.every("paper_final", 300, now):
                 await self.data.refresh(list(dict.fromkeys(self.scanner.watchlist(day) + self.paper.symbols())), now)
-                self.paper.update(now)
+                await self.autopilot.announce(self.paper.update(now))
             if now >= self.market.close_ts(day) + 600 and self.cfg.flag("EOD_REPORT") \
                     and self.db.once(f"dayreport:{day}", int(now)):
                 await self.day_report(day, send=True)
@@ -200,6 +203,9 @@ class App:
 
     async def day_report(self, day: str, send: bool = True) -> str:
         text = coach_day_report(self.db, self.ledger, self.edge, day, self.account_size(), self.cfg)
+        auto = self.autopilot.day_line(day)
+        if auto:
+            text += "\n" + auto
         if self.ai.ok and self.cfg.flag("AI"):
             lk = leaks(self.db, 30)
             notes = await self.ai.coach(f"{text}\n\n30-day groups: {dumps(lk['leaks'][:5] + lk['edges'][:3])}")

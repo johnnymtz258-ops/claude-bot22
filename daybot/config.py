@@ -60,7 +60,11 @@ SETTINGS = {s.name: s for s in (
     Setting("MORNING_PLAN_HHMM", 900, "Morning game plan time, New York time as HHMM (900 = 9:00am). 0 = off", 0, 929),
     Setting("EOD_REPORT", 1, "End-of-day report card after the close (1 = on)", 0, 1, True),
     # --- paper + backtest ----------------------------------------------------------------------------------------
-    Setting("PAPER_ACCOUNT", 25_000, "Paper autopilot account size ($): every setup alert is paper-traded as a market gauge", 1000, 10_000_000),
+    Setting("AUTOPILOT", 1, "Autopilot: a pretend account takes every trade the bot alerts you on, by itself, so you can see in dollars whether following DayBot makes money (1 = on)", 0, 1, True),
+    Setting("AUTOPILOT_START", 1000, "Autopilot's pretend starting balance ($) — used when it starts or you /autopilot reset", 100, 10_000_000),
+    Setting("AUTOPILOT_MAX_OPEN", 3, "Most autopilot trades open at once", 1, 20),
+    Setting("AUTOPILOT_NOTIFY", 1, "Tell me (silently) each time the autopilot buys and sells (1 = on)", 0, 1, True),
+    Setting("PAPER_ACCOUNT", 25_000, "Size the setup gauge uses internally ($; results are measured in R, so it barely matters)", 1000, 10_000_000),
     Setting("SLIPPAGE_PCT", 0.05, "Cost per side used by the backtest and paper (% of price: spread + slippage)", 0, 2),
     Setting("BACKTEST_DAYS", 60, "Trading days of history each setup is replayed over", 10, 250),
     # --- your trades ---------------------------------------------------------------------------------------------

@@ -35,7 +35,8 @@ HELP = f"""<b>📈 DayBot {VERSION}</b> — your day-trading assistant. It reads
 
 <b>Getting better</b>
 • /journal where your money leaks · /day report · /week
-• /setups what each setup has earned · /backtest re-test them · /paper the paper gauge
+• /autopilot the pretend account that follows every alert — is the bot making money?
+• /setups what each setup has earned · /backtest re-test them
 
 <b>Assistant</b>
 • /ask anything, or end a message with "?" — it answers from your live data
@@ -473,12 +474,30 @@ class Commands:
         return [reply(f"🧪 Backtest started: {self.app.cfg.get('BACKTEST_DAYS'):.0f} trading days of history. It takes a few "
                       "minutes; you'll get the results here.")]
 
-    async def cmd_paper(self, rest: str, now: float) -> list[dict]:
+    async def cmd_autopilot(self, rest: str, now: float) -> list[dict]:
+        ap = self.app.autopilot
+        words = rest.strip().lower().split()
+        if words and words[0] in {"reset", "restart", "start"}:
+            amount = num(words[1].replace("$", "").replace(",", "")) if len(words) > 1 else 0.0
+            amount = ap.reset(now, amount)
+            if not ap.on:
+                self.app.cfg.set("AUTOPILOT", "1")
+                self.app.db.set_meta("set:AUTOPILOT", "1")
+            return [reply(f"🤖 Autopilot starts over with a pretend {money(amount)}. It takes the next setup the bot "
+                          "alerts on and tells you each buy and sell.")]
+        if words and words[0] in {"off", "stop"}:
+            self.app.cfg.set("AUTOPILOT", "0")
+            self.app.db.set_meta("set:AUTOPILOT", "0")
+            return [reply("Autopilot off. /autopilot on turns it back on (the balance is kept).")]
+        if words and words[0] == "on":
+            self.app.cfg.set("AUTOPILOT", "1")
+            self.app.db.set_meta("set:AUTOPILOT", "1")
+        text = ap.text(now)
         st = self.app.paper.stats()
-        today = self.app.paper.stats(int(now) - int(now) % 86400 - 6 * 3600)
-        return [reply(f"<b>📄 Paper autopilot</b> (every setup alert, standard plan, costs included)\n"
-                      f"Balance {money(st['balance'])} · {st['n']} trades · {st['r']:+.1f}R · {st['won'] * 100:.0f}% won\n"
-                      f"Last day: {today['n']} trades, {today['r']:+.1f}R · open now: {st['open']}")]
+        if st["n"]:
+            text += (f"\n\n📊 Setup gauge (every signal, alerted or not): {st['n']} paper trades, {st['avg_r']:+.2f}R "
+                     f"avg, {st['won'] * 100:.0f}% won — /setups for each one")
+        return [reply(text)]
 
     # ---- the assistant ----------------------------------------------------------------------------------------
     async def cmd_ask(self, rest: str, now: float) -> list[dict]:
@@ -540,7 +559,8 @@ class Commands:
 
 ALIASES = {"c": "check", "edge": "setups", "gap": "gappers", "g": "gappers", "j": "journal", "leaks": "journal",
            "p": "plan", "report": "day", "pos": "positions", "acct": "accounts", "account": "accounts",
-           "settings": "rules", "health": "status", "q": "ask", "w": "watch", "today": "trades"}
+           "settings": "rules", "health": "status", "q": "ask", "w": "watch", "today": "trades",
+           "paper": "autopilot", "auto": "autopilot", "ap": "autopilot", "bot": "autopilot"}
 
 NO_DATA = ("Market data isn't connected. DayBot needs a free Alpaca account for prices: sign up at alpaca.markets, "
            "create paper-trading API keys, and put them in .env as ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY "

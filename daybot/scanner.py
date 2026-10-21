@@ -283,7 +283,9 @@ class Scanner:
                                   (int(now), day_of(now), sig.symbol, sig.setup, sig.direction, sig.entry, sig.stop,
                                    sig.t1, sig.t2, int(proven), int(silent or not send), sig.reason, dumps(sig.context),
                                    dumps(idea) if idea else ""))
-        self.paper.open(sig, alert_id, day_of(now))
+        follows = ((proven or self.cfg.flag("ALERT_UNPROVEN")) and st["status"] not in {"negative", "benched"}
+                   and (sig.direction == "long" or self.cfg.flag("SHORT_ALERTS")))
+        self.paper.open(sig, alert_id, day_of(now), auto=follows)       # the autopilot follows what you'd be sent
         for other in also or []:
             other_id = self.db.insert("""insert into alerts(ts, day, symbol, setup, direction, entry, stop, t1, t2, proven,
                                          silent, reason, context) values(?,?,?,?,?,?,?,?,?,?,1,?,?)""",
