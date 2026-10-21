@@ -34,11 +34,11 @@ It **never places a trade.** Market data is read-only, and your broker link is r
 ## Setup (about 10 minutes)
 
 1. **Alpaca:** at [alpaca.markets](https://alpaca.markets), sign up, switch to *Paper Trading*, open *API Keys* and click *Generate*. DayBot only reads prices with it.
-2. **SnapTrade:** at [snaptrade.com](https://snaptrade.com), choose *Personal* and copy the *Client ID* and *Consumer Key* from your dashboard.
+2. **SnapTrade:** at [dashboard.snaptrade.com](https://dashboard.snaptrade.com), sign up and verify your email. Create your *Personal* key (a *Client ID* and a *Consumer Key*, and save the Consumer Key because it's shown once), then connect Robinhood and Chase right there, read-only. You can also do this later with `/connect`.
 3. **A new Telegram bot for DayBot:** in Telegram, open @BotFather, send `/newbot`, copy the token, then open your new bot and press *Start*. It needs its own bot because two programs can't both read commands from one.
 4. *(optional)* **Claude:** at [console.anthropic.com](https://console.anthropic.com), open *API keys* and create one. It needs Python 3.10+; the start script finds it if you install Python from python.org.
 5. *(optional)* **Finnhub:** get a free key at [finnhub.io](https://finnhub.io) for earnings dates.
-6. Double-click **`start_daybot.command`**. The first time, it asks for the keys above and saves them in `.env`, the same file FomoBot uses.
+6. Unzip the new version **next to your current bot folder** (same parent folder), so it can copy FomoBot's Telegram and wallet settings over. Then double-click **`start_daybot.command`**. The first time, it asks for the keys above and saves them in `.env`, the same file FomoBot uses. If macOS blocks it, right-click it, choose *Open*, then *Open* again.
 7. In Telegram, send **`/connect`** to DayBot. Log in to Robinhood (you'll get a text code) and Chase, read-only. Then send `/accounts`.
 
 Check everything any time with `python3 daybot_doctor.py`.

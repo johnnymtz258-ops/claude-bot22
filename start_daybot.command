@@ -30,7 +30,12 @@ PY="./.venv-day/bin/python3"
   exit 1
 }
 
-# First run: ask for the keys
+# First run in a new folder: bring FomoBot's Telegram / wallet settings over from your previous bot folder
+# (same as start_mac.command does), so both bots share one .env
+if [ ! -f ".env" ]; then
+  "$PY" import_secrets.py || true
+fi
+# Then ask for DayBot's own keys
 if ! grep -q "^ALPACA_API_KEY_ID=." .env 2>/dev/null; then
   "$PY" daybot_setup.py
 fi
