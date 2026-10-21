@@ -11,7 +11,6 @@ Nothing here touches a real account. /autopilot shows it, /autopilot reset start
 """
 from __future__ import annotations
 
-import datetime as dt
 import time
 
 from .accounts import fmt_qty, size_shares
@@ -23,8 +22,8 @@ from .util import esc, money, num, pct, price as fmt_price, rmult
 LATE = 30 * 60
 JUDGE_AFTER = 20            # trades before the verdict means anything
 
-REASON = {"target": "hit the 2R target", "stop": "stopped out", "breakeven": "back to breakeven after half at 1R",
-          "time": "closed before the bell"}
+REASON = {"target": "half at the first target, the rest at the second", "stop": "stopped out",
+          "breakeven": "half at the first target, the rest back at breakeven", "time": "closed before the bell"}
 
 
 def plural(n: int, word: str) -> str:
@@ -136,8 +135,8 @@ class Autopilot:
         sent = 0
         for ev in events:
             t = ev["trade"]
-            if not t.get("auto") or ev["type"] == "skipped":
-                continue
+            if not t.get("auto") or ev["type"] not in ("entry", "close"):
+                continue                                  # the close says whether half was taken: 2 messages a trade
             text = self.note(ev)
             if text:
                 await self.notify(text, silent=True, kind="AUTO", symbol=t["symbol"],
@@ -163,8 +162,11 @@ class Autopilot:
         if ev["type"] == "close":
             pnl = num(t["pnl"])
             sm = self.summary(time.time(), light=True)
+            how = REASON.get(t["reason"], t["reason"])
+            if t.get("half_done") and t["reason"] == "time":
+                how = "half at the first target, the rest closed before the bell"
             return (f"{'🟩' if pnl >= 0 else '🟥'} <b>Autopilot closed {sym} {money(pnl, signed=True)}</b> "
-                    f"({rmult(t['r_mult'])}) — {esc(REASON.get(t['reason'], t['reason']))}\n"
+                    f"({rmult(t['r_mult'])}) — {esc(how)}\n"
                     f"Balance {money(sm['balance'])} ({pct(sm['return_pct'])}) · {plural(sm['n'], 'trade')}, "
                     f"{sm['won'] * 100:.0f}% won")
         return ""
@@ -307,6 +309,21 @@ class Autopilot:
         lines.append("\n" + esc(sm["verdict"]))
         lines.append("<i>/autopilot reset 1000 starts over with $1,000 · /set AUTOPILOT off stops it</i>")
         return "\n".join(lines)
+
+    def week_line(self, now: float) -> str:
+        """For Friday's weekly report."""
+        if not self.on or not self.since():
+            return ""
+        week = self.closed(max(self.since(), int(now) - 7 * 86400))
+        sm = self.summary(now, light=True)
+        if not week:
+            return f"🤖 Autopilot: no trades this week · balance {money(sm['equity'])} ({pct(sm['return_pct'])})"
+        pnl = sum(num(t["pnl"]) for t in week)
+        won = sum(1 for t in week if num(t["pnl"]) > 0)
+        spy = self.spy_change(int(now) - 7 * 86400, now)
+        return (f"🤖 Autopilot this week: {plural(len(week), 'trade')} ({won} won), {money(pnl, signed=True)}"
+                + (f" · SPY {pct(spy)}" if spy is not None else "")
+                + f" · balance {money(sm['equity'])} ({pct(sm['return_pct'])} since it started) — /autopilot")
 
     def day_line(self, day: str) -> str:
         """One line for the 4:10pm report."""

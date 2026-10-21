@@ -70,6 +70,8 @@ def test_the_autopilot_follows_the_alerts_with_pretend_money():
     text = asyncio.run(app.commands.text("/autopilot", at(DAY, "16:20")))[0]["text"]
     assert "Last trades" in text and "By setup" in text
     assert "Autopilot today" in app.notes.last("REPORT")["text"]
+    assert "Autopilot this week: 2 trades (2 won)" in app.autopilot.week_line(at(DAY, "16:20"))
+    assert len(notes) == 4                                                  # a buy and a close per trade
 
 
 def test_the_autopilot_respects_its_limits_and_resets():

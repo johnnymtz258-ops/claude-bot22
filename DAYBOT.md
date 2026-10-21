@@ -8,6 +8,7 @@ DayBot sits next to your Robinhood and Chase accounts and does the things a good
 - **Reads charts.** Send it a screenshot (Robinhood, TradingView, anything) and Claude reads it. The bot adds its own numbers for that ticker.
 - **Keeps your journal and tells you where the money leaks.** Losses get grouped by time of day, 0DTE, chasing, revenge, held past the stop, own ideas vs. setups, and so on. Each leak is ranked in dollars.
 - **Answers questions from your live data:** `/ask should I hold AMD into the close?`
+- **🤖 Autopilot: proves it with pretend money.** A pretend $1,000 account takes every trade the bot alerts you on, by itself, with the alert's plan and real costs, and tells you each buy and sell. After a couple of weeks you know in dollars whether following DayBot makes money, which setups do, and at what time of day, before you risk yours.
 
 It **never places a trade.** Market data is read-only, and your broker link is read-only.
 
@@ -58,7 +59,8 @@ In Telegram, `/status` shows what's connected.
 | 9:30–4:00 | ✅ proven setups ping you, 🧪 unproven ones arrive silently, 🆕 in-play stocks, 🔔 your price alerts |
 | any time you trade | 🧾 a check of your fill, a ✂️ note on trims, and a ✅/❌ recap on exits with what the stock did after you left |
 | while you hold | ⚠️ stop hit, 🎯 targets, 🟡 VWAP lost, ⏰ 15 minutes to the close, ⏰ a 0DTE running out of time |
-| **4:10** | 📒 **Day report:** P&L, rules broken, how the bot's setups did on paper (the market gauge), tomorrow's focus |
+| 9:30–3:55 | 🤖 the autopilot buys and sells the alerts on pretend money (silent messages) |
+| **4:10** | 📒 **Day report:** P&L, rules broken, how the bot's setups did on paper (the market gauge), the autopilot's day, tomorrow's focus |
 | Friday 4:20 | 📒 Week report |
 | Saturday | 🧪 Fresh backtest |
 
@@ -97,7 +99,21 @@ Every setup uses the same plan: take half at 1R and move the stop to break-even,
 
 **✅ Proven** means it made money after costs in **both halves** of the backtest, still did **without its 3 best trades**, and has **40+ trades**. The backtest replays the core liquid names every day, plus every stock on the days it gapped (rebuilt from history, not just today's movers). If a bar touches both the stop and the target, the stop is assumed to come first.
 
-Every alert, proven or not, is also **paper-traded** (`/paper`, `/setups`). If a proven setup starts losing on paper, it's **benched** and goes silent again. Setups that lose money in the backtest are never sent at all.
+Every signal, alerted or not, is also **paper-traded** (`/setups`). If a proven setup starts losing on paper, it's **benched** and goes silent again. A setup that **wins on paper by the same standard** (30+ trades, +0.12R or better on average, positive in both halves and without its 3 best) is promoted to **✅ proven live**, even if the backtest didn't prove it. Setups that lose money in the backtest are never sent, but paper keeps measuring them, so they can earn their way back.
+
+---
+
+## 🤖 The autopilot
+
+A pretend account (`AUTOPILOT_START`, $1,000 to begin with) that follows every alert the bot sends you, like FomoBot's paper autopilot:
+
+- **Buys** at the next minute's price after the alert, plus costs (`SLIPPAGE_PCT` each way).
+- **Sizes** like a real small account: 1% of its balance at risk at the stop, at most a third of the balance in one trade (so it can hold 3 at once), never more cash than it has, fractional shares when a whole one doesn't fit.
+- **Sells** half at the first target and moves the stop to breakeven, the rest at the second target, at the stop, or at 3:55pm. No new trades in the last 30 minutes.
+- Tells you each buy and close in Telegram (silent). `/autopilot` and the dashboard's Autopilot tab show the balance against simply holding SPY, results by setup and by time of day, and a plain verdict once there are 20+ trades.
+- `/autopilot reset 500` starts over with $500. `/autopilot off` stops it. It never touches a real account.
+
+Read it like this: if it's up after 20+ trades, the alerts are worth following, especially the setups marked ✅ on its page. If it's down, don't follow them blindly; follow only the setups that are green there, or none.
 
 `/setups` shows each one's record. `/backtest` re-runs the test any time.
 
@@ -115,12 +131,13 @@ Every alert, proven or not, is also **paper-traded** (`/paper`, `/setups`). If a
 | `/alert NVDA 141.50 note` · `/alert` · `/alert -3` | price alerts |
 | `/trades` `/positions` `/accounts` | your day, holdings, balances · `/accounts off 2`: an investing account stays synced but isn't day-trade checked |
 | `/journal [days]` `/day` `/week` | where the money leaks, reports |
-| `/setups` `/backtest` `/paper` | what the setups have earned |
+| `/autopilot` · `/autopilot reset 1000` · `/autopilot off` | the pretend account that follows every alert |
+| `/setups` `/backtest` | what the setups have earned |
 | `/ask …` or end a message with `?` | the assistant, using your live data |
 | `/rules` · `/set NAME value` | your rules and settings |
 | `/pause` `/resume` · `/connect` · `/status` · `/export` | |
 
-Dashboard: **http://localhost:8788** (only on your computer).
+Dashboard: **http://localhost:8788** (only on your computer). Tabs: **Today** (your numbers, a trade check box, alerts, open trades), **Autopilot**, **Market** (gappers, watchlist, click any ticker for its chart), **My trades** (journal, leaks, holdings, accounts), **Setups**, **Settings**.
 
 ---
 
@@ -136,6 +153,10 @@ Dashboard: **http://localhost:8788** (only on your computer).
 | `OPTIONS_MAX_PREMIUM_PCT` | 5 | most premium in one options trade |
 | `ALLOW_0DTE` | 0 | same-day expiry flagged (red after 2:30pm) |
 | `ACCOUNT_SIZE` | 0 | 0 = read from your broker |
+| `SHORT_ALERTS` | 0 | short setups stay on paper: Robinhood and Chase don't let you short stocks |
+| `AUTOPILOT` / `AUTOPILOT_START` | 1 / 1000 | the pretend account that follows the alerts |
+
+**Sizes fit your cash.** Alerts and checks size by your risk rule, then cap it at the cash you can actually buy with (the smaller of cash and buying power, so margin is never counted as your money). When a whole share doesn't fit, you get a fractional size (Robinhood and Chase both sell fractional shares of most stocks).
 
 `/rules` lists everything else (scanner filters, option filters, alert limits…).
 
@@ -145,6 +166,8 @@ Dashboard: **http://localhost:8788** (only on your computer).
 
 - **The $25K day-trading rule is gone.** FINRA replaced the pattern-day-trader rule with intraday margin standards on June 4, 2026, and Robinhood removed its day-trade limits on margin accounts. Brokers have until Oct 20, 2027 to switch over, so check your own broker. DayBot doesn't count day trades. It watches your size and your losses instead.
 - **Robinhood asks you to log in again every so often.** When the link breaks, DayBot tells you, and `/connect` fixes it.
+- **Crypto, cash sweeps and funds aren't day trades.** They're left out of checks and the journal. Leveraged and inverse ETFs (TQQQ, SOXL…) are left out of the gapper list: they "gap" every day only because the index moved.
+- **Cash accounts (like Chase) settle the next business day.** Money from a sale is usable to buy right away, but sell what you bought with it before it settles and you get a good-faith violation (three in a year restricts the account). With a small cash account, one round trip a day is the safe pace.
 - **Selling a holding from before DayBot** (stock you've had for months) is recognised as such: priced against your average cost, never mistaken for a short, and kept out of the day-trading journal.
 - **Fills arrive in seconds to a minute** through SnapTrade. The very first sync books your existing positions quietly. A fill DayBot only sees well after the fact (it was off) is booked and recapped, but not "checked".
 - **A backtest is not the future.** The labels say what the data showed after costs. Paper keeps measuring, and sizes stay your call.

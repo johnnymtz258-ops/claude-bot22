@@ -162,7 +162,9 @@ class App:
                 await self.day_report(day, send=True)
             if et(now).weekday() == 4 and now >= self.market.close_ts(day) + 1200 \
                     and self.db.once(f"week:{day}", int(now)):
-                await self.notify(week_report(self.db, 7, now), kind="REPORT")
+                week = week_report(self.db, 7, now)
+                auto = self.autopilot.week_line(now)
+                await self.notify(week + ("\n\n" + auto if auto else ""), kind="REPORT")
         quiet = session in {"closed", "post"} or (session == "pre" and now < at(day, "07:00"))
         if quiet:
             self._first_backtest(now)                   # first run: test the setups while the market is quiet
@@ -443,8 +445,10 @@ class App:
     async def startup_message(self, wait: float = 25) -> None:
         await asyncio.sleep(wait)                    # after the first real attempt to reach everything
         if self.db.once(f"hello:{VERSION}:{day_of(time.time())}", int(time.time())):
-            await self.notify(self.status_text(time.time()) + "\n\n/help for everything it does.", kind="START",
-                              silent=True)
+            text = self.status_text(time.time()) + "\n\n/help for everything it does."
+            if self.db.once(f"news:{VERSION}", int(time.time())):
+                text += "\n\n" + WHATS_NEW
+            await self.notify(text, kind="START", silent=True)
 
     async def run(self) -> None:
         tasks = [self.market_loop(), self.broker_loop(), self.telegram_loop(), self.startup_message()]
@@ -452,6 +456,15 @@ class App:
             from .dashboard import serve
             tasks.append(serve(self, self.cfg.dashboard_port))
         await asyncio.gather(*tasks)
+
+
+WHATS_NEW = ("<b>🆕 New in this version</b>\n"
+             "🤖 <b>Autopilot</b>: a pretend $1,000 account now takes every trade the bot alerts you on, by itself, and "
+             "tells you each buy and sell. In a couple of weeks you'll know in dollars whether following DayBot pays — "
+             "/autopilot\n"
+             "📊 A cleaner dashboard with tabs: http://localhost:8788\n"
+             "💼 Sizes now fit the cash you actually have (fractional shares when needed)\n"
+             "🧹 Crypto and long-term holdings are no longer treated as day trades; leveraged ETFs left out of gappers")
 
 
 def _ssl_context():
