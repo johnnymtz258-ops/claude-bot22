@@ -181,6 +181,7 @@ class SnapTrade:
         self.client_id, self.consumer_key = client_id, consumer_key
         self.user_id, self.user_secret = user_id, user_secret   # only for commercial keys
         self.base = BASE
+        self.last_connections: list[dict] = []
         self.last_ok = 0.0
         self.last_fail = 0.0
         self.last_error = ""
@@ -259,37 +260,66 @@ class SnapTrade:
                         "disabled": bool(c.get("disabled"))})
         return out
 
+    @staticmethod
+    def _investment(a: dict, institution: str) -> dict | None:
+        if str(a.get("kind") or "investment") != "investment":
+            return None                                 # bank / credit accounts aren't trading accounts
+        net = a.get("net_value") or {}
+        return {"id": str(a.get("id")), "name": str(a.get("display_name") or ""), "institution": institution,
+                "number": str(a.get("masked_account_number") or ""), "margin": str(a.get("cash_or_margin") or ""),
+                "total": num(net.get("amount") if isinstance(net, dict) else net)}
+
+    @staticmethod
+    def _legacy(a: dict, institution: str = "") -> dict:
+        bal = (a.get("balance") or {}).get("total") or {}
+        return {"id": str(a.get("id")), "name": str(a.get("name") or ""),
+                "institution": str(a.get("institution_name") or institution or ""), "number": str(a.get("number") or ""),
+                "margin": str(a.get("raw_type") or ""), "total": num(bal.get("amount") if isinstance(bal, dict) else bal)}
+
     async def accounts(self) -> list[dict]:
-        names = {}
-        try:
-            names = {c["id"]: c["name"] for c in await self.connections()}
-        except SnapTradeError:
-            pass
-        out = []
-        try:
-            data = await self._request("GET", "/accounts/all") or {}
-            for a in data.get("results") or []:
-                if str(a.get("kind") or "investment") != "investment":
-                    continue
-                net = a.get("net_value") or {}
-                out.append({"id": str(a.get("id")), "name": str(a.get("display_name") or ""),
-                            "institution": names.get(str(a.get("connection_id")), ""),
-                            "number": str(a.get("masked_account_number") or ""),
-                            "margin": str(a.get("cash_or_margin") or ""),
-                            "total": num(net.get("amount") if isinstance(net, dict) else net)})
-            if out:
-                return out
-        except SnapTradeError as exc:
-            if exc.status not in (404, 410):
-                raise
-        data = await self._request("GET", "/accounts") or []
-        for a in data if isinstance(data, list) else []:
-            bal = (a.get("balance") or {}).get("total") or {}
-            out.append({"id": str(a.get("id")), "name": str(a.get("name") or ""),
-                        "institution": str(a.get("institution_name") or ""), "number": str(a.get("number") or ""),
-                        "margin": str(a.get("raw_type") or ""),
-                        "total": num(bal.get("amount") if isinstance(bal, dict) else bal)})
-        return out
+        """Every trading account under your linked brokerages. Asks each connection directly first (live — a
+        brokerage linked a minute ago shows up), then the all-accounts list (refreshed once a day)."""
+        found: dict[str, dict] = {}
+        conns = await self.connections()                # bad keys raise here: nothing else would work either
+        self.last_connections = conns
+        for c in conns:
+            rows = None
+            try:
+                data = await self._request("GET", f"/connections/{c['id']}/accounts") or {}
+                rows = [x for x in (self._investment(a, c["name"]) for a in data.get("results") or []) if x]
+            except SnapTradeError as exc:
+                if exc.status in (0, 401):
+                    raise
+            if not rows:
+                try:
+                    data = await self._request("GET", f"/authorizations/{c['id']}/accounts") or []
+                    rows = [self._legacy(a, c["name"]) for a in data if isinstance(a, dict)] if isinstance(data, list) else []
+                except SnapTradeError as exc:
+                    if exc.status in (0, 401):
+                        raise
+            for a in rows or []:
+                found[a["id"]] = a
+        if not found:
+            names = {c["id"]: c["name"] for c in conns}
+            try:
+                data = await self._request("GET", "/accounts/all") or {}
+                for a in data.get("results") or []:
+                    x = self._investment(a, names.get(str(a.get("connection_id")), ""))
+                    if x:
+                        found[x["id"]] = x
+            except SnapTradeError as exc:
+                if exc.status in (0, 401):
+                    raise
+        if not found:
+            try:
+                data = await self._request("GET", "/accounts") or []
+                for a in data if isinstance(data, list) else []:
+                    x = self._legacy(a)
+                    found[x["id"]] = x
+            except SnapTradeError as exc:
+                if exc.status in (0, 401):
+                    raise
+        return list(found.values())
 
     async def balances(self, account_id: str) -> dict:
         data = await self._request("GET", f"/accounts/{account_id}/balances") or []

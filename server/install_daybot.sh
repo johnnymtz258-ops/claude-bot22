@@ -9,13 +9,14 @@ ME="$(id -un)"
 
 echo "📈 Installing DayBot in $DIR (as $ME)"
 PYBIN=python3
-for v in 3.13 3.12 3.11 3.10; do
+for v in 3.13 3.12 3.11 3.10 3.14 3.15; do
   if command -v "python$v" >/dev/null 2>&1; then PYBIN="python$v"; break; fi
 done
 [ -x .venv-day/bin/python3 ] || "$PYBIN" -m venv .venv-day
 PY="$DIR/.venv-day/bin/python3"
 "$PY" -m pip install -q --upgrade pip >/dev/null
 "$PY" -m pip install -q -r requirements-day.txt
+"$PY" -m pip install -q -r requirements-day-extras.txt || echo "(charts / Claude extras not installed — DayBot runs without them)"
 [ -f .env ] || "$PY" daybot_setup.py
 chmod 600 .env
 

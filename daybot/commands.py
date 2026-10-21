@@ -369,9 +369,32 @@ class Commands:
 
     async def cmd_accounts(self, rest: str, now: float) -> list[dict]:
         db = self.app.db
+        broker, cfg = self.app.broker, self.app.cfg
+        if not broker.ok:
+            if cfg.snaptrade_client_id and not cfg.snaptrade_consumer_key:
+                return [reply("DayBot has your SnapTrade Client ID but not the <b>Consumer Key</b>, so it can't read your "
+                              "accounts yet. Linking Robinhood / Chase on SnapTrade's site isn't enough by itself — the "
+                              "key is what lets DayBot in. Get it in the SnapTrade dashboard (after the 2-step code), then "
+                              "add it with daybot_setup.command and restart DayBot.")]
+            return [reply("SnapTrade isn't set up in DayBot yet — /connect explains the two keys it needs.")]
+        await broker.refresh_accounts(now)               # ask SnapTrade now, not at the next scheduled sync
         rows = db.rows("select * from accounts order by total desc")
         if not rows:
-            return [reply("No accounts yet." + ("" if self.app.broker.ok else " Connect them: /connect"))]
+            err = self.app.snap.last_error
+            if err and not self.app.snap.healthy:
+                return [reply(f"SnapTrade answered with an error: <code>{esc(err[:220])}</code>\nIf it says the "
+                              "signature or key is invalid, the Consumer Key was pasted wrong — add it again with "
+                              "daybot_setup.command and restart DayBot.")]
+            conns = getattr(self.app.snap, "last_connections", []) or []
+            if conns:
+                names = ", ".join(esc(c["name"] or "a brokerage") + (" (needs re-linking)" if c.get("disabled") else "")
+                                  for c in conns)
+                return [reply(f"SnapTrade sees your connection ({names}) but no trading account in it yet — it's "
+                              "usually still syncing right after you link. Send /accounts again in a few minutes. If a "
+                              "connection says it needs re-linking, tap /connect.")]
+            return [reply("Your SnapTrade keys work, but SnapTrade shows <b>no brokerage linked to these keys</b>. Tap "
+                          "/connect and link Robinhood / Chase there (read-only), then send /accounts again. (If you "
+                          "linked them on SnapTrade's website, it may have been under a different SnapTrade login.)")]
         parts = rest.split()
         if len(parts) == 2 and parts[0].lower() in {"on", "off"} and parts[1].isdigit() and 1 <= int(parts[1]) <= len(rows):
             acc = rows[int(parts[1]) - 1]

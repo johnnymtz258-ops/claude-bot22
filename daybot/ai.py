@@ -66,6 +66,20 @@ keep doing, the one habit costing the most money, one concrete thing to do tomor
 invent any. Kind but honest. Under 120 words, plain text."""
 
 
+def sniff_image(data: bytes) -> str:
+    """The real image type from its first bytes (a screenshot sent as a file is often PNG, not JPEG)."""
+    head = bytes(data[:12])
+    if head.startswith(b"\x89PNG"):
+        return "image/png"
+    if head.startswith(b"\xff\xd8"):
+        return "image/jpeg"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    if head[:4] == b"GIF8":
+        return "image/gif"
+    return ""
+
+
 class AI:
     def __init__(self, cfg, db):
         self.cfg, self.db = cfg, db
@@ -117,8 +131,8 @@ class AI:
                 # if Claude declines, the API retries on Anthropic's recommended fallback model
                 resp = await self.client.beta.messages.create(**params, betas=["server-side-fallback-2026-07-01"],
                                                               fallbacks="default")
-            except a.BadRequestError as exc:
-                if "fallback" not in str(exc).lower():
+            except (a.BadRequestError, TypeError) as exc:
+                if "fallback" not in str(exc).lower() and not isinstance(exc, TypeError):
                     raise
                 resp = await self.client.messages.create(**params)
         except a.AuthenticationError:
@@ -161,6 +175,7 @@ class AI:
                 "stop on every trade and at least 2:1 reward to risk")
 
     async def read_chart(self, image: bytes, media_type: str = "image/jpeg", question: str = "") -> dict | None:
+        media_type = sniff_image(image) or media_type
         prompt = "Read this chart."
         if question.strip():
             prompt += f" The trader asks: {question.strip()[:500]}"

@@ -100,9 +100,13 @@ def main(root: Path = ROOT, home: Path | None = None) -> int:
     found = [(p, read_env(p)) for p in candidates(root, home)]
     found = [(p, v) for p, v in found if v]
     fomo_from, fomo = best(found, FOMO_KEYS, "TELEGRAM_BOT_TOKEN", prefer="SOLANA_RPC_HTTP")
-    day_from, day = best(found, DAY_KEYS, "ALPACA_API_KEY_ID")
-    if not day_from:
-        day_from, day = best(found, DAY_KEYS, "DAY_TELEGRAM_BOT_TOKEN")
+    # DayBot's keys one by one, each from the newest folder that has it (a key added later in one folder counts)
+    day, day_from = {}, None
+    for path, values in sorted(found, key=lambda pv: _mtime(pv[0]), reverse=True):
+        for k in DAY_KEYS:
+            if values.get(k) and k not in day:
+                day[k] = values[k]
+                day_from = day_from or path
     if not fomo.get("MY_WALLETS") and fomo.get("PUBLIC_SOLANA_WALLET_ADDRESS"):
         fomo["MY_WALLETS"] = fomo["PUBLIC_SOLANA_WALLET_ADDRESS"]
     fomo.pop("PUBLIC_SOLANA_WALLET_ADDRESS", None)

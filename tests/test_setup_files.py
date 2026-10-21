@@ -71,3 +71,23 @@ def test_set_key_updates_in_place():
     assert out == ["# c", "TELEGRAM_BOT_TOKEN=t", "X=1"]
     out = imp.set_key(out, "ALPACA_API_KEY_ID", "a")
     assert out[-2:] == ["# --- DayBot ---", "ALPACA_API_KEY_ID=a"]
+
+
+def test_a_key_added_later_in_any_folder_is_found(tmp_path):
+    import os
+    import time as _t
+    old = _bot_folder(tmp_path, "DayBot", "ALPACA_API_KEY_ID=AK\nSNAPTRADE_CLIENT_ID=PERS-1\nSNAPTRADE_CONSUMER_KEY=CK-added\n",
+                      kind="day.py")
+    newer = _bot_folder(tmp_path, "DAYBOT_1_0", "ALPACA_API_KEY_ID=AK\nSNAPTRADE_CLIENT_ID=PERS-1\n", kind="day.py")
+    os.utime(old / ".env", (_t.time() - 3600, _t.time() - 3600))       # the folder with the key is the older one
+    new = _bot_folder(tmp_path, "DayBot_final", "ALPACA_API_KEY_ID=AK\nSNAPTRADE_CLIENT_ID=PERS-1\nSNAPTRADE_CONSUMER_KEY=\n",
+                      kind="day.py")
+    imp.main(new, home=tmp_path / "nohome")
+    assert imp.read_env(new / ".env")["SNAPTRADE_CONSUMER_KEY"] == "CK-added"
+    assert newer.exists()
+
+
+def test_screenshot_type_is_read_from_the_file():
+    from daybot.ai import sniff_image
+    assert sniff_image(b"\x89PNG\r\n\x1a\n....") == "image/png" and sniff_image(b"\xff\xd8\xff\xe0") == "image/jpeg"
+    assert sniff_image(b"RIFF1234WEBPVP8 ") == "image/webp" and sniff_image(b"hello") == ""

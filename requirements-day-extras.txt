@@ -1,0 +1,3 @@
+# DayBot extras — installed when they can be; DayBot runs without them
+matplotlib>=3.8          # chart pictures in Telegram and the dashboard
+anthropic>=1.17; python_version >= "3.10"   # Claude: chart screenshots, /ask, coach notes (needs ANTHROPIC_API_KEY)

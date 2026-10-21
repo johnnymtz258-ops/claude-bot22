@@ -86,25 +86,32 @@ def _get(url: str, headers: dict | None = None, timeout: float = 10):
         return json.loads(resp.read().decode() or "null")
 
 
-def find_chat_id(token: str) -> str:
-    try:
-        data = _get(f"https://api.telegram.org/bot{token}/getUpdates")
-    except Exception:
-        return ""
-    for u in reversed((data or {}).get("result") or []):
-        chat = ((u.get("message") or {}).get("chat") or {}).get("id")
-        if chat:
-            return str(chat)
-    return ""
+REQUIRED = ("ALPACA_API_KEY_ID", "ALPACA_API_SECRET_KEY", "SNAPTRADE_CLIENT_ID", "SNAPTRADE_CONSUMER_KEY",
+            "DAY_TELEGRAM_BOT_TOKEN")
 
 
 def main() -> None:
-    print("📈 DayBot setup — keys are saved only in .env on this computer. Press Enter to skip / keep.\n")
     lines = read_env()
+    first_run = not any(current(lines, k) for k in REQUIRED)
+    ask_all = first_run or "--all" in sys.argv
+    missing = [k for k in REQUIRED if not current(lines, k)]
+    if not ask_all and not missing:
+        print("📈 DayBot setup — everything DayBot needs is already saved.")
+        try:
+            again = input("   Change or add a key (Claude, Finnhub, watchlist…)? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            again = ""
+        if again not in {"y", "yes"}:
+            print("Nothing changed.")
+            return
+        ask_all = True
+    print("📈 DayBot setup — keys are saved only in .env on this computer. Press Enter to skip / keep.\n")
     for key, label, secret, intro in STEPS:
-        if intro:
-            print(intro)
         have = current(lines, key)
+        if not ask_all and (have or key not in REQUIRED):
+            continue                                    # only what's missing
+        if intro and ask_all:
+            print(intro)
         hint = " [saved — Enter keeps it]" if have else ""
         ask = getpass.getpass if secret else input
         try:
@@ -114,17 +121,6 @@ def main() -> None:
             break
         if value:
             lines = set_key(lines, key, value)
-    token = current(lines, "DAY_TELEGRAM_BOT_TOKEN")
-    if token and not current(lines, "DAY_TELEGRAM_CHAT_ID"):
-        chat = current(lines, "TELEGRAM_CHAT_ID")
-        if not chat:
-            input("\n   Send any message to your new DayBot in Telegram, then press Enter here…")
-            chat = find_chat_id(token)
-        if chat:
-            lines = set_key(lines, "DAY_TELEGRAM_CHAT_ID", chat)
-            print(f"   Telegram chat linked ({chat[:3]}…).")
-        else:
-            print("   Couldn't find your chat yet — start DayBot and message the bot; it will tell you the id.")
     ENV.write_text("\n".join(lines).strip() + "\n")
     try:
         os.chmod(ENV, 0o600)
@@ -135,7 +131,10 @@ def main() -> None:
     if current(lines, "ANTHROPIC_API_KEY") and sys.version_info < (3, 10):
         print("\n⚠️  Claude features need Python 3.10 or newer; this is " + sys.version.split()[0] + ".")
         print("   Install Python from python.org (3.12+), then start DayBot again — everything else works meanwhile.")
-    print("\nStart DayBot with start_daybot.command (or: python3 day.py). In Telegram: /help, then /connect.")
+    if os.environ.get("DAYBOT_FROM_LAUNCHER"):
+        print("\nStarting DayBot…")
+    else:
+        print("\nIf DayBot is running, press Control+C in its window, then double-click start_daybot.command again.")
 
 
 def check(lines: list[str]) -> None:

@@ -68,11 +68,13 @@ class BrokerSync:
                            updated=excluded.updated""",
                         (a["id"], a["name"], a["institution"], a["number"], a["margin"], a["total"],
                          num(bal.get("cash")), num(bal.get("buying_power")), int(now)))
-        try:
-            conns = await self.snap.connections()
-            self.disabled = [c["name"] or c["id"] for c in conns if c["disabled"]]
-        except SnapTradeError:
-            pass
+        conns = getattr(self.snap, "last_connections", None)
+        if conns is None:
+            try:
+                conns = await self.snap.connections()
+            except SnapTradeError:
+                conns = []
+        self.disabled = [c["name"] or c["id"] for c in conns if c.get("disabled")]
         if self.disabled and self.db.once(f"reconnect:{day_of(now)}", int(now)):
             await self.notify("⚠️ Your " + ", ".join(esc(x) for x in self.disabled) + " connection stopped syncing "
                               "(brokers ask you to log in again every so often). Send /connect to re-link it, read-only.",

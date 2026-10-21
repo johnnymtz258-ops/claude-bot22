@@ -163,3 +163,42 @@ def test_a_refusal_is_reported_not_crashed():
         return ai, out
     ai, out = asyncio.run(go())
     assert out is None and "declined" in ai.last_error
+
+
+def test_a_brokerage_linked_a_minute_ago_is_found_before_the_daily_list_has_it():
+    async def conns(req):
+        return web.json_response([{"id": "conn-1", "brokerage": {"name": "ROBINHOOD", "display_name": "Robinhood"},
+                                   "disabled": False}])
+
+    async def conn_accounts(req):
+        return web.json_response({"results": [
+            {"kind": "investment", "id": "acc-9", "connection_id": "conn-1", "masked_account_number": "****5678",
+             "display_name": "Robinhood Individual", "cash_or_margin": "margin", "net_value": {"amount": "12500.50",
+                                                                                               "currency": "USD"}},
+            {"kind": "deposit", "id": "bank-1", "connection_id": "conn-1"}]})
+
+    async def all_accounts(req):
+        return web.json_response({"results": []})          # SnapTrade's once-a-day list hasn't caught up yet
+
+    async def go(handlers):
+        server = serve(handlers)
+        await server.start_server()
+        async with aiohttp.ClientSession() as session:
+            st = SnapTrade(session, "PERS-1", "secret-key")
+            st.base = str(server.make_url("")).rstrip("/")
+            accounts = await st.accounts()
+        await server.close()
+        return st, accounts
+    st, accounts = asyncio.run(go({("GET", "/authorizations"): conns, ("GET", "/connections/conn-1/accounts"): conn_accounts,
+                                   ("GET", "/accounts/all"): all_accounts}))
+    assert accounts == [{"id": "acc-9", "name": "Robinhood Individual", "institution": "Robinhood",
+                         "number": "****5678", "margin": "margin", "total": 12500.5}]
+
+    async def none(req):
+        return web.json_response([])
+
+    async def empty(req):
+        return web.json_response({"results": []})
+    st, accounts = asyncio.run(go({("GET", "/authorizations"): none, ("GET", "/accounts/all"): empty,
+                                   ("GET", "/accounts"): none}))
+    assert accounts == [] and st.last_connections == []
