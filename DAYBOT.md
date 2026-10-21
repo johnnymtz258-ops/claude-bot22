@@ -41,7 +41,9 @@ It **never places a trade.** Market data is read-only, and your broker link is r
 6. Unzip the new version **next to your current bot folder** (same parent folder), so it can copy FomoBot's Telegram and wallet settings over. Then double-click **`start_daybot.command`**. The first time, it asks for the keys above and saves them in `.env`, the same file FomoBot uses. If macOS blocks it, right-click it, choose *Open*, then *Open* again.
 7. In Telegram, send **`/connect`** to DayBot. Log in to Robinhood (you'll get a text code) and Chase, read-only. Then send `/accounts`.
 
-Check everything any time with `python3 daybot_doctor.py`.
+To add or change a key later (say you skipped Claude), double-click **`daybot_setup.command`**. Keys you already entered show as *saved*, and Enter keeps them.
+
+In Telegram, `/status` shows what's connected.
 
 **First run:** the bot backtests its setups on the last 60 trading days, which takes a few minutes. Until a setup proves itself, its alerts come silently and are labelled 🧪 *unproven*.
 

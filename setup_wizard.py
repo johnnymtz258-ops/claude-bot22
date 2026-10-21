@@ -14,11 +14,14 @@ def main() -> None:
         "SOLANA_RPC_HTTP": getpass.getpass("Solana RPC link (free — see FREE_RPC.txt; recommended, hidden): ").strip(),
         "MY_WALLETS": input("Your PUBLIC wallet address for exact P/L (optional): ").strip(),
     }
-    lines = []
-    for line in (ROOT / ".env.example").read_text().splitlines():
-        key = line.split("=", 1)[0].strip() if "=" in line and not line.lstrip().startswith("#") else ""
-        lines.append(f"{key}={values[key]}" if values.get(key) else line)
-    (ROOT / ".env").write_text("\n".join(lines) + "\n")
+    env = ROOT / ".env"
+    # keep whatever is already in .env (DayBot's keys, for one): only the answers given here are changed
+    lines = env.read_text().splitlines() if env.exists() else (ROOT / ".env.example").read_text().splitlines()
+    from import_secrets import set_key
+    for key, value in values.items():
+        if value:
+            lines = set_key(lines, key, value)
+    env.write_text("\n".join(lines).rstrip() + "\n")
     print("\nSaved. You can edit .env any time.\n")
 
 

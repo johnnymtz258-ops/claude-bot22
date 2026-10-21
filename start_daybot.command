@@ -30,15 +30,15 @@ PY="./.venv-day/bin/python3"
   exit 1
 }
 
-# First run in a new folder: bring FomoBot's Telegram / wallet settings over from your previous bot folder
-# (same as start_mac.command does), so both bots share one .env
-if [ ! -f ".env" ]; then
-  "$PY" import_secrets.py || true
-fi
-# Then ask for DayBot's own keys
-if ! grep -q "^ALPACA_API_KEY_ID=." .env 2>/dev/null; then
-  "$PY" daybot_setup.py
-fi
+# Bring over settings you already entered in another bot folder (only what's missing here)
+"$PY" import_secrets.py >/dev/null 2>&1 || true
+# Ask for DayBot's keys while one it needs is still missing (Enter skips; double-click daybot_setup.command to change them)
+for key in ALPACA_API_KEY_ID SNAPTRADE_CLIENT_ID DAY_TELEGRAM_BOT_TOKEN; do
+  if ! grep -q "^$key=." .env 2>/dev/null; then
+    "$PY" daybot_setup.py
+    break
+  fi
+done
 
 echo
 echo "Dashboard: http://localhost:8788   ·   Telegram: /help   ·   link your broker: /connect"

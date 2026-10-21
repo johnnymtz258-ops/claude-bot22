@@ -31,12 +31,11 @@ fi
   exit 1
 }
 
-# First run: bring over Telegram/Helius/wallet settings from the previous bot folder, or ask.
-if [ ! -f ".env" ]; then
-  "$PY" import_secrets.py
-  if [ $? -eq 2 ]; then
-    "$PY" setup_wizard.py
-  fi
+# Bring over the settings you already have in another bot folder (Telegram, RPC, wallets, DayBot keys) — only
+# what's missing here. Ask only if there's still no Telegram bot token.
+"$PY" import_secrets.py
+if [ $? -eq 2 ]; then
+  "$PY" setup_wizard.py
 fi
 
 # Live-autopilot support (signing swaps). Optional: if it can't install, everything else still runs.
