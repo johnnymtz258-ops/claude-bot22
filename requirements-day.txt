@@ -1,0 +1,4 @@
+# DayBot (stocks + options day-trading assistant). Same base as FomoBot plus:
+-r requirements.txt
+matplotlib>=3.8          # chart pictures in Telegram and the dashboard
+anthropic>=1.0; python_version >= "3.10"   # optional: chart screenshots, /ask, coach notes (needs ANTHROPIC_API_KEY)

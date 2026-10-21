@@ -13,3 +13,7 @@ keypair*.json
 exports/
 .pytest_cache/
 FomoBot_review.zip
+.venv-day/
+daybot.log*
+bot.log*
+daybot_review_*.zip

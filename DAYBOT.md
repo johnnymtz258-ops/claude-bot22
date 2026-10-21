@@ -1,0 +1,152 @@
+# 📈 DayBot — your day-trading assistant (stocks + options)
+
+DayBot sits next to your Robinhood and Chase accounts and does the things a good trading partner would:
+
+- **Checks every trade you make, the moment it fills.** It gives a 🔴 / 🟡 / 🟢 verdict with a stop, targets and a size check. It catches chasing, fighting VWAP, revenge trades, the daily loss limit, oversized trades, wide option spreads, thin open interest and late-day 0DTE.
+- **Finds what's in play before you'd see it.** It builds a gapper list with the headline behind each move, and every 10 minutes during the session it flags new stocks waking up on heavy volume.
+- **Watches for setups with a measured record.** These are opening-range breakouts, VWAP reclaims, gap-and-go, and the *second leg* (pump → orderly pullback → next leg). Every alert comes with a chart, entry, stop, targets, share size for your risk, and a defined-risk option idea.
+- **Reads charts.** Send it a screenshot (Robinhood, TradingView, anything) and Claude reads it. The bot adds its own numbers for that ticker.
+- **Keeps your journal and tells you where the money leaks.** Losses get grouped by time of day, 0DTE, chasing, revenge, held past the stop, own ideas vs. setups, and so on. Each leak is ranked in dollars.
+- **Answers questions from your live data:** `/ask should I hold AMD into the close?`
+
+It **never places a trade.** Market data is read-only, and your broker link is read-only.
+
+---
+
+## What it costs
+
+| Piece | What for | Cost |
+|---|---|---|
+| Alpaca | prices, charts, history, option quotes | **free** |
+| SnapTrade | reading your Robinhood / Chase trades | **free** (personal use) |
+| Telegram | messages and commands | free |
+| Claude (optional) | chart screenshots, /ask, coach notes | pay as you go, a few cents per chart read |
+| Finnhub (optional) | earnings dates | free |
+| Alpaca Algo Trader Plus (optional, later) | full-market real-time data | $99/month — not needed to start |
+
+**Free data, honestly:**
+- Real-time prices come from IEX, one exchange. That's fine for prices and patterns, but IEX volume is only a slice of the market. The bot always compares IEX volume with past IEX volume, so relative volume still works.
+- The full market, including the premarket, is 15 minutes late. That's why the gapper scan is complete by about 9:15 and the premarket high is exact from 9:46.
+- Free option quotes are "indicative" (estimates). Alerts and checks say so: confirm the real bid/ask in your app before you buy.
+
+---
+
+## Setup (about 10 minutes)
+
+1. **Alpaca:** at [alpaca.markets](https://alpaca.markets), sign up, switch to *Paper Trading*, open *API Keys* and click *Generate*. DayBot only reads prices with it.
+2. **SnapTrade:** at [snaptrade.com](https://snaptrade.com), choose *Personal* and copy the *Client ID* and *Consumer Key* from your dashboard.
+3. **A new Telegram bot for DayBot:** in Telegram, open @BotFather, send `/newbot`, copy the token, then open your new bot and press *Start*. It needs its own bot because two programs can't both read commands from one.
+4. *(optional)* **Claude:** at [console.anthropic.com](https://console.anthropic.com), open *API keys* and create one. It needs Python 3.10+; the start script finds it if you install Python from python.org.
+5. *(optional)* **Finnhub:** get a free key at [finnhub.io](https://finnhub.io) for earnings dates.
+6. Double-click **`start_daybot.command`**. The first time, it asks for the keys above and saves them in `.env`, the same file FomoBot uses.
+7. In Telegram, send **`/connect`** to DayBot. Log in to Robinhood (you'll get a text code) and Chase, read-only. Then send `/accounts`.
+
+Check everything any time with `python3 daybot_doctor.py`.
+
+**First run:** the bot backtests its setups on the last 60 trading days, which takes a few minutes. Until a setup proves itself, its alerts come silently and are labelled 🧪 *unproven*.
+
+---
+
+## Your day with DayBot (New York time)
+
+| When | What you get |
+|---|---|
+| 7:00–9:30 | Gapper scan every 10 minutes |
+| **9:00** | 🌅 **Game plan:** market tone, which setups the data backs, gappers with headline, levels and an if-then plan, your positions, and your rules in dollars |
+| 9:30–4:00 | ✅ proven setups ping you, 🧪 unproven ones arrive silently, 🆕 in-play stocks, 🔔 your price alerts |
+| any time you trade | 🧾 a check of your fill, a ✂️ note on trims, and a ✅/❌ recap on exits with what the stock did after you left |
+| while you hold | ⚠️ stop hit, 🎯 targets, 🟡 VWAP lost, ⏰ 15 minutes to the close, ⏰ a 0DTE running out of time |
+| **4:10** | 📒 **Day report:** P&L, rules broken, how the bot's setups did on paper (the market gauge), tomorrow's focus |
+| Friday 4:20 | 📒 Week report |
+| Saturday | 🧪 Fresh backtest |
+
+---
+
+## Reading a trade check
+
+```
+🧾 You bought 60 GAPR @ $107.50 · 🔴 AVOID
+GAPR $107.50 · +7.5% today · VWAP $106.72 · vol 4.1×
+🔴 Revenge trade? You took a loss on GAPR 5 min ago
+🟢 Above VWAP $106.72, not stretched
+🟢 In play: 4.1× normal volume
+🟢 Size OK: $49.28 at risk (0.2% of the account)
+🎯 Plan: stop $106.68 on GAPR (just past VWAP $106.72) · take half $108.32 · rest $109.14 · out by 3:55pm
+```
+
+- 🔴 **AVOID:** breaks one of your rules, or it's the kind of trade that loses money (a dilution headline, an untradeable option, a late 0DTE…).
+- 🟡 **CAREFUL:** a risk you can manage with size and the plan.
+- 🟢 **CLEAN:** none of the traps the bot can see. That isn't a promise it works.
+
+Options checks also look at the bid/ask spread, open interest, delta (lottery tickets), the move needed to break even versus what the market expects, time decay per day, IV, and earnings before expiry.
+
+---
+
+## The setups, and why you can trust the labels
+
+| Setup | What it is |
+|---|---|
+| Opening-range breakout | First close beyond the first 15 minutes' range, with VWAP and volume behind it |
+| VWAP reclaim / rejection | A stock on the right side of yesterday's close dips through VWAP and takes it back on volume |
+| Gap-and-go | A gapper's first close through its premarket high (or low), in the first hour, in play |
+| **Second leg** (bull/bear flag) | A strong first leg, an orderly pullback on lighter volume that holds VWAP, then the break of the flag |
+
+Every setup uses the same plan: take half at 1R and move the stop to break-even, take the rest at 2R, and be out by 3:55.
+
+**✅ Proven** means it made money after costs in **both halves** of the backtest, still did **without its 3 best trades**, and has **40+ trades**. The backtest replays the core liquid names every day, plus every stock on the days it gapped (rebuilt from history, not just today's movers). If a bar touches both the stop and the target, the stop is assumed to come first.
+
+Every alert, proven or not, is also **paper-traded** (`/paper`, `/setups`). If a proven setup starts losing on paper, it's **benched** and goes silent again. Setups that lose money in the backtest are never sent at all.
+
+`/setups` shows each one's record. `/backtest` re-runs the test any time.
+
+---
+
+## Commands
+
+| Command | |
+|---|---|
+| `NVDA`, `NVDA 140c 10/24`, `TSLA short 50 @250` | check a trade (just paste it) |
+| 📷 *send a screenshot* | Claude reads the chart (add a question as the caption) |
+| `/chart NVDA [1\|5\|15]` | today's chart with VWAP and levels |
+| `/plan` `/gappers` `/alerts` | the game plan, gappers, today's setups |
+| `/watch NVDA AMD` · `/watch -NVDA` | stocks always watched |
+| `/alert NVDA 141.50 note` · `/alert` · `/alert -3` | price alerts |
+| `/trades` `/positions` `/accounts` | your day, holdings, balances · `/accounts off 2`: an investing account stays synced but isn't day-trade checked |
+| `/journal [days]` `/day` `/week` | where the money leaks, reports |
+| `/setups` `/backtest` `/paper` | what the setups have earned |
+| `/ask …` or end a message with `?` | the assistant, using your live data |
+| `/rules` · `/set NAME value` | your rules and settings |
+| `/pause` `/resume` · `/connect` · `/status` · `/export` | |
+
+Dashboard: **http://localhost:8788** (only on your computer).
+
+---
+
+## Your rules (change with `/set`)
+
+| Setting | Default | |
+|---|---|---|
+| `RISK_PER_TRADE_PCT` | 1 | most you mean to lose on one trade, as % of the account |
+| `DAILY_MAX_LOSS_PCT` | 3 | done for the day at this loss |
+| `MAX_TRADES_PER_DAY` | 6 | past this, it's overtrading |
+| `LOSS_STREAK_BREAK` / `BREAK_MINUTES` | 2 / 30 | after 2 losses in a row, take a 30-minute break |
+| `REVENGE_MINUTES` | 15 | re-entering a loser this soon is flagged |
+| `OPTIONS_MAX_PREMIUM_PCT` | 5 | most premium in one options trade |
+| `ALLOW_0DTE` | 0 | same-day expiry flagged (red after 2:30pm) |
+| `ACCOUNT_SIZE` | 0 | 0 = read from your broker |
+
+`/rules` lists everything else (scanner filters, option filters, alert limits…).
+
+---
+
+## Good to know
+
+- **The $25K day-trading rule is gone.** FINRA replaced the pattern-day-trader rule with intraday margin standards on June 4, 2026, and Robinhood removed its day-trade limits on margin accounts. Brokers have until Oct 20, 2027 to switch over, so check your own broker. DayBot doesn't count day trades. It watches your size and your losses instead.
+- **Robinhood asks you to log in again every so often.** When the link breaks, DayBot tells you, and `/connect` fixes it.
+- **Selling a holding from before DayBot** (stock you've had for months) is recognised as such: priced against your average cost, never mistaken for a short, and kept out of the day-trading journal.
+- **Fills arrive in seconds to a minute** through SnapTrade. The very first sync books your existing positions quietly. A fill DayBot only sees well after the fact (it was off) is booked and recapped, but not "checked".
+- **A backtest is not the future.** The labels say what the data showed after costs. Paper keeps measuring, and sizes stay your call.
+
+## Running it on your server
+
+`send_to_server.command` installs DayBot next to FomoBot once your Alpaca keys are in `.env`. It runs as its own service (`daybot`). `open_server_dashboard.command` opens both dashboards: DayBot's is at http://localhost:8798.

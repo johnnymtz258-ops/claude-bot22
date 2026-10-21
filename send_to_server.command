@@ -56,7 +56,8 @@ fi
 
 echo "Copying the bot to the server (your .env goes over an encrypted connection)..."
 ssh "${SSH_OPTS[@]}" "$SERVER" 'command -v rsync >/dev/null || (sudo apt-get install -y -qq rsync || sudo dnf install -y -q rsync) >/dev/null 2>&1'
-if ! rsync -az --exclude .venv --exclude __pycache__ --exclude 'bot.log*' --exclude '*.zip' --exclude .DS_Store \
+if ! rsync -az --exclude .venv --exclude .venv-day --exclude __pycache__ --exclude 'bot.log*' --exclude 'daybot.log*' \
+     --exclude '*.zip' --exclude .DS_Store \
      -e "ssh ${SSH_OPTS[*]}" ./ "$SERVER:fomobot/"; then
   echo "❌ Copying failed."; pause; exit 1
 fi
@@ -83,6 +84,11 @@ fi
 TZ_NAME="$(readlink /etc/localtime 2>/dev/null | sed 's#.*zoneinfo/##')"
 echo "Installing on the server..."
 ssh -t "${SSH_OPTS[@]}" "$SERVER" "cd fomobot && FOMO_TZ='$TZ_NAME' bash server/install.sh"
+# DayBot (stocks + options) too, once its market-data keys are in .env
+if grep -q "^ALPACA_API_KEY_ID=." .env 2>/dev/null; then
+  echo "Installing DayBot on the server..."
+  ssh -t "${SSH_OPTS[@]}" "$SERVER" "cd fomobot && bash server/install_daybot.sh"
+fi
 echo
 echo "Done. Telegram says where it's running. Your Mac can sleep now."
 echo "Dashboard: double-click open_server_dashboard.command · Log: server_log.command"

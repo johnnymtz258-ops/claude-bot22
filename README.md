@@ -1,4 +1,11 @@
-# 🐋 FomoBot Whale Copy
+# 🐋 FomoBot Whale Copy  ·  📈 DayBot
+
+> **New: DayBot**, a day-trading assistant for stocks and options that lives in the same folder. It reads your
+> Robinhood / Chase trades (read-only), checks every trade the moment it fills, finds gappers and in-play stocks,
+> alerts setups that have a measured record, reads your chart screenshots, and keeps a journal that ranks
+> where your money leaks. It never places a trade. Start it with `start_daybot.command`; everything is in
+> **[DAYBOT.md](DAYBOT.md)**.
+
 
 Copy-trading whales into coins early — but only the whales you can actually copy at human speed.
 
