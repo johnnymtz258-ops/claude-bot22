@@ -11,7 +11,9 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 
+from .accounts import account_size, fmt_qty, size_shares, spendable
 from .alpaca import AlpacaError, parse_ts, snap_price
 from .backtest import UNIVERSE, Edge, describe
 from .bars import C, T, V, rvol
@@ -22,6 +24,13 @@ from .setups import Day, Signal, detect, label
 from .util import big, dumps, esc, loads, money, num, pct, price as fmt_price
 
 ALWAYS = ["SPY", "QQQ"]
+# 2x / 3x / inverse funds: they "gap" every day only because an index or one stock moved, and decay when held
+LEVERED = set("""TQQQ SQQQ SOXL SOXS TNA TZA UVXY UVIX SVXY SPXL SPXS SPXU UPRO SDS SSO QLD QID LABU LABD FAS FAZ TECL
+TECS FNGU FNGD YINN YANG NUGT DUST JNUG JDST BOIL KOLD UCO SCO TMF TMV TSLL TSLQ TSLZ TSLS NVDL NVDX NVDQ NVD NVDU
+MSTU MSTX MSTZ CONL AMDL AAPU GGLL METU AMZU MSFU BITX BITU ETHU SBIT DPST WEBL WEBS HIBL HIBS CURE DRN DRV TSLT
+NAIL ERX ERY GUSH DRIP UDOW SDOW URTY SRTY PLTU SMCX MUU ARMG""".split())
+LEVERED_NAME = re.compile(r"\b\d(\.\d+)?x\b|ultrapro|ultrashort|proshares ultra|\binverse\b|\bleveraged\b|"
+                          r"daily target|\bbear\b.*\b(etf|shares|fund)\b|\bbull\b.*\b(etf|shares|fund)\b", re.I)
 DISCOVER_PER_DAY = 8
 
 
@@ -41,6 +50,22 @@ class Scanner:
         rows = self.db.rows("select symbol from watch where day=? order by score desc", (day,))
         syms = list(dict.fromkeys(ALWAYS + list(self.cfg.watchlist) + self.extra + [r["symbol"] for r in rows]))
         return syms[: max(int(self.cfg.get("WATCH_MAX")), len(ALWAYS) + len(self.extra))]
+
+    async def levered(self, symbol: str) -> bool:
+        """A leveraged or inverse fund? Known list first, then the fund's name from Alpaca (asked once, kept)."""
+        if symbol in LEVERED:
+            return True
+        if symbol in self.cfg.watchlist:
+            return False                                    # you asked for it: keep it
+        key = f"asset_name:{symbol}"
+        name = self.db.get_meta(key, None)
+        if name is None:
+            try:
+                name = str((await self.data.alpaca.asset(symbol)).get("name") or "")
+            except (AlpacaError, AttributeError):
+                return False                                # couldn't ask: keep it, ask again next time
+            self.db.set_meta(key, name)
+        return bool(LEVERED_NAME.search(name))
 
     def _reset(self, day: str) -> None:
         if self.day != day:
@@ -102,7 +127,13 @@ class Scanner:
                         "pml": min((b[3] for b in rows), default=0.0), "pdh": daily[-1][2], "pdl": daily[-1][3],
                         "score": score, "open": session_open})
         out.sort(key=lambda g: -g["score"])
-        top = out[:15]
+        top = []
+        for g in out:
+            if len(top) >= 15:
+                break
+            if g["symbol"] not in self.cfg.watchlist and await self.levered(g["symbol"]):
+                continue
+            top.append(g)
         for g in top:
             try:
                 news = catalysts(await self.data.news(g["symbol"], 30), g["symbol"])
@@ -158,6 +189,7 @@ class Scanner:
                 continue
             found.append({"symbol": s, "chg": chg, "price": px, "rvol": rv, "score": abs(chg) * min(rv, 8)})
         found.sort(key=lambda f: -f["score"])
+        found = [f for f in found if not await self.levered(f["symbol"])]
         for f in found[:3]:
             news = catalysts(await self.data.news(f["symbol"], 24), f["symbol"])
             cat = main_catalyst(news)
@@ -228,7 +260,7 @@ class Scanner:
             return None
         budget = (account or self.cfg.get("PAPER_ACCOUNT")) * self.cfg.get("RISK_PER_TRADE_PCT") / 100
         idea["size"] = size_contracts(idea, sig.risk, budget, account or self.cfg.get("PAPER_ACCOUNT"),
-                                      self.cfg.get("OPTIONS_MAX_PREMIUM_PCT"))
+                                      self.cfg.get("OPTIONS_MAX_PREMIUM_PCT"), spendable(self.db) if account else None)
         return idea
 
     async def alert(self, sig: Signal, now: float, account: float = 0.0, also: list[Signal] | None = None) -> int:
@@ -240,9 +272,11 @@ class Scanner:
         send = self.cfg.flag("ALERTS_ENABLED") and (proven or self.cfg.flag("ALERT_UNPROVEN"))
         if st["status"] in {"negative", "benched"}:
             send = False                                # known losers: paper only
+        if sig.direction == "short" and not self.cfg.flag("SHORT_ALERTS"):
+            send = False                                # your broker can't short: paper only unless you turn it on
         if send and not silent and self._too_many(sig, now):
             silent = True
-        account = account or num(self.db.scalar("select max(total) from accounts"), 0) or self.cfg.get("ACCOUNT_SIZE")
+        account = account or account_size(self.db, self.cfg)
         idea = await self.option_idea(sig, now, account) if send else None
         alert_id = self.db.insert("""insert into alerts(ts, day, symbol, setup, direction, entry, stop, t1, t2, proven,
                                      silent, reason, context, option_idea) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
@@ -261,7 +295,7 @@ class Scanner:
         self.db.event(int(now), "SETUP", f"{sig.symbol} {sig.label}: {sig.reason}", sig.symbol)
         if not send:
             return alert_id
-        text = format_alert(sig, st, idea, account, self.cfg, now, also)
+        text = format_alert(sig, st, idea, account, self.cfg, now, also, cash=spendable(self.db))
         photo = None
         if self.charts:
             photo = self.charts.render(sig.symbol, self.data.bars1(sig.symbol), day_of(now), self.market,
@@ -280,7 +314,7 @@ RANK = {"proven": 0, "promising": 1, "untested": 2, "thin": 3, "negative": 4, "b
 
 
 def format_alert(sig: Signal, st: dict, idea: dict | None, account: float, cfg, now: float,
-                 also: list[Signal] | None = None) -> str:
+                 also: list[Signal] | None = None, cash: float | None = None) -> str:
     icon = "🟢 LONG" if sig.direction == "long" else "🔴 SHORT"
     badge = "✅ proven setup" if st["status"] == "proven" else "🧪 unproven — paper is measuring it, size small"
     lines = [f"<b>{icon} {esc(sig.symbol)} · {esc(sig.label)}</b>", badge, esc(sig.reason[:1].upper() + sig.reason[1:])]
@@ -291,9 +325,16 @@ def format_alert(sig: Signal, st: dict, idea: dict | None, account: float, cfg, 
                  f"${risk:.2f}/share) · half at {fmt_price(sig.t1)} (1R) · rest {fmt_price(sig.t2)} (2R) · out by 3:55pm")
     if account and risk > 0:
         budget = account * cfg.get("RISK_PER_TRADE_PCT") / 100
-        shares = int(budget // risk)
-        lines.append(f"💼 At your {cfg.get('RISK_PER_TRADE_PCT'):g}% risk ({money(budget)}): {shares} shares "
-                     f"(~{money(shares * sig.entry)})")
+        sz = size_shares(budget, risk, sig.entry, cash)
+        if sz["capped"] and sz["shares"] <= 0:
+            lines.append(f"💼 You have {money(cash or 0)} free to buy with — not enough for this one. Watch it or "
+                         "follow it on paper")
+        elif sz["capped"]:
+            lines.append(f"💼 Your {money(cash)} cash buys {fmt_qty(sz['shares'])} shares (~{money(sz['cost'])}, "
+                         f"{money(sz['risk_usd'])} at risk at the stop)")
+        elif sz["shares"] > 0:
+            lines.append(f"💼 At your {cfg.get('RISK_PER_TRADE_PCT'):g}% risk ({money(budget)}): "
+                         f"{fmt_qty(sz['shares'])} shares (~{money(sz['cost'])})")
     if idea:
         sz = idea.get("size") or {}
         txt = (f"🎟 Option idea: {esc(idea['underlying'])} {idea['expiry'][5:].replace('-', '/')} {idea['strike']:g}"
@@ -301,6 +342,8 @@ def format_alert(sig: Signal, st: dict, idea: dict | None, account: float, cfg, 
                f"{idea['spread_pct']:.0f}%" + (f", OI {big(idea['oi'])}" if idea.get("oi", -1) >= 0 else "") + ")")
         if sz.get("contracts"):
             txt += f" → {sz['contracts']} contract{'s' if sz['contracts'] != 1 else ''} ≈ {money(sz['loss_at_stop'])} at the stop"
+        elif sz.get("premium_each"):
+            txt += f" → 1 contract ≈ {money(sz['premium_each'])}: too big for your account right now"
         txt += " · free-feed quote: confirm the real bid/ask in your app"
         lines.append(txt)
     lines.append(f"📊 Record: {describe(st)}")

@@ -25,7 +25,16 @@ from .options import occ, parse_occ
 from .util import num
 
 BASE = "https://api.snaptrade.com"
-STOCK_KINDS = {"stock", "adr", "etf", "mutualfund", "cef", "equity", "cs", "et", "ps"}
+STOCK_KINDS = {"stock", "adr", "etf", "cef", "equity", "cs", "et", "ps"}
+# SnapTrade security type codes DayBot treats as day-tradable (cs stock, et ETF, ad ADR, ps preferred, cef closed-end
+# fund). Crypto, mutual / money-market funds (cash sweeps), bonds, warrants etc. are left out.
+TRADABLE_TYPES = {"cs", "et", "ad", "ps", "cef"}
+# Robinhood crypto shows up with the coin as its symbol — and several of these are ALSO stock tickers (BTC and ETH are
+# crypto ETFs), so a coin must never be looked up as a stock.
+KNOWN_CRYPTO = {"BTC", "ETH", "SOL", "DOGE", "SHIB", "AAVE", "LTC", "BCH", "ETC", "XRP", "ADA", "AVAX", "LINK", "UNI",
+                "XLM", "COMP", "BSV", "PEPE", "XTZ", "USDC", "ARB", "OP", "POL", "MATIC", "DOT", "ATOM", "BONK", "WIF",
+                "TRUMP", "HBAR", "SUI", "TON", "NEAR", "APT", "XCN", "MEW", "MOODENG", "PENGU", "FLOKI", "ONDO", "CRV",
+                "QNT", "SEI", "RENDER", "VIRTUAL", "WLFI", "HYPE", "PNUT", "USDT", "AVNT", "LINEA", "ENA", "TRX", "BNB"}
 
 
 class SnapTradeError(Exception):
@@ -82,6 +91,30 @@ def side_effect(action: str) -> tuple[str, str]:
     return side, effect
 
 
+def type_code(value) -> str:
+    """SnapTrade's security type code ('cs', 'et', 'crypto'…) from a symbol object, or '' when not given."""
+    if isinstance(value, dict):
+        t = value.get("type")
+        if isinstance(t, dict):
+            return str(t.get("code") or "").strip().lower()
+        for key in ("symbol", "universal_symbol"):
+            inner = value.get(key)
+            if isinstance(inner, dict):
+                code = type_code(inner)
+                if code:
+                    return code
+    return ""
+
+
+def tradable(symbol: str, code: str, extra_crypto_hint: bool = False) -> bool:
+    """A stock / ETF DayBot should follow (not crypto, not a cash sweep or mutual fund)."""
+    if not symbol or "-" in symbol or "/" in symbol:
+        return False
+    if code:
+        return code in TRADABLE_TYPES
+    return not (extra_crypto_hint or symbol in KNOWN_CRYPTO)
+
+
 def normalize_order(o: dict, account_id: str) -> dict | None:
     """One executed order -> a fill dict (filled quantity at the average execution price)."""
     filled = num(o.get("filled_quantity"))
@@ -100,8 +133,9 @@ def normalize_order(o: dict, account_id: str) -> dict | None:
         fill.update(kind="option", **_occ_from(opt))
     else:
         sym = _sym(o.get("universal_symbol")) or _sym(o.get("symbol"))
-        if not sym:
-            return None
+        code = type_code(o.get("universal_symbol")) or type_code(o.get("symbol"))
+        if not tradable(sym, code, bool(o.get("quote_universal_symbol"))):
+            return None                                  # crypto, a cash sweep, a fund: not a day trade
         fill.update(kind="stock", symbol=sym, underlying=sym, option_type="", strike=0.0, expiry="", multiplier=1.0)
     return fill
 
@@ -136,7 +170,7 @@ def normalize_activity(a: dict, account_id: str) -> dict | None:
         if kind not in {"BUY", "SELL"}:
             return None
         sym = _sym(a.get("symbol"))
-        if not sym:
+        if not tradable(sym, type_code(a.get("symbol")), bool(a.get("currency_universal_symbol"))):
             return None
         fill.update(kind="stock", symbol=sym, underlying=sym, option_type="", strike=0.0, expiry="", multiplier=1.0)
     if price <= 0:
@@ -164,7 +198,9 @@ def normalize_position(r: dict, account_id: str) -> dict | None:
                 "kind": "option", "option_type": o["option_type"], "strike": o["strike"], "expiry": o["expiry"],
                 "qty": units, "avg_price": avg, "price": price, "multiplier": mult}
     if kind and kind not in STOCK_KINDS:
-        return None                                   # crypto, bonds, futures: not what DayBot trades
+        return None                                   # crypto, funds, bonds, futures: not what DayBot trades
+    if r.get("cash_equivalent"):
+        return None                                   # a cash sweep / money-market fund
     sym = _sym(inst) or _sym(r.get("symbol") or {})
     if not sym:
         return None

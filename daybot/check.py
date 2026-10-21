@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime as dt
 import time
 
+from .accounts import account_size, fmt_qty, size_shares, spendable
 from .alpaca import snap_price, snap_spread_pct
 from .backtest import describe
 from .bars import H, L, T, nearest_levels, resample, split_day
@@ -71,14 +72,7 @@ class TradeCheck:
         self.earnings = earnings
 
     def account_size(self, account_id: str | None = None) -> float:
-        fixed = self.cfg.get("ACCOUNT_SIZE")
-        if fixed > 0:
-            return fixed
-        if account_id:
-            v = num(self.db.scalar("select total from accounts where id=?", (account_id,)))
-            if v > 0:
-                return v
-        return num(self.db.scalar("select max(total) from accounts"), 0)
+        return account_size(self.db, self.cfg, account_id)
 
     def matching_alert(self, symbol: str, direction: str, ts: int, minutes: int = 20) -> dict | None:
         return self.db.row("""select * from alerts where symbol=? and direction=? and ts between ? and ?
@@ -205,8 +199,15 @@ class TradeCheck:
             px = num(req.get("price")) or und
             plan["entry"] = px
             plan["risk_usd"] = qty * abs(px - plan["stop"]) if qty else 0.0
+            before = req.get("source") != "fill" and not req.get("closing")      # asking before you buy
+            cash = spendable(self.db, req.get("account_id")) if before else None
             if account and plan["risk_ps"] > 0:
-                plan["max_qty"] = int(account * self.cfg.get("RISK_PER_TRADE_PCT") / 100 // plan["risk_ps"])
+                sz = size_shares(account * self.cfg.get("RISK_PER_TRADE_PCT") / 100, plan["risk_ps"], px, cash)
+                plan.update(max_qty=sz["shares"], max_by_risk=sz["by_risk"], cash=cash, capped=sz["capped"],
+                            max_risk=sz["risk_usd"])
+            if before and qty and cash is not None and direction == "long" and qty * px > cash * 1.01 + 1:
+                add(items, RED, f"{fmt_qty(qty)} shares cost {money(qty * px)} — you have {money(cash)} to buy with",
+                    "no_cash")
         if qty and account and plan.get("risk_usd"):
             budget = account * self.cfg.get("RISK_PER_TRADE_PCT") / 100
             share = plan["risk_usd"] / account * 100
@@ -331,6 +332,14 @@ class TradeCheck:
             if qty:
                 plan["risk_usd"] = max(loss_each, 0) * 100 * qty
         premium = (num(req.get("price")) or mid) * 100 * qty
+        if req.get("source") != "fill" and not req.get("closing") and mid > 0:
+            cash = spendable(self.db, req.get("account_id"))
+            each = (num(req.get("price")) or num(q.get("ask")) or mid) * 100
+            if cash is not None and each > cash:
+                add(items, RED, f"One contract costs {money(each)} — you have {money(cash)} to buy with", "no_cash")
+            elif cash is not None and qty and each * qty > cash * 1.01 + 1:
+                add(items, RED, f"{qty:g} contracts cost {money(each * qty)} — you have {money(cash)} to buy with",
+                    "no_cash")
         if qty and account and premium:
             share = premium / account * 100
             cap = self.cfg.get("OPTIONS_MAX_PREMIUM_PCT")
@@ -387,8 +396,13 @@ def format_check(res: dict, header: str = "") -> str:
                    f"first target — or cut it at −35% of the premium, whichever comes first")
         if plan.get("risk_usd"):
             ln += f"\n   At risk if the stop hits: {money(plan['risk_usd'])}"
+        elif plan.get("capped") and plan.get("cash") is not None:
+            ln += (f"\n   Size: your {money(plan['cash'])} cash buys {fmt_qty(plan['max_qty'])} shares"
+                   + (f" ({money(plan['max_risk'])} at risk at the stop)" if plan["max_qty"] else "")
+                   + f" — your risk rule would allow {fmt_qty(plan['max_by_risk'])}")
         elif plan.get("max_qty"):
-            ln += f"\n   Max size at your risk rule: {plan.get('max_qty')} shares"
+            ln += (f"\n   Size: up to {fmt_qty(plan['max_qty'])} shares at your risk rule "
+                   f"({money(plan.get('max_risk', 0))} at risk at the stop)")
         if plan.get("next_level") and res.get("kind") == "stock":
             name, lvl = plan["next_level"]
             if s * (lvl - res["und_price"]) > 0:

@@ -10,7 +10,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from daybot.alpaca import SIP_DELAY, Alpaca, parse_ts
-from daybot.snaptrade import SnapTrade, normalize_order, sign
+from daybot.snaptrade import SnapTrade, normalize_activity, normalize_order, normalize_position, sign
 
 
 def serve(handler_map):
@@ -66,6 +66,28 @@ def test_snaptrade_option_order_and_unknown_shapes():
     f = normalize_order(o, "a")
     assert f["kind"] == "option" and f["effect"] == "close" and f["symbol"] == "NVDA261023C00140000" and f["multiplier"] == 100
     assert normalize_order({"status": "EXECUTED", "action": "BUY"}, "a") is None
+
+
+def test_crypto_and_cash_sweeps_are_not_day_trades():
+    base = {"brokerage_order_id": "c1", "status": "EXECUTED", "action": "BUY", "filled_quantity": "0.01",
+            "execution_price": "60000", "time_executed": "2026-10-21T15:00:00Z"}
+    btc = {**base, "universal_symbol": {"symbol": "BTC", "type": {"code": "crypto"}}}
+    assert normalize_order(btc, "a") is None
+    assert normalize_order({**base, "universal_symbol": {"symbol": "DOGE"}}, "a") is None          # no type: known coin
+    assert normalize_order({**base, "universal_symbol": {"symbol": "ETH-USD"}}, "a") is None
+    assert normalize_order({**base, "universal_symbol": {"symbol": "SPAXX", "type": {"code": "oef"}}}, "a") is None
+    stock = normalize_order({**base, "universal_symbol": {"symbol": "AMD", "type": {"code": "cs"}}}, "a")
+    assert stock["symbol"] == "AMD" and stock["kind"] == "stock"
+    etf = normalize_order({**base, "universal_symbol": {"symbol": "VOO", "type": {"code": "et"}}}, "a")
+    assert etf["symbol"] == "VOO"
+    act = {"id": "9", "type": "BUY", "units": 0.5, "price": 2.0, "trade_date": "2026-10-21T15:00:00Z",
+           "symbol": {"symbol": "SHIB", "type": {"code": "crypto"}}}
+    assert normalize_activity(act, "a") is None
+    act["symbol"] = {"symbol": "SOFI", "type": {"code": "cs"}}
+    assert normalize_activity(act, "a")["symbol"] == "SOFI"
+    pos = {"instrument": {"symbol": "SPAXX", "kind": "equity"}, "units": 55, "price": 1, "cash_equivalent": True}
+    assert normalize_position(pos, "a") is None
+    assert normalize_position({"instrument": {"symbol": "BTC", "kind": "crypto"}, "units": 0.1, "price": 1}, "a") is None
 
 
 def test_alpaca_pages_and_respects_the_free_plan():

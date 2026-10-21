@@ -8,7 +8,9 @@ from aiohttp import web
 from . import VERSION
 from .clock import clock_text, day_of
 from .coach import leaks
+from .accounts import spendable
 from .config import SETTINGS
+from .ledger import NOT_HOLDING
 from .setups import label
 
 
@@ -17,13 +19,24 @@ def state(app, now: float | None = None) -> dict:
     day = day_of(now)
     st = app.ledger.day_state(day)
     account = app.account_size()
-    trades = app.db.rows("select * from trades where day=? or (status='closed' and closed_ts>=?) order by opened_ts",
-                         (day, int(now) - 86400))
+    trades = app.db.rows(f"""select * from trades where (day=? or (status='closed' and closed_ts>=?)) and {NOT_HOLDING}
+                             order by opened_ts""", (day, int(now) - 86400))
     trades = [t for t in trades if t["day"] == day or day_of(t["closed_ts"] or 0) == day]
     open_rows = []
-    for t in app.db.rows("select * from trades where status='open' order by opened_ts"):
+    for t in app.db.rows(f"select * from trades where status='open' and {NOT_HOLDING} order by opened_ts"):
         px = app.data.last_price(t["underlying"])
         open_rows.append({**t, "und_now": px})
+    holdings = []
+    for h in app.db.rows("""select p.*, a.institution, a.number, coalesce(a.checks, 1) as checks from positions p
+                            left join accounts a on a.id=p.account_id where p.qty != 0
+                            order by abs(p.qty * p.price * p.multiplier) desc limit 40"""):
+        mult = h["multiplier"] or 1
+        value = h["qty"] * (h["price"] or 0) * mult
+        pnl = (h["price"] - h["avg_price"]) * h["qty"] * mult if h["avg_price"] and h["price"] else None
+        holdings.append({"symbol": h["symbol"], "underlying": h["underlying"], "kind": h["kind"], "qty": h["qty"],
+                         "avg": h["avg_price"], "price": h["price"], "value": value, "pnl": pnl,
+                         "account": f"{h['institution'] or ''} {('····' + str(h['number'])[-4:]) if h['number'] else ''}".strip(),
+                         "investing": not h["checks"]})
     alerts = []
     for a in app.db.rows("select * from alerts where day=? order by ts desc limit 40", (day,)):
         p = app.db.row("select status, r_mult from paper where alert_id=?", (a["id"],)) or {}
@@ -39,9 +52,10 @@ def state(app, now: float | None = None) -> dict:
     table = app.edge.table()
     return {
         "version": VERSION, "now": int(now), "session": app.market.session(now), "account": account,
+        "cash": spendable(app.db), "holdings": holdings,
         "accounts": app.db.rows("select * from accounts order by total desc"),
         "rules": {k: app.cfg.get(k) for k in ("RISK_PER_TRADE_PCT", "DAILY_MAX_LOSS_PCT", "MAX_TRADES_PER_DAY")},
-        "today": {**{k: v for k, v in st.items() if k != "last_loss"}, "trades": trades},
+        "today": {k: v for k, v in st.items() if k != "last_loss"}, "trade_list": trades,
         "open": open_rows, "alerts": alerts, "gappers": app.scanner.gappers(day)[:12], "watch": watch,
         "setups": [{"label": r["label"], "status": r["status"], "bt": r["backtest"], "paper": r["paper"]} for r in table],
         "paper": app.paper.stats(), "journal": lk,
@@ -75,7 +89,8 @@ button{cursor:pointer}button:hover{border-color:#3b4b60}.feed div{padding:5px 0;
 <div class="dim" id="rules" style="margin-top:8px"></div></section>
 <section class="card"><h2>Check a trade</h2><form id="cf"><input id="ct" placeholder="NVDA · NVDA 140c 10/24 · TSLA short 50 @250" style="width:72%">
 <button>Check</button></form><div id="checkout"></div></section>
-<section class="card"><h2>Open trades vs plan</h2><div class="scroll"><table id="open"></table></div></section>
+<section class="card"><h2>Open day trades vs plan</h2><div class="scroll"><table id="open"></table></div></section>
+<section class="card"><h2>What you own (long-term)</h2><div class="scroll"><table id="holdings"></table></div></section>
 <section class="card"><h2>Setup alerts today</h2><div class="scroll"><table id="alerts"></table></div></section>
 <section class="card"><h2>Watchlist</h2><div class="scroll"><table id="watch"></table></div></section>
 <section class="card"><h2>Chart</h2><div id="chart" class="dim">Click a symbol.</div></section>
@@ -91,6 +106,8 @@ button{cursor:pointer}button:hover{border-color:#3b4b60}.feed div{padding:5px 0;
 <script>
 const $=id=>document.getElementById(id);
 const f2=v=>v==null||v===''?'—':(+v).toFixed(2);
+const lvl=v=>v?(+v).toFixed(2):'—';
+const qty=v=>v==null?'—':String(+(+v).toFixed(4));
 const money=v=>v==null?'—':((v<0?'-':(v>0?'+':''))+'$'+Math.abs(v).toLocaleString(undefined,{maximumFractionDigits:2}));
 const cls=v=>v>0?'up':(v<0?'down':'');
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -98,10 +115,11 @@ const sym=s=>`<a class="sym" data-s="${esc(s)}">${esc(s)}</a>`;
 const tm=ts=>new Date(ts*1000).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'});
 function rows(id,head,list,fn){$(id).innerHTML='<tr>'+head.map(h=>`<th>${h}</th>`).join('')+'</tr>'+(list.length?list.map(fn).join(''):`<tr><td class="dim" colspan="${head.length}">nothing yet</td></tr>`)}
 async function load(){const r=await fetch('/api/state');const s=await r.json();
-$('hdr').textContent=`v${s.version} · market ${s.session} · account ${s.account?money(s.account).replace('+',''):'not synced'}`;
+$('hdr').textContent=`v${s.version} · market ${s.session} · account ${s.account?money(s.account).replace('+',''):'not synced'}`+(s.cash!=null?` · cash to trade ${money(s.cash).replace('+','')}`:'');
 const t=s.today;$('pnl').textContent=money(t.realized);$('pnl').className='big '+cls(t.realized);$('ntr').textContent=t.trades;$('streak').textContent=t.streak;
 $('rules').textContent=`Rules: risk ${s.rules.RISK_PER_TRADE_PCT}% a trade · stop the day at -${s.rules.DAILY_MAX_LOSS_PCT}% · max ${s.rules.MAX_TRADES_PER_DAY} trades`;
-rows('open',['What','Side','Qty','Entry','Now','Stop','T1','T2'],s.open,o=>`<tr><td>${sym(o.underlying)} ${o.kind=='option'?esc(o.symbol):''}</td><td>${o.direction}</td><td>${o.open_qty}</td><td>${f2(o.entry_avg)}</td><td>${f2(o.und_now)}</td><td class="down">${f2(o.plan_stop)}</td><td class="up">${f2(o.plan_t1)}</td><td class="up">${f2(o.plan_t2)}</td></tr>`);
+rows('open',['What','Side','Qty','Entry','Now','Stop','T1','T2'],s.open,o=>`<tr><td>${sym(o.underlying)} ${o.kind=='option'?esc(o.symbol):''}</td><td>${o.direction}</td><td>${qty(o.open_qty)}</td><td>${f2(o.entry_avg)}</td><td>${lvl(o.und_now)}</td><td class="down">${lvl(o.plan_stop)}</td><td class="up">${lvl(o.plan_t1)}</td><td class="up">${lvl(o.plan_t2)}</td></tr>`);
+rows('holdings',['What','Qty','Avg','Now','Value','P&L','Account'],s.holdings,h=>`<tr><td>${sym(h.underlying)} ${h.kind=='option'?esc(h.symbol):''}</td><td>${qty(h.qty)}</td><td>${lvl(h.avg)}</td><td>${f2(h.price)}</td><td>${money(h.value).replace('+','')}</td><td class="${cls(h.pnl)}">${money(h.pnl)}</td><td class="dim">${esc(h.account)}${h.investing?' · investing':''}</td></tr>`);
 rows('alerts',['Time','','Symbol','Setup','Entry','Stop','Paper'],s.alerts,a=>`<tr><td>${a.time}</td><td>${a.proven?'✅':'🧪'}</td><td>${sym(a.symbol)}</td><td>${esc(a.label)}</td><td>${f2(a.entry)}</td><td>${f2(a.stop)}</td><td class="${cls(a.paper_r)}">${a.paper=='closed'?(+a.paper_r).toFixed(2)+'R':(a.paper||'')}</td></tr>`);
 rows('watch',['Symbol','Price','Chg','VWAP','Vol×','PM high','Y high'],s.watch,w=>`<tr><td>${sym(w.symbol)}</td><td>${f2(w.price)}</td><td class="${cls(w.chg)}">${w.chg==null?'—':w.chg.toFixed(1)+'%'}</td><td>${f2(w.vwap)}</td><td>${w.rvol?w.rvol.toFixed(1):'—'}</td><td>${f2(w.pmh)}</td><td>${f2(w.pdh)}</td></tr>`);
 rows('gappers',['Symbol','Gap','Price','PM vol','Catalyst'],s.gappers,g=>`<tr><td>${sym(g.symbol)}</td><td class="${cls(g.gap)}">${g.gap.toFixed(1)}%</td><td>${f2(g.price)}</td><td>${Math.round(g.pm_vol/1000)}K</td><td class="dim">${esc((g.catalyst||{}).headline||'').slice(0,60)}</td></tr>`);
@@ -112,7 +130,7 @@ const j=s.journal,jt=j.total;let jh=jt.n?`<div>${jt.n} trades · <b class="${cls
 if(j.leaks.length)jh+='<div style="margin-top:6px"><b>Leaks</b></div>'+j.leaks.map(g=>`<div class="down">🔻 ${esc(g.name)} — ${g.n} trades, ${money(g.pnl)}</div>`).join('');
 if(j.edges.length)jh+='<div style="margin-top:6px"><b>What works</b></div>'+j.edges.map(g=>`<div class="up">🔹 ${esc(g.name)} — ${g.n} trades, ${money(g.pnl)}</div>`).join('');
 $('journal').innerHTML=jh;
-rows('trades',['Opened','What','Side','P&L','R'],t.trades,x=>`<tr><td>${tm(x.opened_ts)}</td><td>${sym(x.underlying)} ${x.kind=='option'?esc(x.symbol):''}</td><td>${x.direction}</td><td class="${cls(x.pnl)}">${x.status=='closed'?money(x.pnl):'open'}</td><td>${x.r_mult==null?'':(+x.r_mult).toFixed(2)}</td></tr>`);
+rows('trades',['Opened','What','Side','Qty','P&L','R'],s.trade_list,x=>`<tr><td>${tm(x.opened_ts)}</td><td>${sym(x.underlying)} ${x.kind=='option'?esc(x.symbol):''}</td><td>${x.direction}</td><td>${qty(x.qty)}</td><td class="${cls(x.pnl)}">${x.status=='closed'?money(x.pnl):'open'}</td><td>${x.r_mult==null?'':(+x.r_mult).toFixed(2)}</td></tr>`);
 $('feed').innerHTML=s.feed.map(e=>`<div><span class="dim">${tm(e.ts)} ${esc(e.kind)}</span> ${esc(e.text)}</div>`).join('')||'<div class="dim">quiet</div>';
 $('status').textContent=s.status.replace(/<[^>]+>/g,'');
 rows('settings',['Setting','Value','What it does'],s.settings,x=>`<tr><td><code>${x.name}</code></td><td><input data-n="${x.name}" value="${x.value}" size="8"></td><td class="dim" style="white-space:normal">${esc(x.help)}</td></tr>`);}

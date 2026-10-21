@@ -64,8 +64,8 @@ def test_a_proven_setup_pings_with_size_and_an_option_idea():
     _walk(app, "10:40", "11:00")
     msg = next(m for m in app.notes.sent if m["kind"] == "SETUP" and m["symbol"] == "TEST")
     assert not msg["silent"] and "✅ proven setup" in msg["text"]
-    assert "At your 1% risk" in msg["text"] and "Option idea: TEST 10/23 103C" in msg["text"]
-    assert "backtest 90 trades" in msg["text"]
+    assert "Option idea: TEST 10/23 103C" in msg["text"] and "backtest 90 trades" in msg["text"]
+    assert "Your $10,000 cash buys 9" in msg["text"]        # 1% risk would be ~400 shares: more than the cash buys
 
 
 def test_known_losers_are_paper_only():
@@ -75,6 +75,79 @@ def test_known_losers_are_paper_only():
     _walk(app, "10:40", "11:00")
     assert not [m for m in app.notes.sent if m["kind"] == "SETUP" and m["symbol"] == "TEST"]
     assert app.db.scalar("select count(*) from paper where symbol='TEST'") == 1
+
+
+def test_short_setups_stay_on_paper_unless_you_turn_them_on():
+    from daybot.setups import Signal
+    app = _day_app()
+    app.db.insert("""insert into backtests(ts, setup, direction, n, won, avg_r, total_r, pf, half1, half2, no_best,
+                     max_dd, status, days) values(1, 'vwap', 'short', 90, .52, .21, 19, 1.5, .2, .22, .15, -5, 'proven', 60)""")
+    now = at(DAY, "10:30")
+    sig = Signal("vwap", "short", "TEST", int(now), 100.0, 101.0, 99.0, 98.0, "lost VWAP")
+    asyncio.run(app.scanner.alert(sig, now))
+    assert not [m for m in app.notes.sent if m["kind"] == "SETUP"]
+    assert app.db.scalar("select count(*) from paper where symbol='TEST'") == 1        # still measured
+    app.cfg.set("SHORT_ALERTS", "1")
+    asyncio.run(app.scanner.alert(Signal("vwap", "short", "TEST", int(now) + 600, 100.0, 101.0, 99.0, 98.0, "x"),
+                                  now + 600))
+    assert [m for m in app.notes.sent if m["kind"] == "SETUP"]
+
+
+def test_leveraged_and_inverse_funds_are_not_gappers():
+    app = _day_app()
+    names = {"XYZU": "Defiance Daily Target 2X Long XYZ ETF", "UCTT": "Ultra Clean Holdings, Inc. Common Stock"}
+    asked = []
+
+    async def asset(sym):
+        asked.append(sym)
+        return {"name": names.get(sym, "")}
+    app.data.alpaca.asset = asset
+    assert asyncio.run(app.scanner.levered("TQQQ")) and asyncio.run(app.scanner.levered("XYZU"))
+    assert not asyncio.run(app.scanner.levered("UCTT"))
+    asyncio.run(app.scanner.levered("UCTT"))
+    assert asked == ["XYZU", "UCTT"]                                     # asked once, then remembered
+
+
+def test_market_wraps_are_not_the_catalyst():
+    from daybot.news import catalysts, main_catalyst
+    items = [{"headline": "Stocks making the biggest moves premarket: NVDA, TSLA, AMD, SOFI and more",
+              "symbols": ["NVDA", "TSLA", "AMD", "SOFI", "PLTR"], "created_at": "2026-10-21T12:00:00Z"},
+             {"headline": "Morning wrap: tech leads as yields fall", "symbols": ["AAPL", "MSFT", "SOFI", "NVDA", "AMD"],
+              "created_at": "2026-10-21T13:00:00Z"},
+             {"headline": "SoFi Technologies raises full-year guidance", "symbols": ["SOFI"],
+              "created_at": "2026-10-21T11:00:00Z"}]
+    assert main_catalyst(catalysts(items, "SOFI"))["headline"] == "SoFi Technologies raises full-year guidance"
+    assert catalysts(items, "TSLA") == []
+
+
+def test_an_old_journal_is_rebuilt_once_with_the_new_rules():
+    from tests.day_helpers import stock_fill
+    app = _day_app()
+    acc = "acc1"
+    app.ledger.apply(app.ledger.add_fill(stock_fill("x", "BUY", 1, 60000.0, at(DAY, "10:00"), "BTC", acc)))
+    app.db.set_meta("ledger_version", "1")
+    app.db.set_meta("history_done", "1")
+    app.db.insert("insert into accounts(id, name, checks) values('acc1', 'Brokerage', 0)")
+    app.broker._rebuild_if_old()
+    assert app.db.scalar("select count(*) from trades") == 0 and app.db.scalar("select count(*) from fills") == 0
+    assert not app.db.get_meta("history_done") and app.db.get_meta("ledger_version") == app.broker.LEDGER_VERSION
+    assert app.db.scalar("select checks from accounts where id='acc1'") == 0          # your choices are kept
+    app.ledger.apply(app.ledger.add_fill(stock_fill("y", "BUY", 1, 10.0, at(DAY, "10:00"), "F", acc)))
+    app.broker._rebuild_if_old()                                                     # only once
+    assert app.db.scalar("select count(*) from trades") == 1
+
+
+def test_what_you_bought_before_is_a_holding_not_an_open_day_trade():
+    from tests.day_helpers import stock_fill
+    app = _day_app()
+    asyncio.run(app.broker.refresh_accounts(at(DAY, "09:00")))
+    acc = app.db.scalar("select id from accounts limit 1")
+    app.snap.history_list = [stock_fill("h1", "BUY", 3, 400.0, at(DAY, "10:00") - 30 * 86400, "VOO", acc)]
+    assert asyncio.run(app.broker.backfill(at(DAY, "09:30"))) == 1
+    t = app.db.row("select * from trades where symbol='VOO'")
+    from daybot.ledger import is_holding
+    assert t["status"] == "open" and is_holding(t)
+    assert app.ledger.day_state(DAY)["open"] == 0 and "VOO" not in app.monitor.symbols()
 
 
 def test_in_play_discovery_adds_a_mover():
@@ -176,6 +249,7 @@ def test_dashboard_state_and_routes():
     st = state(app, at(DAY, "11:00"))
     json.dumps(st, default=str)
     assert st["alerts"] and st["watch"] and len(st["setups"]) == 8 and st["settings"]
+    assert isinstance(st["today"]["trades"], int) and isinstance(st["trade_list"], list)    # a count, not a list
 
     async def go():
         client = TestClient(TestServer(make_web(app)))
@@ -190,6 +264,26 @@ def test_dashboard_state_and_routes():
     page, api, chk, bad, good = asyncio.run(go())
     assert "DayBot" in page and api["version"] and "Check · TEST" in chk["html"]
     assert not bad["ok"] and good["ok"] and app.cfg.get("RISK_PER_TRADE_PCT") == 0.75
+
+
+def test_dashboard_keeps_what_you_own_apart_from_day_trades():
+    from daybot.dashboard import state
+    from tests.day_helpers import stock_fill
+    app = _day_app()
+    asyncio.run(app.broker.refresh_accounts(at(DAY, "09:00")))
+    acc = app.db.scalar("select id from accounts limit 1")
+    led = app.ledger
+    led.apply(led.add_fill(stock_fill("old", "BUY", 2, 400.0, at(DAY, "10:00") - 40 * 86400, "VOO", acc)))
+    led.mark_holdings(at(DAY, "00:00"))
+    app.db.run("""insert into positions(account_id, key, symbol, underlying, kind, qty, avg_price, price, multiplier,
+                  updated) values(?, 'VOO', 'VOO', 'VOO', 'stock', 2.123456789, 400, 410, 1, 0)""", (acc,))
+    led.apply(led.add_fill(stock_fill("d1", "BUY", 10, 100.0, at(DAY, "10:05"), "TEST", acc)))
+    st = state(app, at(DAY, "10:30"))
+    assert [o["underlying"] for o in st["open"]] == ["TEST"]
+    assert [t["underlying"] for t in st["trade_list"]] == ["TEST"] and st["today"]["trades"] == 1
+    voo = next(h for h in st["holdings"] if h["symbol"] == "VOO")
+    assert abs(voo["pnl"] - 2.123456789 * 10) < 1e-6 and not voo["investing"]
+    assert st["cash"] == 10_000.0
 
 
 def test_backtest_command_runs_in_the_background():

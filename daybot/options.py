@@ -160,8 +160,10 @@ def pick_idea(chain: dict[str, dict], open_interest: dict[str, float], direction
     return best
 
 
-def size_contracts(idea: dict, stock_risk: float, risk_budget: float, account: float, max_premium_pct: float) -> dict:
-    """How many contracts so that the stop on the stock costs about `risk_budget`, capped by premium."""
+def size_contracts(idea: dict, stock_risk: float, risk_budget: float, account: float, max_premium_pct: float,
+                   cash: float | None = None) -> dict:
+    """How many contracts so that the stop on the stock costs about `risk_budget`, capped by premium and by the
+    cash you have (None = unknown, not capped)."""
     per_share_loss = abs(value_change(abs(idea.get("delta", 0)), idea.get("gamma", 0), -abs(stock_risk)))
     spread_cost = max(0.0, (idea.get("ask", 0) - idea.get("bid", 0)) / 2)
     loss_per_contract = (per_share_loss + spread_cost) * 100
@@ -170,5 +172,7 @@ def size_contracts(idea: dict, stock_risk: float, risk_budget: float, account: f
     n = int(risk_budget // loss_per_contract) if loss_per_contract > 0 else 0
     if cap and premium > 0:
         n = min(n, int(cap // (premium * 100)))
+    if cash is not None and premium > 0:
+        n = min(n, int(cash // (premium * 100)))
     return {"contracts": max(n, 0), "loss_at_stop": loss_per_contract * max(n, 0),
             "loss_per_contract": loss_per_contract, "premium_each": premium * 100}

@@ -10,6 +10,13 @@ from .clock import at, day_of
 from .util import dumps, loads, num
 
 
+NOT_HOLDING = "tags not like '%\"holding\":1%'"    # SQL: leave out long-term holdings (investing, not day trading)
+
+
+def is_holding(t: dict) -> bool:
+    return bool((loads(t.get("tags"), {}) or {}).get("holding"))
+
+
 def fill_key(f: dict) -> str:
     return f["symbol"] if f.get("kind") == "option" else f.get("underlying") or f["symbol"]
 
@@ -29,9 +36,28 @@ class Ledger:
                                num(f["qty"]), num(f["price"]), num(f.get("multiplier"), 1) or 1.0, num(f.get("fee")),
                                f.get("source", "")))
 
+    def mark_holdings(self, before_ts: float) -> int:
+        """Positions still open from before `before_ts` (bought before DayBot was watching) are holdings, not day
+        trades: kept for /positions, left out of checks, the monitor and the journal."""
+        n = 0
+        for t in self.db.rows(f"select id from trades where status='open' and opened_ts<? and {NOT_HOLDING}",
+                              (int(before_ts),)):
+            self.tag(t["id"], holding=1)
+            n += 1
+        return n
+
     def open_trade(self, account_id: str, key: str) -> dict | None:
-        return self.db.row("select * from trades where account_id=? and key=? and status='open' order by id desc limit 1",
-                           (account_id, key))
+        """The open day-trade lot for this stock / contract (holdings are kept apart)."""
+        return self.db.row(f"""select * from trades where account_id=? and key=? and status='open' and {NOT_HOLDING}
+                               order by id desc limit 1""", (account_id, key))
+
+    def open_holding(self, account_id: str, key: str) -> dict | None:
+        return self.db.row(f"""select * from trades where account_id=? and key=? and status='open' and not ({NOT_HOLDING})
+                               order by id desc limit 1""", (account_id, key))
+
+    def checks_on(self, account_id: str) -> bool:
+        """Accounts you day-trade in (the default). /accounts off N marks one as investing."""
+        return bool(num(self.db.scalar("select checks from accounts where id=?", (account_id,)), 1))
 
     def apply(self, fill_id: int) -> list[dict]:
         """Book one stored fill into round trips. Returns events: open / add / reduce / close."""
@@ -41,15 +67,22 @@ class Ledger:
         key = fill_key(f)
         events: list[dict] = []
         qty = num(f["qty"])
-        cur = self.open_trade(f["account_id"], key)
+        acc = f["account_id"]
+        cur = self.open_trade(acc, key)            # your day-trade lot
+        hold = self.open_holding(acc, key)         # what you held from before (investments)
         if f["side"] == "EXPIRE":
-            if cur:
-                events.append(self._reduce(cur, f, num(cur["open_qty"]), 0.0))
+            for t in (cur, hold):
+                if t:
+                    events.append(self._reduce(t, f, num(t["open_qty"]), 0.0))
             return events
         sign = 1 if f["side"] == "BUY" else -1
-        if not cur and sign < 0 and f["effect"] != "open":
-            # selling what the journal never saw you buy: a holding from before DayBot, not a new short
-            return [self._sell_holding(f)]
+        if sign > 0 and not cur and not self.checks_on(acc):
+            # an investing account: buys go to your holdings, quietly
+            if hold:
+                return [{**self._add(hold, f, qty), "type": "holding_add"}]
+            ev = self._open(f, qty, "long")
+            self.tag(ev["trade"]["id"], holding=1)
+            return [{**ev, "type": "holding_add"}]
         if cur:
             cur_sign = 1 if cur["direction"] == "long" else -1
             if cur_sign == sign:
@@ -60,6 +93,15 @@ class Ledger:
             qty -= closing
             if qty <= 1e-9:
                 return events
+        if sign < 0 and f["effect"] != "open":
+            # selling more than the day-trade lot: those shares come out of what you held before — not a new short
+            if hold:
+                take = min(qty, num(hold["open_qty"]))
+                events.append(self._reduce(hold, f, take, num(f["price"])))
+                qty -= take
+            if qty > 1e-9:
+                events.append(self._sell_holding(f, qty))
+            return events
         events.append(self._open(f, qty, "long" if sign > 0 else "short"))
         return events
 
@@ -73,11 +115,11 @@ class Ledger:
                                    qty * f["price"] * mult, num(f["fee"])))
         return {"type": "open", "trade": self.db.row("select * from trades where id=?", (trade_id,)), "fill": f}
 
-    def _sell_holding(self, f: dict) -> dict:
+    def _sell_holding(self, f: dict, qty: float | None = None) -> dict:
         mult = num(f["multiplier"], 1) or 1.0
         pos = self.db.row("select avg_price from positions where account_id=? and key=?", (f["account_id"], fill_key(f)))
         avg = num((pos or {}).get("avg_price"))
-        qty, px = num(f["qty"]), num(f["price"])
+        qty, px = (num(f["qty"]) if qty is None else qty), num(f["price"])
         pnl = (px - avg) * qty * mult - num(f["fee"]) if avg else 0.0
         trade_id = self.db.insert("""insert into trades(account_id, key, symbol, underlying, kind, option_type, strike,
             expiry, direction, day, opened_ts, closed_ts, qty, open_qty, closed_qty, entry_avg, exit_avg, multiplier,
@@ -139,8 +181,8 @@ class Ledger:
         start = at(day, "00:00")
         acct, params = ("and account_id=?", [account_id]) if account_id else ("", [])
         closed = self.db.rows(f"""select * from trades where status='closed' and closed_ts>=? and closed_ts<? {acct}
-                                  order by closed_ts""", [start, start + 86400, *params])
-        open_ = self.db.rows(f"select * from trades where status='open' and day=? {acct}", [day, *params])
+                                  and {NOT_HOLDING} order by closed_ts""", [start, start + 86400, *params])
+        open_ = self.db.rows(f"select * from trades where status='open' and day=? and {NOT_HOLDING} {acct}", [day, *params])
         streak = 0
         for t in reversed(closed):
             if num(t["pnl"]) < 0:

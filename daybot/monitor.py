@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .bars import C, T, resample, split_day, vwap
 from .clock import day_of
+from .ledger import NOT_HOLDING
 from .setups import BAR
 from .util import esc, num, price as fmt_price
 
@@ -27,7 +28,7 @@ class Monitor:
         self.cfg, self.db, self.data, self.market, self.notify = cfg, db, data, market, notify
 
     def open_trades(self) -> list[dict]:
-        return self.db.rows("select * from trades where status='open' order by opened_ts")
+        return self.db.rows(f"select * from trades where status='open' and {NOT_HOLDING} order by opened_ts")
 
     def symbols(self) -> list[str]:
         alerts = {r["symbol"] for r in self.db.rows("select symbol from price_alerts where triggered=0")}

@@ -201,7 +201,7 @@ def day_report(db, ledger, edge, day: str, account: float = 0.0, cfg=None) -> st
     rows = _trades(db, start, start + 86400)
     d = et(start).strftime("%a %b %d")
     lines = [f"<b>📒 Day report · {d}</b>"]
-    opened = db.rows("select * from trades where day=?", (day,))
+    opened = db.rows("select * from trades where day=? and tags not like '%\"holding\":1%'", (day,))
     for r in opened:
         r["tagd"] = loads(r["tags"], {}) or {}
     if rows:

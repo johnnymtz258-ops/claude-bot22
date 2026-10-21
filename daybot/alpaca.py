@@ -239,6 +239,10 @@ class Alpaca:
     async def clock(self) -> dict:
         return await self._get(self.trading, "/v2/clock") or {}
 
+    async def asset(self, symbol: str) -> dict:
+        """Name, exchange, fractionable… of one stock or ETF."""
+        return await self._get(self.trading, f"/v2/assets/{symbol}") or {}
+
 
 def snap_price(snap: dict) -> float:
     """Best current price from a stock snapshot: last trade, else the quote's mid, else the minute bar."""

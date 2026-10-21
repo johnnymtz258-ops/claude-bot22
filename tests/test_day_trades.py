@@ -31,15 +31,50 @@ def test_round_trip_with_scale_out_and_fees():
     assert _fill(led, stock_fill("d", "SELL", 150, 54.0, t0 + 180)) == []          # same fill twice: ignored
 
 
-def test_selling_more_than_you_hold_flips_to_short():
+def test_selling_more_than_the_day_trade_lot_sells_what_you_held_before():
     led = Ledger(Database(":memory:"))
     t0 = at(DAY, "10:00")
     _fill(led, stock_fill("a", "BUY", 100, 50.0, t0))
     ev = _fill(led, stock_fill("b", "SELL", 150, 49.0, t0 + 60))
+    assert [e["type"] for e in ev] == ["close", "holding"]          # Robinhood / Chase don't let you short: old shares
+    assert ev[0]["trade"]["pnl"] == -100.0 and ev[1]["trade"]["qty"] == 50 and ev[1]["trade"]["status"] == "closed"
+    assert led.day_state(DAY)["closed"] == 1                        # the old shares aren't a day trade
+
+
+def test_a_sell_to_open_flips_to_short():
+    led = Ledger(Database(":memory:"))
+    t0 = at(DAY, "10:00")
+    _fill(led, stock_fill("a", "BUY", 100, 50.0, t0))
+    ev = _fill(led, {**stock_fill("b", "SELL", 150, 49.0, t0 + 60), "effect": "open"})
     assert [e["type"] for e in ev] == ["close", "open"]
     assert ev[0]["trade"]["pnl"] == -100.0 and ev[1]["trade"]["direction"] == "short" and ev[1]["trade"]["qty"] == 50
     ev = _fill(led, stock_fill("c", "BUY", 50, 47.0, t0 + 120))
     assert ev[0]["type"] == "close" and ev[0]["trade"]["pnl"] == 100.0
+
+
+def test_a_day_trade_on_top_of_shares_you_already_own():
+    led = Ledger(Database(":memory:"))
+    t0 = at(DAY, "10:00")
+    _fill(led, stock_fill("old", "BUY", 10, 40.0, t0 - 30 * 86400))
+    assert led.mark_holdings(t0 - 86400) == 1
+    assert led.open_trade("acc1", "TEST") is None and led.open_holding("acc1", "TEST")
+    assert [e["type"] for e in _fill(led, stock_fill("a", "BUY", 5, 50.0, t0))] == ["open"]     # a new day trade
+    ev = _fill(led, stock_fill("b", "SELL", 8, 51.0, t0 + 60))
+    assert [e["type"] for e in ev] == ["close", "reduce"]                 # 5 from today's lot, 3 from the old shares
+    assert ev[0]["trade"]["pnl"] == 5.0 and ev[1]["trade"]["open_qty"] == 7
+    st = led.day_state(DAY)
+    assert st["closed"] == 1 and st["open"] == 0 and st["realized"] == 5.0
+
+
+def test_an_investing_account_keeps_buys_as_holdings_quietly():
+    db = Database(":memory:")
+    led = Ledger(db)
+    db.run("insert into accounts(id, name, institution, checks) values('acc1', 'IRA', 'Robinhood', 0)")
+    t0 = at(DAY, "10:00")
+    assert [e["type"] for e in _fill(led, stock_fill("a", "BUY", 3, 500.0, t0, "VOO"))] == ["holding_add"]
+    assert [e["type"] for e in _fill(led, stock_fill("b", "BUY", 1, 505.0, t0 + 60, "VOO"))] == ["holding_add"]
+    assert led.open_trade("acc1", "VOO") is None and led.open_holding("acc1", "VOO")["qty"] == 4
+    assert led.day_state(DAY)["trades"] == 0
 
 
 def test_an_expired_option_closes_at_zero():

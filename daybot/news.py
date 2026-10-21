@@ -39,11 +39,30 @@ def classify(headline: str) -> list[tuple[str, str, int]]:
     return out
 
 
+TICKER_LIST = re.compile(r"\b[A-Z]{1,5}(?:,\s*|\s+and\s+|\s*&\s*)[A-Z]{1,5}(?:,\s*|\s+and\s+|\s*&\s*)[A-Z]{1,5}\b")
+
+
+def about(n: dict, symbol: str) -> bool:
+    """Is this headline about the stock, or a market wrap that lists it with ten others?"""
+    if not symbol:
+        return True
+    syms = n.get("symbols") or []
+    if 0 < len(syms) <= 3:
+        return True
+    head = str(n.get("headline") or "")
+    named = [x for x in syms if re.search(rf"(^|[^A-Za-z]){re.escape(x)}([^A-Za-z]|$)", head)]
+    listing = len(named) >= 4 or TICKER_LIST.search(head)   # "movers: NVDA, TSLA, AMD and more" is a list, not news
+    return symbol in named and not listing
+
+
 def catalysts(items: list[dict], symbol: str = "") -> list[dict]:
-    """Headlines with their catalyst tags, newest first."""
+    """Headlines about the stock with their catalyst tags, newest first (market wraps that only list it are left
+    out — they don't explain why it moves)."""
     out = []
     for n in items or []:
         if symbol and symbol not in (n.get("symbols") or [symbol]):
+            continue
+        if not about(n, symbol):
             continue
         tags = classify(f"{n.get('headline', '')} {n.get('summary', '')[:300]}")
         out.append({"headline": str(n.get("headline") or "").strip(), "ts": parse_ts(n.get("created_at")),

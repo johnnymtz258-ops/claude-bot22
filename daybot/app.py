@@ -31,7 +31,7 @@ from .config import Config, load
 from .data import MarketData
 from .db import Database
 from .earnings import Earnings
-from .ledger import Ledger
+from .ledger import NOT_HOLDING, Ledger
 from .monitor import Monitor
 from .paper import Paper
 from .plan import build as build_plan
@@ -257,7 +257,7 @@ class App:
         state = self.ledger.day_state(day)
         account = self.account_size()
         open_trades = []
-        for t in self.db.rows("select * from trades where status='open'"):
+        for t in self.db.rows(f"select * from trades where status='open' and {NOT_HOLDING}"):
             px = self.data.last_price(t["underlying"])
             open_trades.append({"what": t["symbol"], "underlying": t["underlying"], "kind": t["kind"],
                                 "direction": t["direction"], "qty": t["open_qty"], "entry": t["entry_avg"],

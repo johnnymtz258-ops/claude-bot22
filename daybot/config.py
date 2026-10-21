@@ -49,6 +49,7 @@ SETTINGS = {s.name: s for s in (
     Setting("WATCH_MAX", 25, "Most symbols the live scanner watches at once", 5, 60),
     Setting("ALERTS_ENABLED", 1, "Master switch for setup alerts (1 = on)", 0, 1, True),
     Setting("ALERT_UNPROVEN", 1, "Also send setups the backtest hasn't proven — silently and labelled 'unproven' (1 = on). Proven ones always ping", 0, 1, True),
+    Setting("SHORT_ALERTS", 0, "Also send short setups (betting a stock falls). Off: Robinhood and Chase don't let you short stocks — the only way is buying puts. Paper still measures them (1 = on)", 0, 1, True),
     Setting("MAX_ALERTS_PER_HOUR", 6, "Most setup alerts per hour", 1, 60),
     Setting("ORB_MINUTES", 15, "Opening range length for the opening-range breakout (5, 15 or 30)", 5, 30),
     Setting("OPTION_IDEAS", 1, "Add a defined-risk option idea to setup alerts (1 = on)", 0, 1, True),

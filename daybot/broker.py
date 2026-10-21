@@ -15,6 +15,7 @@ import datetime as dt
 from .check import GREEN, RED, WORD, format_check
 from .clock import clock_text, day_of, et
 from .coach import bucket, excursion
+from .ledger import is_holding
 from .snaptrade import SnapTradeError
 from .util import dumps, dur, esc, money, num, pct, price as fmt_price, rmult
 
@@ -33,12 +34,26 @@ LATE_SECONDS = 15 * 60       # a fill older than this when we first see it gets 
 
 
 class BrokerSync:
+    LEDGER_VERSION = "2"
+
     def __init__(self, cfg, db, snap, ledger, checker, notify, market, data):
         self.cfg, self.db, self.snap, self.ledger, self.checker = cfg, db, snap, ledger, checker
         self.notify, self.market, self.data = notify, market, data
         self.last_poll = 0.0
         self.last_error = ""
         self.disabled: list[str] = []
+        self._rebuild_if_old()
+
+    def _rebuild_if_old(self) -> None:
+        """Version 1 booked crypto as stock trades and old investments as open day trades. Start the journal over
+        once with the right rules: your history is read again from the broker (nothing on the broker side changes)."""
+        if self.db.get_meta("ledger_version") == self.LEDGER_VERSION:
+            return
+        for table in ("fills", "trades", "orders_seen", "positions", "checks"):
+            self.db.run(f"delete from {table}")
+        self.db.run("delete from meta where key in ('history_done', 'fills_live_since') or key like 'primed:%'")
+        self.db.run("delete from sent where key like 'mon:%'")
+        self.db.set_meta("ledger_version", self.LEDGER_VERSION)
 
     @property
     def ok(self) -> bool:
@@ -56,7 +71,7 @@ class BrokerSync:
             self.last_error = str(exc)
             return []
         for a in accounts:
-            bal = {}
+            bal = None                                  # None: couldn't read it this time, keep the last value
             try:
                 bal = await self.snap.balances(a["id"])
             except SnapTradeError as exc:
@@ -64,10 +79,11 @@ class BrokerSync:
             self.db.run("""insert into accounts(id, name, institution, number, margin, total, cash, buying_power, updated, status)
                            values(?,?,?,?,?,?,?,?,?, 'open') on conflict(id) do update set name=excluded.name,
                            institution=excluded.institution, number=excluded.number, margin=excluded.margin,
-                           total=excluded.total, cash=excluded.cash, buying_power=excluded.buying_power,
-                           updated=excluded.updated""",
+                           total=excluded.total, cash=coalesce(excluded.cash, accounts.cash),
+                           buying_power=coalesce(excluded.buying_power, accounts.buying_power), updated=excluded.updated""",
                         (a["id"], a["name"], a["institution"], a["number"], a["margin"], a["total"],
-                         num(bal.get("cash")), num(bal.get("buying_power")), int(now)))
+                         num(bal.get("cash")) if bal is not None else None,
+                         num(bal.get("buying_power")) if bal is not None else None, int(now)))
         conns = getattr(self.snap, "last_connections", None)
         if conns is None:
             try:
@@ -135,6 +151,8 @@ class BrokerSync:
                 self.ledger.apply(fid)
                 self.db.run("update fills set checked=1 where id=?", (fid,))
                 n += 1
+        self.ledger.mark_holdings(self.market.open_ts(day_of(now)) if self.market.is_trading_day(day_of(now))
+                                  else now)       # what you still hold from before today: investments
         self.db.set_meta("history_done", int(now))
         return n
 
@@ -232,12 +250,15 @@ class BrokerSync:
 
     # ---- reactions ----------------------------------------------------------------------------------------------
     def checks_on(self, account_id: str) -> bool:
-        return bool(num(self.db.scalar("select checks from accounts where id=?", (account_id,)), 1))
+        return self.ledger.checks_on(account_id)
 
     async def handle(self, ev: dict, now: float) -> None:
         t, f = ev["trade"], ev["fill"]
-        if ev["type"] == "holding":
-            await self._on_holding(t, f)
+        if ev["type"] == "holding_add":
+            return                                    # investing: a buy into your holdings
+        if ev["type"] == "holding" or (ev["type"] == "close" and is_holding(t)):
+            if self.checks_on(t["account_id"]):
+                await self._on_holding(t, f)
             return
         if not self.checks_on(t["account_id"]):
             return                                    # an investing account: synced, not day-trade checked
@@ -288,8 +309,8 @@ class BrokerSync:
                           buttons=[[("📈 Chart", None, f"chart:{t['underlying']}")]])
 
     async def _on_add(self, t: dict, f: dict, now: float) -> None:
-        if not self.cfg.flag("CHECK_MY_TRADES"):
-            return
+        if is_holding(t) or not self.cfg.flag("CHECK_MY_TRADES"):
+            return                                    # adding to an investment: not a day trade
         direction = self._option_direction(t) if t["kind"] == "option" else t["direction"]
         mark = self.data.last_price(t["underlying"]) if t["kind"] == "stock" else num(f["price"])
         res = await self.checker.check({**self._request(t, f), "direction": direction, "adding": True,
@@ -309,12 +330,17 @@ class BrokerSync:
                           silent=True, kind="TRADE", symbol=t["underlying"])
 
     async def _on_reduce(self, t: dict, f: dict) -> None:
+        if is_holding(t):
+            return
         s = 1 if t["direction"] == "long" else -1
         locked = s * (num(f["price"]) - num(t["entry_avg"])) * num(f["qty"]) * num(t["multiplier"], 1)
         await self.notify(f"✂️ Trimmed {describe_fill(f)} — {money(locked, True)} on that part · "
                           f"{num(t['open_qty']):g} left", silent=True, kind="TRADE", symbol=t["underlying"])
 
     async def _on_close(self, t: dict, f: dict, now: float) -> None:
+        if is_holding(t):
+            await self._on_holding(t, f)
+            return
         exc = await excursion(self.data, self.market, t)
         if exc:
             self.db.run("update trades set mfe=?, mae=? where id=?", (exc.get("mfe_r"), exc.get("mae_r"), t["id"]))
