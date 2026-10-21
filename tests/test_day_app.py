@@ -246,3 +246,32 @@ def test_price_alerts():
     hits = [m for m in app.notes.sent if m["kind"] == "PRICE"]
     assert len(hits) == 1 and "flag high" in hits[0]["text"]
     assert "No price alerts" in asyncio.run(app.commands.text("/alert", at(DAY, "12:00")))[0]["text"]
+
+
+def test_the_first_private_message_links_the_bot_to_your_chat():
+    from daybot.app import App
+
+    class FakeTG:
+        ok = True
+        chat_id = ""
+        conflict_ts = 0
+
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, text, buttons=None, silent=False, reply_to=None, chat_id=None):
+            self.sent.append((chat_id or self.chat_id, text))
+            return 1
+
+        async def answer(self, *a, **k):
+            pass
+    app = _day_app()
+    app.cfg.telegram_chat_id = ""
+    tg = FakeTG()
+    app.tg = tg
+    asyncio.run(app.handle_update({"update_id": 1, "message": {"chat": {"id": 777, "type": "private"}, "text": "/start"}}))
+    assert app.cfg.telegram_chat_id == "777" and tg.chat_id == "777" and "Linked" in tg.sent[-1][1]
+    asyncio.run(app.handle_update({"update_id": 2, "message": {"chat": {"id": 999, "type": "private"}, "text": "/help"}}))
+    assert tg.sent[-1][0] == "999" and "private bot" in tg.sent[-1][1]        # someone else: not answered
+    again = App(app.cfg.__class__(), None, db=app.db, alpaca=app.fake, snap=app.snap, notify=app.notes, charts=False)
+    assert again.cfg.telegram_chat_id == "777"                                # remembered after a restart

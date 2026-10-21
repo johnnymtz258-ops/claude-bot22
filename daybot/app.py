@@ -58,6 +58,11 @@ class App:
         self.earnings = Earnings(session, cfg.finnhub_key) if cfg.finnhub_key else None
         self.checker = TradeCheck(cfg, self.db, self.data, self.market, self.ledger, self.edge, self.earnings)
         self.tg = telegram
+        owner = self.db.get_meta("owner_chat")
+        if not cfg.telegram_chat_id and owner:          # linked earlier by your first message to the bot
+            cfg.telegram_chat_id = owner
+            if telegram:
+                telegram.chat_id = owner
         self.notify = notify or Notifier(telegram, self.db)
         self.paper = Paper(cfg, self.db, self.data, self.market)
         if charts is False:
@@ -388,6 +393,14 @@ class App:
         msg = u.get("message") or (cb or {}).get("message") or {}
         chat = str((msg.get("chat") or {}).get("id") or "")
         if not chat:
+            return
+        if not self.cfg.telegram_chat_id and not cb and (msg.get("chat") or {}).get("type") == "private":
+            # no chat set up yet: the first person to message this (private, new) bot is its owner
+            self.cfg.telegram_chat_id = chat
+            tg.chat_id = chat
+            self.db.set_meta("owner_chat", chat)
+            await tg.send("✅ Linked — DayBot will message you here.\n\n" + self.status_text(time.time())
+                          + "\n\n/help for everything it does.")
             return
         if not self.cfg.telegram_chat_id or chat != str(self.cfg.telegram_chat_id):
             if not cb:
