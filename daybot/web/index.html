@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DayBot</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
+<style>
+:root{
+  --bg:#0d1117;--panel:#151b23;--panel2:#1b2330;--line:#263040;--fg:#e2e8f0;--muted:#8b98a9;--accent:#5aa9ff;
+  --up:#2fbf8f;--down:#f0616d;--warn:#f2b84b;--good-bg:rgba(47,191,143,.12);--bad-bg:rgba(240,97,109,.12);
+  --warn-bg:rgba(242,184,75,.12);--shadow:0 1px 2px rgba(0,0,0,.3);
+}
+:root[data-theme="light"]{
+  --bg:#f5f7fa;--panel:#ffffff;--panel2:#f0f3f7;--line:#e1e6ed;--fg:#17202b;--muted:#5d6b7c;--accent:#1f6fd1;
+  --up:#13895f;--down:#cf3443;--warn:#a96c00;--good-bg:rgba(19,137,95,.1);--bad-bg:rgba(207,52,67,.08);
+  --warn-bg:rgba(169,108,0,.1);--shadow:0 1px 2px rgba(16,24,40,.06);
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#f5f7fa;--panel:#ffffff;--panel2:#f0f3f7;--line:#e1e6ed;--fg:#17202b;--muted:#5d6b7c;--accent:#1f6fd1;
+    --up:#13895f;--down:#cf3443;--warn:#a96c00;--good-bg:rgba(19,137,95,.1);--bad-bg:rgba(207,52,67,.08);
+    --warn-bg:rgba(169,108,0,.1);--shadow:0 1px 2px rgba(16,24,40,.06);
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  font-variant-numeric:tabular-nums}
+a{color:var(--accent)}
+.top{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
+.bar{max-width:1180px;margin:0 auto;padding:12px 16px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.brand{font-size:17px;white-space:nowrap}.brand .muted{font-size:12px;margin-left:4px}
+.pills{display:flex;gap:6px;flex-wrap:wrap;flex:1}
+@media (max-width:640px){.pills{order:3;flex-basis:100%}.brand{flex:1}}
+.pill{font-size:12px;padding:3px 9px;border-radius:999px;background:var(--panel2);color:var(--muted);border:1px solid var(--line);white-space:nowrap}
+.pill.ok{color:var(--up)}.pill.bad{color:var(--down)}.pill.live{color:var(--fg);font-weight:600}
+.ghost{background:none;border:1px solid var(--line);color:var(--muted);border-radius:8px;padding:4px 10px;cursor:pointer;font:inherit}
+.tabs{max-width:1180px;margin:0 auto;padding:6px 16px 0;display:flex;gap:2px;overflow-x:auto;scrollbar-width:none}
+.tabs button{background:none;border:0;border-bottom:2px solid transparent;color:var(--muted);padding:9px 12px;font:inherit;
+  font-weight:500;cursor:pointer;white-space:nowrap}
+.tabs button.on{color:var(--fg);border-bottom-color:var(--accent)}
+.tabs button:hover{color:var(--fg)}
+main{max-width:1180px;margin:0 auto;padding:16px}
+.tab{display:none}.tab.on{display:block}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;box-shadow:var(--shadow);min-width:0}
+.tile .k{font-size:12px;color:var(--muted)}
+.tile .v{font-size:22px;font-weight:650;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .s{font-size:12px;color:var(--muted);margin-top:1px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px;box-shadow:var(--shadow);min-width:0}
+.card-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.card-head h2{font-size:15px;margin:0;font-weight:650}
+.muted{color:var(--muted)}.hint{color:var(--muted);font-size:13px;margin:0 0 10px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}.grid2>.card{margin-bottom:14px}
+@media (max-width:860px){.grid2{grid-template-columns:1fr;gap:0}}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{font-size:12px;font-weight:500;color:var(--muted);text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td.num,th.num{text-align:right}
+td.wrap{white-space:normal;min-width:180px}
+.empty{color:var(--muted);padding:14px 8px;white-space:normal}
+.up{color:var(--up)}.down{color:var(--down)}.warn{color:var(--warn)}
+.sym{color:var(--accent);cursor:pointer;font-weight:600;text-decoration:none}
+.badge{font-size:12px;padding:2px 8px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);white-space:nowrap}
+.badge.good{color:var(--up);background:var(--good-bg);border-color:transparent}
+.badge.bad{color:var(--down);background:var(--bad-bg);border-color:transparent}
+.badge.mid{color:var(--warn);background:var(--warn-bg);border-color:transparent}
+.banner{border-radius:12px;padding:14px 16px;margin-bottom:14px;border:1px solid var(--line);background:var(--panel)}
+.banner.good{background:var(--good-bg);border-color:transparent}.banner.bad{background:var(--bad-bg);border-color:transparent}
+.banner.mid{background:var(--warn-bg);border-color:transparent}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input,select{background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit;min-width:0}
+button.btn{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 14px;font:inherit;font-weight:600;cursor:pointer}
+button.btn.sec{background:var(--panel2);color:var(--fg);border:1px solid var(--line)}
+#check-out{margin-top:10px;white-space:normal;line-height:1.55}
+.feed{list-style:none;margin:0;padding:0;max-height:420px;overflow-y:auto}
+.feed li{padding:8px 0;border-bottom:1px solid var(--line);white-space:pre-wrap}
+.feed li:last-child{border-bottom:0}.feed .when{color:var(--muted);font-size:12px;margin-right:6px}
+.list{margin:0;padding:0;list-style:none}.list li{padding:6px 0;border-bottom:1px solid var(--line)}.list li:last-child{border-bottom:0}
+#curve svg{width:100%;height:200px;display:block}
+.set-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
+.set{display:grid;grid-template-columns:1fr auto;gap:4px 12px;padding:9px 0;border-bottom:1px solid var(--line);align-items:center}
+.set:last-child{border-bottom:0}.set .n{font-weight:600;font-size:13px}.set .h{grid-column:1/-1;color:var(--muted);font-size:12px}
+.set input[type=number]{width:110px;text-align:right}.set .saved{color:var(--up);font-size:12px;grid-column:1/-1}
+.switch{position:relative;width:42px;height:24px;display:inline-block}.switch input{opacity:0;width:0;height:0}
+.switch span{position:absolute;inset:0;background:var(--line);border-radius:999px;cursor:pointer;transition:.15s}
+.switch span:before{content:"";position:absolute;width:18px;height:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.15s}
+.switch input:checked+span{background:var(--up)}.switch input:checked+span:before{transform:translateX(18px)}
+pre.status{white-space:pre-wrap;margin:0;font:inherit;line-height:1.7}
+dialog{border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--fg);padding:12px;width:min(980px,96vw)}
+dialog::backdrop{background:rgba(0,0,0,.55)}dialog img{width:100%;border-radius:8px;display:block}
+.dlg-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <div class="brand">📈 <b>DayBot</b><span class="muted" id="ver"></span></div>
+    <div class="pills" id="pills"><span class="pill">connecting…</span></div>
+    <button class="ghost" id="theme" type="button" title="Light / dark">◐</button>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button data-tab="today" class="on">Today</button>
+    <button data-tab="autopilot">🤖 Autopilot</button>
+    <button data-tab="market">Market</button>
+    <button data-tab="journal">My trades</button>
+    <button data-tab="setups">Setups</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+</header>
+<main>
+  <section id="tab-today" class="tab on">
+    <div class="tiles" id="today-tiles"></div>
+    <div class="grid2">
+      <div class="card">
+        <div class="card-head"><h2>Check a trade before you take it</h2></div>
+        <form id="check-form" class="row">
+          <input id="check-in" placeholder="NVDA · NVDA 140c 10/24 · AMD 3 @ 150" style="flex:1">
+          <button class="btn" type="submit">Check</button>
+        </form>
+        <div id="check-out" class="muted">Type a ticker. You get a verdict, a stop, two targets and the size that fits your cash.</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Setup alerts today</h2><span class="muted">✅ proven · 🧪 still being tested</span></div>
+        <div class="table-wrap"><table id="alerts"></table></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Your open day trades</h2><span class="muted">from Robinhood / Chase, with the plan DayBot gave them</span></div>
+      <div class="table-wrap"><table id="open"></table></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Closed today</h2></div>
+      <div class="table-wrap"><table id="closed"></table></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>What DayBot told you</h2><span class="muted">the same messages as Telegram</span></div>
+      <ul class="feed" id="feed"></ul>
+    </div>
+  </section>
+
+  <section id="tab-autopilot" class="tab">
+    <div class="banner" id="auto-verdict"></div>
+    <div class="tiles" id="auto-tiles"></div>
+    <div class="card">
+      <div class="card-head"><h2>Balance after each trade</h2><span class="muted" id="curve-note"></span></div>
+      <div id="curve"></div>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <div class="card-head"><h2>Open now</h2></div>
+        <div class="table-wrap"><table id="auto-open"></table></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Which setups make money</h2><span class="muted">follow the green ones</span></div>
+        <div class="table-wrap"><table id="auto-setups"></table></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Recent trades</h2></div>
+      <div class="table-wrap"><table id="auto-recent"></table></div>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <div class="card-head"><h2>Best time of day</h2></div>
+        <div class="table-wrap"><table id="auto-time"></table></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>How the autopilot trades</h2></div>
+        <ul class="list muted" style="font-size:13px">
+          <li>Takes every setup DayBot alerts you on — pretend money, nothing touches your accounts.</li>
+          <li>Buys at the next minute's price plus costs, risks 1% of its balance, never more cash than it has.</li>
+          <li>Sells half at the first target and moves the stop to breakeven, the rest at the second target, or at the stop. Out by 3:55pm.</li>
+          <li>Judge it after 20+ trades — a few trades are mostly luck.</li>
+        </ul>
+        <div class="row" style="margin-top:12px">
+          <button class="btn sec" id="auto-toggle" type="button">Turn off</button>
+          <button class="btn sec" id="auto-reset" type="button">Start over…</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-market" class="tab">
+    <div class="card">
+      <div class="card-head"><h2>Gappers</h2><span class="muted">stocks moving big before the open — and the news behind it</span></div>
+      <div class="table-wrap"><table id="gappers"></table></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Watchlist</h2><span class="muted">click a ticker for its chart</span></div>
+      <div class="table-wrap"><table id="watch"></table></div>
+    </div>
+  </section>
+
+  <section id="tab-journal" class="tab">
+    <div class="tiles" id="journal-tiles"></div>
+    <div class="grid2">
+      <div class="card"><div class="card-head"><h2>🔻 Where your money leaks</h2></div><ul class="list" id="leaks"></ul></div>
+      <div class="card"><div class="card-head"><h2>🔹 What works for you</h2></div><ul class="list" id="edges"></ul></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>What you own</h2><span class="muted">long-term holdings — not day trades, never checked or alerted</span></div>
+      <div class="table-wrap"><table id="holdings"></table></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Your accounts</h2><span class="muted">"investing" accounts are left out of trade checks (/accounts in Telegram)</span></div>
+      <div class="table-wrap"><table id="accounts"></table></div>
+    </div>
+  </section>
+
+  <section id="tab-setups" class="tab">
+    <div class="card">
+      <div class="card-head"><h2>Setups — what each one has earned</h2></div>
+      <p class="hint">A setup is <b>proven</b> when it made money after costs in both halves of the test period, still does without
+        its 3 best trades, and has 40+ trades — or when it does the same live on paper. Proven setups ping you; the rest arrive
+        silently, labelled 🧪, while paper keeps measuring them.</p>
+      <div class="table-wrap"><table id="setups"></table></div>
+      <div class="row" style="margin-top:12px"><button class="btn sec" id="bt" type="button">Run the backtest again</button>
+        <span class="muted" id="bt-note"></span></div>
+    </div>
+  </section>
+
+  <section id="tab-settings" class="tab">
+    <div class="set-grid" id="settings"></div>
+    <div class="card"><div class="card-head"><h2>Status</h2></div><pre class="status" id="status"></pre></div>
+  </section>
+</main>
+
+<dialog id="chart-dlg">
+  <div class="dlg-head"><b id="chart-title"></b><button class="ghost" id="chart-close" type="button">Close</button></div>
+  <div id="chart-body"></div>
+</dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+const store = {get(k){try{return localStorage.getItem(k)}catch(e){return null}}, set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const strip = s => String(s ?? '').replace(/<[^>]+>/g, '');
+const num = v => (v == null || v === '' || isNaN(+v)) ? null : +v;
+const usd = (v, signed) => { v = num(v); if (v == null) return '—';
+  const a = Math.abs(v), body = a >= 10000 ? a.toLocaleString(undefined,{maximumFractionDigits:0}) : a.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  return (v < 0 ? '−' : (signed && v > 0 ? '+' : '')) + '$' + body; };
+const px = v => { v = num(v); return v ? '$' + (Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(4)) : '—'; };
+const pc = (v, d = 1) => { v = num(v); return v == null ? '—' : (v > 0 ? '+' : '') + v.toFixed(d) + '%'; };
+const rr = v => { v = num(v); return v == null ? '—' : (v > 0 ? '+' : '') + v.toFixed(2) + 'R'; };
+const qty = v => { v = num(v); return v == null ? '—' : String(+v.toFixed(4)); };
+const cls = v => { v = num(v); return v > 0 ? 'up' : v < 0 ? 'down' : ''; };
+const sym = s => `<a class="sym" data-s="${esc(s)}">${esc(s)}</a>`;
+const REASON = {target: '2R target', stop: 'stopped out', breakeven: 'breakeven after half', time: 'closed at 3:55'};
+
+function table(id, head, rows, fn, empty) {
+  const th = head.map(h => { const n = h.startsWith('#'); return `<th class="${n ? 'num' : ''}">${esc(n ? h.slice(1) : h)}</th>`; }).join('');
+  $(id).innerHTML = `<tr>${th}</tr>` + (rows && rows.length ? rows.map(fn).join('')
+    : `<tr><td class="empty" colspan="${head.length}">${empty || 'Nothing yet.'}</td></tr>`);
+}
+function tiles(id, items) {
+  $(id).innerHTML = items.map(t => `<div class="tile"><div class="k">${esc(t.k)}</div><div class="v ${t.c || ''}">${t.v}</div>${t.s ? `<div class="s">${t.s}</div>` : ''}</div>`).join('');
+}
+
+// ---- tabs and theme ----
+function show(tab) {
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+  document.querySelectorAll('.tab').forEach(s => s.classList.toggle('on', s.id === 'tab-' + tab));
+  store.set('daybot-tab', tab);
+  if (location.hash !== '#' + tab) history.replaceState(null, '', '#' + tab);
+  if (tab === 'settings' && last) renderSettings(last, true);
+}
+$('tabs').addEventListener('click', e => { const b = e.target.closest('button'); if (b) show(b.dataset.tab); });
+function applyTheme(t) { if (t) document.documentElement.dataset.theme = t; }
+applyTheme(store.get('daybot-theme'));
+$('theme').addEventListener('click', () => {
+  const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  const next = cur === 'light' ? 'dark' : 'light'; applyTheme(next); store.set('daybot-theme', next);
+});
+
+// ---- rendering ----
+let last = null;
+function render(s) {
+  last = s;
+  $('ver').textContent = ' v' + s.version;
+  const h = s.health;
+  $('pills').innerHTML = [
+    `<span class="pill live">${esc(s.market)}</span>`,
+    `<span class="pill ${h.data ? 'ok' : 'bad'}">${h.data ? '●' : '○'} prices</span>`,
+    `<span class="pill ${h.broker ? 'ok' : 'bad'}">${h.broker ? '●' : '○'} ${h.accounts} account${h.accounts === 1 ? '' : 's'}</span>`,
+    `<span class="pill ${h.claude ? 'ok' : ''}">${h.claude ? '●' : '○'} Claude</span>`].join('');
+
+  const t = s.today, ap = s.autopilot;
+  tiles('today-tiles', [
+    {k: 'Account', v: s.account ? usd(s.account) : '—', s: s.account ? 'day-trading accounts' : 'not synced yet'},
+    {k: 'Cash to trade', v: s.cash == null ? '—' : usd(s.cash), s: 'what you can buy with now'},
+    {k: "Today's P&L", v: usd(t.realized, true), c: cls(t.realized), s: `${t.closed} closed · ${t.wins} won`},
+    {k: 'Trades today', v: `${t.trades}<span class="muted" style="font-size:14px"> / ${s.rules.MAX_TRADES_PER_DAY}</span>`, s: 'your daily limit'},
+    {k: 'Loss streak', v: t.streak, c: t.streak >= 2 ? 'down' : '', s: t.streak >= 2 ? 'take a break' : 'in a row'},
+    {k: '🤖 Autopilot', v: usd(ap.equity), c: cls(ap.return_pct), s: `${pc(ap.return_pct)} · ${ap.n} trade${ap.n === 1 ? '' : 's'}`},
+  ]);
+  table('alerts', ['Time', 'Stock', 'Setup', '#Entry', 'Result'], s.alerts, a =>
+    `<tr><td class="muted">${esc(a.time.replace(' ET', ''))}</td><td>${sym(a.symbol)}</td>
+     <td class="wrap">${a.proven ? '✅' : '🧪'} ${esc(a.label)}</td><td class="num">${px(a.entry)}</td>
+     <td class="${cls(a.paper_r)}">${a.paper === 'closed' ? rr(a.paper_r) : a.paper === 'open' ? 'in play' : a.paper === 'skipped' ? '<span class="muted">no entry</span>' : '<span class="muted">waiting</span>'}</td></tr>`,
+    'No setups yet today. Alerts come during market hours (9:30am–4pm ET).');
+  table('open', ['Stock', 'Side', '#Qty', '#Entry', '#Now', '#P&L', '#Stop', '#Target 1', '#Target 2', 'Since'], s.open, o =>
+    `<tr><td>${sym(o.underlying)} ${o.kind === 'option' ? `<span class="muted">${esc(o.symbol)}</span>` : ''}</td><td>${esc(o.direction)}</td>
+     <td class="num">${qty(o.open_qty)}</td><td class="num">${px(o.entry_avg)}</td><td class="num">${px(o.und_now)}</td>
+     <td class="num ${cls(o.unrealized)}">${o.unrealized == null ? '—' : usd(o.unrealized, true)}</td>
+     <td class="num down">${px(o.plan_stop)}</td><td class="num up">${px(o.plan_t1)}</td><td class="num up">${px(o.plan_t2)}</td>
+     <td class="muted">${esc(o.time.replace(' ET', ''))}</td></tr>`,
+    'No open day trades. When you buy on Robinhood or Chase it shows up here within a minute, with a stop and targets.');
+  const closed = s.trade_list.filter(x => x.status === 'closed');
+  table('closed', ['Opened', 'Stock', 'Side', '#Qty', '#P&L', '#R'], closed, x =>
+    `<tr><td class="muted">${esc(x.time.replace(' ET', ''))}</td><td>${sym(x.underlying)} ${x.kind === 'option' ? `<span class="muted">${esc(x.symbol)}</span>` : ''}</td>
+     <td>${esc(x.direction)}</td><td class="num">${qty(x.qty)}</td><td class="num ${cls(x.pnl)}">${usd(x.pnl, true)}</td>
+     <td class="num">${x.r_mult == null ? '—' : rr(x.r_mult)}</td></tr>`, 'No closed trades today.');
+  $('feed').innerHTML = s.feed.length ? s.feed.slice(0, 25).map(e =>
+    `<li><span class="when">${esc(e.time)}</span>${esc(strip(e.text))}</li>`).join('') : '<li class="muted">Quiet so far.</li>';
+
+  renderAutopilot(ap);
+
+  table('gappers', ['Stock', '#Gap', '#Price', '#Premarket vol', 'Why it moves'], s.gappers, g =>
+    `<tr><td>${sym(g.symbol)}</td><td class="num ${cls(g.gap)}">${pc(g.gap)}</td><td class="num">${px(g.price)}</td>
+     <td class="num">${Math.round((g.pm_vol || 0) / 1000).toLocaleString()}K</td>
+     <td class="wrap ${g.warning ? 'down' : 'muted'}">${esc(g.warning || (g.catalyst || {}).headline || 'no news found — be careful')}</td></tr>`,
+    'The gap list is built from 7am ET on market days.');
+  table('watch', ['Stock', '#Price', '#Change', '#VWAP', '#Volume ×', '#PM high', '#Yday high'], s.watch, w =>
+    `<tr><td>${sym(w.symbol)}</td><td class="num">${px(w.price)}</td><td class="num ${cls(w.chg)}">${pc(w.chg)}</td>
+     <td class="num">${px(w.vwap)}</td><td class="num">${w.rvol ? w.rvol.toFixed(1) + '×' : '—'}</td>
+     <td class="num">${px(w.pmh)}</td><td class="num">${px(w.pdh)}</td></tr>`, 'Nothing on the watchlist yet.');
+
+  const j = s.journal, jt = j.total;
+  tiles('journal-tiles', [
+    {k: 'Last 30 days', v: jt.n, s: 'closed day trades'},
+    {k: 'P&L', v: usd(jt.pnl, true), c: cls(jt.pnl)},
+    {k: 'Won', v: jt.n ? Math.round(jt.won * 100) + '%' : '—'},
+    {k: 'Profit factor', v: !jt.n ? '—' : (+jt.pf >= 99 ? 'no losses' : (+jt.pf).toFixed(2)), s: 'over 1 = making money'},
+  ]);
+  $('leaks').innerHTML = j.leaks.length ? j.leaks.map(g => `<li><span class="down">${esc(g.name)}</span> <span class="muted">— ${g.n} trades, ${usd(g.pnl, true)}</span></li>`).join('')
+    : '<li class="muted">Nothing stands out yet — it needs a few weeks of your trades.</li>';
+  $('edges').innerHTML = j.edges.length ? j.edges.map(g => `<li><span class="up">${esc(g.name)}</span> <span class="muted">— ${g.n} trades, ${usd(g.pnl, true)}</span></li>`).join('')
+    : '<li class="muted">Nothing yet.</li>';
+  table('holdings', ['Stock', '#Qty', '#Avg cost', '#Now', '#Value', '#Gain', 'Account'], s.holdings, x =>
+    `<tr><td>${sym(x.underlying)} ${x.kind === 'option' ? `<span class="muted">${esc(x.symbol)}</span>` : ''}</td><td class="num">${qty(x.qty)}</td>
+     <td class="num">${px(x.avg)}</td><td class="num">${px(x.price)}</td><td class="num">${usd(x.value)}</td>
+     <td class="num ${cls(x.pnl)}">${x.pnl == null ? '—' : usd(x.pnl, true)}</td><td class="muted">${esc(x.account)}${x.investing ? ' · investing' : ''}</td></tr>`,
+    'No holdings synced yet.');
+  table('accounts', ['Broker', 'Account', '#Value', '#Cash', 'Type', 'Used for'], s.accounts, a =>
+    `<tr><td>${esc(a.institution || '')}</td><td class="muted">${a.number ? '····' + esc(String(a.number).slice(-4)) : esc(a.name || '')}</td>
+     <td class="num">${usd(a.total)}</td><td class="num">${usd(a.cash)}</td><td class="muted">${esc(a.margin || '')}</td>
+     <td>${a.checks ? '<span class="badge good">day trading</span>' : '<span class="badge">investing</span>'}</td></tr>`,
+    'No accounts linked yet — send /connect to DayBot in Telegram.');
+
+  const st = {proven: ['good', '✅ proven'], promising: ['mid', '🟡 promising'], thin: ['', '⚪ too few trades'],
+    negative: ['bad', '🔴 loses'], benched: ['bad', '⏸ benched'], untested: ['', '⚪ untested']};
+  table('setups', ['Setup', 'Status', '#Backtest trades', '#Avg R', '#Won', '#Live paper'], s.setups, x => {
+    const [c, txt] = x.live ? ['good', '✅ proven live'] : (st[x.status] || ['', x.status]);
+    return `<tr><td>${esc(x.label)}</td><td><span class="badge ${c}">${txt}</span></td>
+     <td class="num">${x.bt ? x.bt.n : '—'}</td><td class="num ${x.bt ? cls(x.bt.avg_r) : ''}">${x.bt ? rr(x.bt.avg_r) : '—'}</td>
+     <td class="num">${x.bt ? Math.round(x.bt.won * 100) + '%' : '—'}</td>
+     <td class="num ${cls(x.paper.avg_r)}">${x.paper.n ? x.paper.n + ' · ' + rr(x.paper.avg_r) : '—'}</td></tr>`; });
+  $('bt-note').textContent = s.backtest ? 'Running: ' + s.backtest : '';
+  $('status').textContent = strip(s.status);
+  if ($('tab-settings').classList.contains('on')) renderSettings(s, false);
+}
+
+function renderAutopilot(ap) {
+  const v = ap.verdict || '', kind = v.startsWith('✅') ? 'good' : v.startsWith('🔴') ? 'bad' : v.startsWith('🟡') ? 'mid' : '';
+  $('auto-verdict').className = 'banner ' + kind;
+  $('auto-verdict').innerHTML = `<b>${ap.on ? '🤖 Autopilot is following every alert with pretend money.' : '🤖 Autopilot is off.'}</b><div style="margin-top:4px">${esc(v)}</div>`;
+  tiles('auto-tiles', [
+    {k: 'Balance', v: usd(ap.equity), c: cls(ap.return_pct), s: `started with ${usd(ap.start)}`},
+    {k: 'Return', v: pc(ap.return_pct), c: cls(ap.return_pct), s: ap.spy_pct == null ? 'since it started' : `SPY ${pc(ap.spy_pct)} same time`},
+    {k: 'Trades', v: ap.n, s: `${ap.today ? ap.today.n : 0} today · ${ap.open.length} open`},
+    {k: 'Won', v: ap.n ? Math.round(ap.won * 100) + '%' : '—', s: ap.n ? `avg ${rr(ap.avg_r)} a trade` : ''},
+    {k: 'Best trade', v: ap.n ? usd(ap.best, true) : '—', c: cls(ap.best),
+     s: ap.n ? (ap.worst < 0 ? `worst <span class="down">${usd(ap.worst, true)}</span>` : 'no losing trade yet') : ''},
+  ]);
+  drawCurve(ap.curve || [], ap.start);
+  table('auto-open', ['Stock', '#Qty', '#Entry', '#Now', '#P&L', '#Stop'], ap.open, o => o.status === 'pending'
+    ? `<tr><td>${sym(o.symbol)}</td><td class="muted" colspan="5">buying at the next minute's price</td></tr>`
+    : `<tr title="${esc(o.label)}"><td>${sym(o.symbol)}</td><td class="num">${qty(o.qty)}</td><td class="num">${px(o.entry)}</td>
+       <td class="num">${px(o.now)}</td><td class="num ${cls(o.unrealized)}">${usd(o.unrealized, true)}</td>
+       <td class="num">${o.half_done ? '<span class="up">breakeven</span>' : px(o.stop_now)}</td></tr>`,
+    'Nothing open — it waits for the next alert.');
+  const groupRow = g => `<tr><td>${esc(g.name)}</td><td class="num">${g.n}</td><td class="num">${Math.round(g.won / g.n * 100)}%</td>
+     <td class="num ${cls(g.avg_r)}">${rr(g.avg_r)}</td><td class="num ${cls(g.pnl)}">${usd(g.pnl, true)}</td></tr>`;
+  table('auto-setups', ['Setup', '#Trades', '#Won', '#Avg', '#P&L'], ap.by_setup, groupRow, 'Shows up after the first trades close.');
+  table('auto-time', ['When', '#Trades', '#Won', '#Avg', '#P&L'], ap.by_time, groupRow, 'Shows up after the first trades close.');
+  table('auto-recent', ['Day', 'Time', 'Stock', 'Setup', '#Result', '#R', 'How it ended'], ap.recent, x =>
+    `<tr><td class="muted">${esc(x.date)}</td><td class="muted">${esc(x.time.replace(' ET', ''))}</td><td>${sym(x.symbol)}</td>
+     <td>${esc(x.label)}</td><td class="num ${cls(x.pnl)}">${usd(x.pnl, true)}</td><td class="num ${cls(x.r_mult)}">${rr(x.r_mult)}</td>
+     <td class="muted">${esc(REASON[x.reason] || x.reason)}</td></tr>`, 'No closed trades yet.');
+  $('auto-toggle').textContent = ap.on ? 'Turn off' : 'Turn on';
+}
+
+function drawCurve(points, start) {
+  if (points.length < 2) { $('curve').innerHTML = '<div class="empty">The line starts after the first closed trade.</div>'; $('curve-note').textContent = ''; return; }
+  const W = 600, H = 200, P = 8, vals = points.map(p => p[1]);
+  const lo = Math.min(...vals, start), hi = Math.max(...vals, start), span = (hi - lo) || 1;
+  const x = i => P + i * (W - 2 * P) / (points.length - 1), y = v => H - P - (v - lo) * (H - 2 * P) / span;
+  const end = vals[vals.length - 1], color = end >= start ? 'var(--up)' : 'var(--down)';
+  const line = points.map((p, i) => `${x(i).toFixed(1)},${y(p[1]).toFixed(1)}`).join(' ');
+  const dots = points.slice(1).map((p, i) => `<circle cx="${x(i + 1).toFixed(1)}" cy="${y(p[1]).toFixed(1)}" r="3" fill="${color}"><title>Trade ${i + 1}: ${usd(p[1])}</title></circle>`).join('');
+  $('curve').innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Autopilot balance">
+    <line x1="${P}" x2="${W - P}" y1="${y(start)}" y2="${y(start)}" stroke="var(--muted)" stroke-dasharray="4 4" stroke-width="1" vector-effect="non-scaling-stroke"/>
+    <polyline points="${line}" fill="none" stroke="${color}" stroke-width="2.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>${dots}</svg>`;
+  $('curve-note').textContent = `dashed line = where it started (${usd(start)})`;
+}
+
+let settingsDrawn = false;
+function renderSettings(s, force) {
+  if (settingsDrawn && !force) return;
+  if (document.activeElement && document.activeElement.closest && document.activeElement.closest('#settings')) return;
+  const groups = {};
+  s.settings.forEach(x => (groups[x.group] = groups[x.group] || []).push(x));
+  const order = ['Your rules', 'Alerts', 'Autopilot', 'Scanner', 'Options', 'Other'];
+  $('settings').innerHTML = order.filter(g => groups[g]).map(g => `<div class="card"><div class="card-head"><h2>${esc(g)}</h2></div>` +
+    groups[g].map(x => `<div class="set"><div class="n" title="${esc(x.name)}">${esc(x.label || x.name)}</div>
+      <div>${x.bool ? `<label class="switch"><input type="checkbox" data-n="${esc(x.name)}" ${x.value >= 0.5 ? 'checked' : ''}><span></span></label>`
+        : `<input type="number" step="any" data-n="${esc(x.name)}" value="${esc(x.value)}">`}</div>
+      <div class="h">${esc(x.bool ? x.help.replace(/\s*\(1 = [^)]*\)/g, '') : x.help)}</div><div class="saved" id="saved-${esc(x.name)}"></div></div>`).join('') + '</div>').join('');
+  settingsDrawn = true;
+}
+document.addEventListener('change', async e => {
+  const n = e.target.dataset && e.target.dataset.n; if (!n) return;
+  const value = e.target.type === 'checkbox' ? (e.target.checked ? '1' : '0') : e.target.value;
+  const r = await fetch('/api/set', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({name: n, value})});
+  const j = await r.json(), note = $('saved-' + n);
+  if (note) { note.textContent = j.ok ? 'Saved ✓' : (j.error || 'Not saved'); note.className = 'saved ' + (j.ok ? '' : 'down'); }
+});
+
+// ---- actions ----
+$('check-form').addEventListener('submit', async e => {
+  e.preventDefault(); const text = $('check-in').value.trim(); if (!text) return;
+  $('check-out').className = 'muted'; $('check-out').textContent = 'Checking…';
+  const r = await fetch('/api/check', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({text})});
+  const j = await r.json(); $('check-out').className = ''; $('check-out').innerHTML = j.html || 'No answer.';
+});
+$('bt').addEventListener('click', async () => { await fetch('/api/backtest', {method: 'POST'}); load(); });
+$('auto-toggle').addEventListener('click', async () => {
+  await fetch('/api/autopilot', {method: 'POST', headers: {'content-type': 'application/json'},
+    body: JSON.stringify({action: last && last.autopilot.on ? 'off' : 'on'})}); load();
+});
+$('auto-reset').addEventListener('click', async () => {
+  const amount = prompt('Start the autopilot over with how much pretend money?', last ? Math.round(last.autopilot.start) : 1000);
+  if (amount === null) return;
+  await fetch('/api/autopilot', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({action: 'reset', amount})}); load();
+});
+document.addEventListener('click', e => {
+  const a = e.target.closest('a.sym'); if (!a) return;
+  const s = a.dataset.s; $('chart-title').textContent = s;
+  $('chart-body').innerHTML = `<img alt="${esc(s)} chart" src="/chart/${encodeURIComponent(s)}.png?t=${Date.now()}" onerror="this.outerHTML='<div class=&quot;empty&quot;>No chart for this one right now (chart pictures need matplotlib and market data).</div>'">`;
+  $('chart-dlg').showModal();
+});
+$('chart-close').addEventListener('click', () => $('chart-dlg').close());
+$('chart-dlg').addEventListener('click', e => { if (e.target === $('chart-dlg')) $('chart-dlg').close(); });
+
+async function load() {
+  try { const r = await fetch('/api/state'); render(await r.json()); }
+  catch (err) { $('pills').innerHTML = '<span class="pill bad">DayBot isn\'t answering — is it running?</span>'; }
+}
+show((location.hash || '').slice(1) || store.get('daybot-tab') || 'today');
+load(); setInterval(load, 15000);
+</script>
+</body>
+</html>

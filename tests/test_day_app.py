@@ -312,10 +312,14 @@ def test_dashboard_state_and_routes():
         chk = await (await client.post("/api/check", json={"text": "TEST"})).json()
         bad = await (await client.post("/api/set", json={"name": "RISK_PER_TRADE_PCT", "value": "50"})).json()
         good = await (await client.post("/api/set", json={"name": "RISK_PER_TRADE_PCT", "value": "0.75"})).json()
+        reset = await (await client.post("/api/autopilot", json={"action": "reset", "amount": "$2,000"})).json()
+        off = await (await client.post("/api/autopilot", json={"action": "off"})).json()
         await client.close()
-        return page, api, chk, bad, good
-    page, api, chk, bad, good = asyncio.run(go())
+        return page, api, chk, bad, good, reset, off
+    page, api, chk, bad, good, reset, off = asyncio.run(go())
     assert "DayBot" in page and api["version"] and "Check · TEST" in chk["html"]
+    assert api["autopilot"]["on"] and "verdict" in api["autopilot"] and api["settings"][0]["label"]
+    assert reset["start"] == 2000 and reset["on"] and not off["on"]
     assert not bad["ok"] and good["ok"] and app.cfg.get("RISK_PER_TRADE_PCT") == 0.75
 
 
