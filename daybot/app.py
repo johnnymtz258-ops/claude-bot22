@@ -230,8 +230,8 @@ class App:
         now = time.time()
         self.backtest_progress = "starting"
 
-        async def progress(i, n):
-            self.backtest_progress = f"{i}/{n} days"
+        async def progress(text):
+            self.backtest_progress = str(text)
         try:
             await self.load_calendar(now)
             res = await run_backtest_job(self.alpaca, self.market, self.cfg, day_of(now), progress=progress)

@@ -1,8 +1,14 @@
 """Intraday setups, written once for longs and run on mirrored prices for shorts (so both sides follow exactly
-the same rules), plus the one exit plan every alert, paper trade and backtest uses.
+the same rules), plus the exit plans every alert, paper trade and backtest uses.
 
 Signals are judged on completed 5-minute bars of the regular session:
 
+  orb5  In-play 5-minute breakout (Zarattini, Barbon & Aziz, 2024): only the ~20 stocks trading far more than usual in
+        their first 5 minutes; a green first candle sets a buy-stop at its high, the stop is 10% of the daily range
+        (ATR) and the trade is held to the close — few big winners pay for many small losses
+  band  Index momentum (Zarattini, Aziz & Barbon, 2024): SPY / QQQ breaking out of the day's "noise band" (how far it
+        usually moves from the open by that time of day), checked every half hour; out when it closes back inside the
+        band or under VWAP at a half-hour check
   orb   Opening-range breakout: first close beyond the opening range (default 15 min), with VWAP and volume behind it
   vwap  VWAP reclaim / rejection: a stock on the right side of yesterday's close dips through VWAP and takes it back
         on volume within 30 minutes
@@ -10,26 +16,39 @@ Signals are judged on completed 5-minute bars of the regular session:
   leg2  Second leg (bull / bear flag): a strong first leg, an orderly pullback on lighter volume that holds VWAP,
         then the break of the flag — the "pump, dip, pump again" pattern, on a 5-minute chart
 
-Exit plan (the same everywhere so results compare): stop as given; take half at 1R and move the stop to break-even;
-the rest at 2R; anything still open is closed at 3:55pm. Inside a bar that touches both the stop and a target the
-stop is assumed to come first.
+Exit plans:
+  standard  stop as given; half at 1R and the stop to break-even; the rest at 2R          (orb, vwap, pmh, leg2)
+  close     stop as given, no target: held to 3:55pm                                       (orb5)
+  band      no fixed stop: out when a half-hour close falls back inside the band / VWAP   (band)
+Everything still open is closed at 3:55pm. Inside a bar that touches both the stop and a target the stop is assumed
+to come first. A buy-stop entry that fills in the same bar that touches the stop counts as stopped out.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
-from .bars import C, H, L, O, T, V, rvol
+from .bars import C, H, L, O, T, V, rvol, vwap
 
 BAR = 300                       # 5-minute bars
 EXIT_BEFORE_CLOSE = 5 * 60      # flat at 3:55pm
 
+ORB5_STOP_ATR = 0.10            # in-play breakout: stop at 10% of the daily ATR
+STOP_ENTRY_CUTOFF = 60 * 60     # a buy-stop that hasn't filled by 3pm is cancelled
+BAND_FIRST, BAND_LAST, BAND_STEP = 30, 330, 30      # band entries checked 10:00am … 3:00pm (minutes after the open)
+BAND_EXIT_LAST = 360            # band exits checked through 3:30pm; 3:55pm closes the rest
+PLANS = {"orb5": "close", "band": "band"}          # everything else: "standard"
+ENTRIES = {"orb5": "stop"}                         # everything else: "market" (the next bar's open)
+
 LABELS = {
+    ("orb5", "long"): "In-play 5-min breakout", ("orb5", "short"): "In-play 5-min breakdown",
+    ("band", "long"): "Index momentum up (noise-band breakout)",
+    ("band", "short"): "Index momentum down (noise-band breakdown)",
     ("orb", "long"): "Opening-range breakout", ("orb", "short"): "Opening-range breakdown",
     ("vwap", "long"): "VWAP reclaim", ("vwap", "short"): "VWAP rejection",
     ("pmh", "long"): "Gap-and-go (premarket high break)", ("pmh", "short"): "Gap-down breakdown (premarket low break)",
     ("leg2", "long"): "Second leg up (bull flag)", ("leg2", "short"): "Second leg down (bear flag)",
 }
-SETUP_NAMES = ("orb", "vwap", "pmh", "leg2")
+SETUP_NAMES = ("orb5", "band", "orb", "vwap", "pmh", "leg2")
 
 
 def label(setup: str, direction: str) -> str:
@@ -48,6 +67,9 @@ class Signal:
     t2: float
     reason: str
     context: dict = field(default_factory=dict)
+    plan: str = "standard"       # standard | close | band (see the module docstring)
+    entry_type: str = "market"   # market: next bar's open · stop: when price trades through `entry`
+    expires: int = 0             # a stop entry not filled by then is cancelled
 
     @property
     def key(self) -> str:
@@ -78,12 +100,20 @@ class Day:
     gap_pct: float = 0.0
     sign: int = 1
 
+    pmh_low: float = 0.0         # premarket low (used when mirroring)
+    in_play: int = 0             # rank among today's stocks in play (0 = not in play)
+    rvol5: float = 0.0           # first-5-minute volume vs its usual first 5 minutes
+    band: dict | None = None     # minutes after the open -> usual move from the open by then (fraction), SPY / QQQ
+
     def mirror(self) -> "Day":
         flip = [(b[T], -b[O], -b[L], -b[H], -b[C], b[V]) for b in self.bars]
-        return Day(self.symbol, flip, [-x for x in self.vw], self.open_ts, self.close_ts, self.atr, self.avg_vol,
-                   -self.pdc if self.pdc else 0.0, -self.pmh_low if self.pmh_low else 0.0, -self.gap_pct, -1)
+        return replace(self, bars=flip, vw=[-x for x in self.vw], pdc=-self.pdc if self.pdc else 0.0,
+                       pmh=-self.pmh_low if self.pmh_low else 0.0, pmh_low=-self.pmh if self.pmh else 0.0,
+                       gap_pct=-self.gap_pct, sign=-self.sign)
 
-    pmh_low: float = 0.0         # premarket low (used when mirroring)
+    def upto(self, i: int) -> "Day":
+        """The day as it looked when bar i closed."""
+        return replace(self, bars=self.bars[:i + 1], vw=self.vw[:i + 1])
 
     def rvol(self, i: int) -> float:
         if self.avg_vol <= 0:
@@ -117,8 +147,10 @@ def _orb(d: Day, i: int, cfg: dict) -> tuple | None:
     if vol_x < 1.2:
         return None
     stop = (orh + orl) / 2
-    return b[C], stop, (f"first close above the {k * 5}-min opening range high {abs(orh):.2f} on {vol_x:.1f}x volume, "
-                        f"{'above' if d.sign > 0 else 'below'} VWAP"), {"orh": orh, "orl": orl, "vol_x": vol_x}
+    up = d.sign > 0
+    return b[C], stop, (f"first close {'above' if up else 'below'} the {k * 5}-min opening range "
+                        f"{'high' if up else 'low'} {abs(orh):.2f} on {vol_x:.1f}x volume, {'above' if up else 'below'} "
+                        f"VWAP"), {"orh": orh, "orl": orl, "vol_x": vol_x}
 
 
 def _vwap(d: Day, i: int, cfg: dict) -> tuple | None:
@@ -159,7 +191,7 @@ def _pmh(d: Day, i: int, cfg: dict) -> tuple | None:
     if d.avg_vol and rv < 1.5:
         return None
     stop = min(max(d.vw[i], b[L]) - 0.02 * d.atr, b[C] - 0.12 * d.atr)
-    return b[C], stop, (f"gapped {abs(d.gap_pct):.1f}% and closed through the premarket "
+    return b[C], stop, (f"gapped {'up' if d.sign > 0 else 'down'} {abs(d.gap_pct):.1f}% and closed through the premarket "
                         f"{'high' if d.sign > 0 else 'low'} {abs(d.pmh):.2f}" + (f" on {rv:.1f}x relative volume" if rv else "")), \
         {"rvol": rv}
 
@@ -198,7 +230,52 @@ def _leg2(d: Day, i: int, cfg: dict) -> tuple | None:
         {"leg_atr": leg1 / d.atr, "retrace": retrace, "hod": hod}
 
 
-DETECTORS = {"orb": _orb, "vwap": _vwap, "pmh": _pmh, "leg2": _leg2}
+def _orb5(d: Day, i: int, cfg: dict) -> tuple | None:
+    if not d.in_play or i != 0:
+        return None                                          # decided once, on the first 5-minute candle
+    b = d.bars[0]
+    if b[C] <= b[O]:
+        return None                                          # a red first candle is a short (the mirror), a doji nothing
+    level = b[H]
+    stop = level - ORB5_STOP_ATR * d.atr
+    up = d.sign > 0
+    return level, stop, (f"in play today: #{d.in_play} by opening volume ({d.rvol5:.1f}x its usual first 5 minutes), "
+                         f"first 5-min candle {'green' if up else 'red'} — triggers if it trades "
+                         f"{'above' if up else 'below'} {abs(level):.2f}"), {"rank": d.in_play, "rvol5": d.rvol5}
+
+
+def band_upper(d: Day, minutes: int) -> float | None:
+    """The top of the noise band at `minutes` after the open (long side; the mirror gives the bottom)."""
+    sigma = (d.band or {}).get(minutes)
+    if not sigma or not d.bars:
+        return None
+    o = d.bars[0][O]
+    return max(o, d.pdc) + sigma * abs(o) if d.pdc else o + sigma * abs(o)
+
+
+def _band(d: Day, i: int, cfg: dict) -> tuple | None:
+    if not d.band:
+        return None
+    end = int(round((d.bars[i][T] + BAR - d.open_ts) / 60))
+    if end % BAND_STEP or not BAND_FIRST <= end <= BAND_LAST:
+        return None
+    upper = band_upper(d, end)
+    if upper is None:
+        return None
+    b = d.bars[i]
+    if b[C] <= max(upper, d.vw[i]):
+        return None
+    o = d.bars[0][O]
+    dist = d.band[end] * abs(o)
+    ref = max(o, d.pdc) if d.pdc else o
+    up = d.sign > 0
+    return b[C], b[C] - dist, (f"{'broke out above' if up else 'broke down below'} today's noise band "
+                               f"({abs(upper):.2f}) at the half-hour check, on the right side of VWAP"), \
+        {"upper": upper, "ref": ref, "open": abs(o), "band": dict(d.band), "dist": dist}
+
+
+DETECTORS = {"orb5": _orb5, "band": _band, "orb": _orb, "vwap": _vwap, "pmh": _pmh, "leg2": _leg2}
+PRICE_KEYS = {"orh", "orl", "hod", "upper", "ref"}
 
 
 def detect(day: Day, i: int, cfg: dict, fired: set, mirror: Day | None = None) -> list[Signal]:
@@ -217,56 +294,94 @@ def detect(day: Day, i: int, cfg: dict, fired: set, mirror: Day | None = None) -
                 continue
             entry, stop, reason, ctx = got
             risk = entry - stop
-            if not (0.08 * d.atr <= risk <= 0.6 * d.atr) or risk < 0.0015 * abs(entry):
+            plan = PLANS.get(name, "standard")
+            if plan == "standard" and not (0.08 * d.atr <= risk <= 0.6 * d.atr):
                 continue
+            if risk <= 0 or risk < 0.0015 * abs(entry):
+                continue                                     # a stop this tight is eaten by the spread
             s = d.sign
-            sig = Signal(name, direction, day.symbol, int(d.bars[i][T] + BAR), entry * s, stop * s,
-                         (entry + risk) * s, (entry + 2 * risk) * s, reason,
-                         {k: (v * s if k in {"orh", "orl", "hod"} else v) for k, v in ctx.items()})
+            t1, t2 = ((entry + risk) * s, (entry + 2 * risk) * s) if plan == "standard" else (0.0, 0.0)
+            entry_type = ENTRIES.get(name, "market")
+            sig = Signal(name, direction, day.symbol, int(d.bars[i][T] + BAR), entry * s, stop * s, t1, t2, reason,
+                         {k: (v * s if k in PRICE_KEYS else v) for k, v in ctx.items()}, plan, entry_type,
+                         d.close_ts - STOP_ENTRY_CUTOFF if entry_type == "stop" else 0)
             fired.add(key)
             out.append(sig)
     return out
 
 
-def simulate(sig: Signal, bars: list, close_ts: int, slippage_pct: float, bar_seconds: int = BAR) -> dict | None:
-    """Trade a signal with the standard plan on the bars that follow it.
+def band_trail(ctx: dict, s: int, minutes: int, vw: float) -> float | None:
+    """Where a band trade gets out at a half-hour check, in the trade's direction (s=1 long, -1 short): the band edge
+    or VWAP, whichever is tighter. None when there's no band value for that time."""
+    table = ctx.get("band") or {}
+    sigma = table.get(minutes, table.get(str(minutes)))
+    if not sigma or not ctx.get("ref"):
+        return None
+    edge = s * float(ctx["ref"]) + float(sigma) * float(ctx.get("open") or abs(ctx["ref"]))
+    return max(edge, s * vw)
 
-    Entry: the open of the first bar after the signal (plus slippage). Returns None when that open is already past
-    the stop (nobody should take it). status 'closed' or 'open' (ran out of bars before the plan finished)."""
-    after = [b for b in bars if b[T] >= sig.ts]
-    if not after:
+
+def simulate(sig: Signal, bars: list, close_ts: int, slippage_pct: float, bar_seconds: int = BAR) -> dict | None:
+    """Trade a signal with its exit plan on the regular-session bars of its day (`bars` start at the open).
+
+    Market entry: the open of the first bar after the signal. Stop entry: the first bar that trades through the level,
+    filled at the level (or the open, if it gapped through). Plus slippage both ways. Returns None for a trade nobody
+    could take (opened past the stop, or a stop entry that never filled). status 'closed' or 'open' (ran out of bars)."""
+    first = next((k for k, b in enumerate(bars) if b[T] >= sig.ts), None)
+    if first is None:
         return None
     s = 1 if sig.direction == "long" else -1
     slip = slippage_pct / 100
-    entry = after[0][O] * (1 + s * slip)
+    deadline = close_ts - EXIT_BEFORE_CLOSE
+    open_ts = bars[0][T]
+    vws = vwap(bars) if sig.plan == "band" else []
+    if sig.entry_type == "stop":
+        until = sig.expires or deadline
+        k = next((k for k in range(first, len(bars)) if bars[k][T] < until
+                  and (bars[k][H] if s > 0 else -bars[k][L]) >= sig.entry * s), None)
+        if k is None:
+            return None
+        fill = max(bars[k][O] * s, sig.entry * s) * s
+    else:
+        k = first
+        fill = bars[k][O]
+    entry = fill * (1 + s * slip)
     if s * (entry - sig.stop) <= 0:
         return None
-    risk = s * (entry - sig.stop)
+    risk = sig.risk if sig.plan == "band" else s * (entry - sig.stop)
     stop, half, booked = sig.stop, False, 0.0
-    deadline = close_ts - EXIT_BEFORE_CLOSE
     exit_price, exit_ts, reason = None, 0, ""
-    for b in after:
+    for j in range(k, len(bars)):
+        b = bars[j]
         if b[T] >= deadline:
             exit_price, exit_ts, reason = b[O] * (1 - s * slip), b[T], "time"
             break
         lo, hi = (b[L], b[H]) if s > 0 else (-b[H], -b[L])
-        op = b[O] * s
-        if lo <= stop * s:
-            fill = min(op, stop * s) * s
-            exit_price, exit_ts = fill * (1 - s * slip), b[T]
+        if sig.plan != "band" and lo <= stop * s:
+            op = b[O] * s if j > k or sig.entry_type != "stop" else fill * s
+            px = min(op, stop * s) * s
+            exit_price, exit_ts = px * (1 - s * slip), b[T]
             reason = "breakeven" if half else "stop"
             break
-        if not half and hi >= sig.t1 * s:
-            half, booked = True, sig.t1 * (1 - s * slip)
-            stop = entry
-        if half and hi >= sig.t2 * s:
-            exit_price, exit_ts, reason = sig.t2 * (1 - s * slip), b[T], "target"
-            break
+        if sig.plan == "standard":
+            if not half and hi >= sig.t1 * s:
+                half, booked = True, sig.t1 * (1 - s * slip)
+                stop = entry
+            if half and hi >= sig.t2 * s:
+                exit_price, exit_ts, reason = sig.t2 * (1 - s * slip), b[T], "target"
+                break
+        elif sig.plan == "band" and j > k:
+            minutes = int(round((b[T] + bar_seconds - open_ts) / 60))
+            if minutes % BAND_STEP == 0 and minutes <= BAND_EXIT_LAST:
+                trail = band_trail(sig.context, s, minutes, vws[j])
+                if trail is not None and s * b[C] < trail:
+                    exit_price, exit_ts, reason = b[C] * (1 - s * slip), b[T] + bar_seconds, "trail"
+                    break
     status = "closed"
     if exit_price is None:
-        last = after[-1]
+        last = bars[-1]
         exit_price, exit_ts, reason, status = last[C], last[T] + bar_seconds, "open", "open"
     move = s * (exit_price - entry)
     r = ((0.5 * s * (booked - entry) + 0.5 * move) if half else move) / risk
     return {"entry": entry, "exit": exit_price, "exit_ts": exit_ts, "r": r, "half": half, "reason": reason,
-            "risk": risk, "status": status, "entry_ts": after[0][T]}
+            "risk": risk, "status": status, "entry_ts": bars[k][T]}

@@ -51,6 +51,7 @@ SETTINGS = {s.name: s for s in (
     Setting("ALERT_UNPROVEN", 1, "Also send setups the backtest hasn't proven — silently and labelled 'unproven' (1 = on). Proven ones always ping", 0, 1, True),
     Setting("SHORT_ALERTS", 0, "Also send short setups (betting a stock falls). Off: Robinhood and Chase don't let you short stocks — the only way is buying puts. Paper still measures them (1 = on)", 0, 1, True),
     Setting("MAX_ALERTS_PER_HOUR", 6, "Most setup alerts per hour", 1, 60),
+    Setting("ORB5_TOP", 20, "In-play breakout: how many of the day's stocks in play (by first-5-minute volume) it trades", 0, 50),
     Setting("ORB_MINUTES", 15, "Opening range length for the opening-range breakout (5, 15 or 30)", 5, 30),
     Setting("OPTION_IDEAS", 1, "Add a defined-risk option idea to setup alerts (1 = on)", 0, 1, True),
     Setting("OPTION_MIN_DTE", 1, "Option ideas: fewest days to expiry (0 allows same-day expiry)", 0, 60),
@@ -66,7 +67,7 @@ SETTINGS = {s.name: s for s in (
     Setting("AUTOPILOT_NOTIFY", 1, "Tell me (silently) each time the autopilot buys and sells (1 = on)", 0, 1, True),
     Setting("PAPER_ACCOUNT", 25_000, "Size the setup gauge uses internally ($; results are measured in R, so it barely matters)", 1000, 10_000_000),
     Setting("SLIPPAGE_PCT", 0.05, "Cost per side used by the backtest and paper (% of price: spread + slippage)", 0, 2),
-    Setting("BACKTEST_DAYS", 60, "Trading days of history each setup is replayed over", 10, 250),
+    Setting("BACKTEST_DAYS", 120, "Trading days of history each setup is replayed over", 10, 250),
     # --- your trades ---------------------------------------------------------------------------------------------
     Setting("CHECK_MY_TRADES", 1, "Check every trade you make the moment it fills (1 = on)", 0, 1, True),
     Setting("MONITOR_POSITIONS", 1, "Watch your open day trades: stop hit, target hit, VWAP lost, close coming (1 = on)", 0, 1, True),
