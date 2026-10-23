@@ -36,6 +36,7 @@ ORB5_STOP_ATR = 0.10            # in-play breakout: stop at 10% of the daily ATR
 STOP_ENTRY_CUTOFF = 60 * 60     # a buy-stop that hasn't filled by 3pm is cancelled
 BAND_FIRST, BAND_LAST, BAND_STEP = 30, 330, 30      # band entries checked 10:00am … 3:00pm (minutes after the open)
 BAND_EXIT_LAST = 360            # band exits checked through 3:30pm; 3:55pm closes the rest
+BAND_MIN_R_ATR = 0.20           # a band trade's 1R is never under 20% of the daily ATR (results compare with stops)
 PLANS = {"orb5": "close", "band": "band"}          # everything else: "standard"
 ENTRIES = {"orb5": "stop"}                         # everything else: "market" (the next bar's open)
 
@@ -49,6 +50,16 @@ LABELS = {
     ("leg2", "long"): "Second leg up (bull flag)", ("leg2", "short"): "Second leg down (bear flag)",
 }
 SETUP_NAMES = ("orb5", "band", "orb", "vwap", "pmh", "leg2")
+ABOUT = {
+    "orb5": "The day's ~20 busiest stocks at the open: buy if it breaks its first 5-minute high, small stop (10% of its "
+            "daily range), hold to the close. Few winners, but big ones. From Zarattini, Barbon & Aziz (2024).",
+    "band": "SPY / QQQ: buy when, at a half-hour check, it's further from the open than it usually gets by that time; "
+            "out when it falls back. From Zarattini, Aziz & Barbon (2024).",
+    "orb": "First 5-minute close above the first 15 minutes' range, on volume, above VWAP. Half at 1R, rest at 2R.",
+    "vwap": "On a green day, a dip under VWAP that's bought back on volume. Half at 1R, rest at 2R.",
+    "pmh": "A stock that gapped 3%+ breaking its premarket high in the first hour. Half at 1R, rest at 2R.",
+    "leg2": "A strong first leg, an orderly pullback on light volume, then the next leg. Half at 1R, rest at 2R.",
+}
 
 
 def label(setup: str, direction: str) -> str:
@@ -266,7 +277,7 @@ def _band(d: Day, i: int, cfg: dict) -> tuple | None:
     if b[C] <= max(upper, d.vw[i]):
         return None
     o = d.bars[0][O]
-    dist = d.band[end] * abs(o)
+    dist = max(d.band[end] * abs(o), BAND_MIN_R_ATR * d.atr)    # 1R: the usual move by now (a fifth of a day at least)
     ref = max(o, d.pdc) if d.pdc else o
     up = d.sign > 0
     return b[C], b[C] - dist, (f"{'broke out above' if up else 'broke down below'} today's noise band "

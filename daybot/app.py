@@ -253,14 +253,28 @@ class App:
 
     def backtest_summary(self, res: dict) -> str:
         lines = [f"<b>🧪 Backtest done</b> · {len(res['days'])} trading days · {res['pairs']} stock-days · "
-                 f"{res['trades']} trades (costs included)"]
+                 f"{res['trades']} trades (costs included)"
+                 + (f" · {res['in_play']} stocks in play" if res.get("in_play") else "")]
+        shorts = self.cfg.flag("SHORT_ALERTS")
+        usable = {k: st for k, st in res["stats"].items() if k.endswith("_long") or shorts}
+        proven = [k for k, st in usable.items() if st["status"] == "proven"]
+        close = [k for k, st in usable.items() if st["status"] == "promising"]
+        name = (lambda k: esc(label(*k.split("_", 1))))
+        if proven:
+            lines.append("✅ <b>Worth following:</b> " + ", ".join(name(k) for k in proven) + " — these ping you now")
+        elif close:
+            lines.append("🟡 Nothing proven yet. Closest: " + ", ".join(name(k) for k in close)
+                         + " — made money overall, not steadily enough to trust. Small, or autopilot only.")
+        else:
+            lines.append("🔴 Nothing made money after costs. Keep real money out of these setups for now; paper and the "
+                         "autopilot keep measuring, and a setup that starts winning live gets promoted by itself.")
+        lines.append("")
         for key, st in sorted(res["stats"].items(), key=lambda kv: -kv[1].get("avg_r", 0)):
             setup, direction = key.split("_", 1)
             lines.append(f"{STATUS_TEXT.get(st['status'], st['status'])} {esc(label(setup, direction))}: {st['n']} trades, "
-                         f"{st['avg_r']:+.2f}R avg, {st['won'] * 100:.0f}% won")
-        if not any(st["status"] == "proven" for st in res["stats"].values()):
-            lines.append("\nNothing is proven yet — that's an honest result, not a failure. Alerts stay silent and "
-                         "labelled until a setup earns it; paper keeps measuring.")
+                         f"{st['avg_r']:+.2f}R avg, {st['won'] * 100:.0f}% won"
+                         + (" (paper only)" if direction == "short" and not shorts else ""))
+        lines.append("\nDetails and charts: the dashboard's Setups tab.")
         return "\n".join(lines)
 
     # ---- the assistant's context -----------------------------------------------------------------------------------
@@ -463,12 +477,13 @@ class App:
 
 
 WHATS_NEW = ("<b>🆕 New in this version</b>\n"
-             "🤖 <b>Autopilot</b>: a pretend $1,000 account now takes every trade the bot alerts you on, by itself, and "
-             "tells you each buy and sell. In a couple of weeks you'll know in dollars whether following DayBot pays — "
-             "/autopilot\n"
-             "📊 A cleaner dashboard with tabs: http://localhost:8788\n"
-             "💼 Sizes now fit the cash you actually have (fractional shares when needed)\n"
-             "🧹 Crypto and long-term holdings are no longer treated as day trades; leveraged ETFs left out of gappers")
+             "🔥 <b>Stocks in play</b>: at 9:35am DayBot ranks the day's busiest stocks and sends one message with a "
+             "buy-stop and a stop for each (a strategy from 2024 day-trading research)\n"
+             "📈 <b>SPY / QQQ momentum</b>: alerts when the index breaks out of its usual daily range\n"
+             "🧪 Tonight after the close it re-tests every setup over 120 days (instead of 60) — the result comes here, "
+             "with charts on the dashboard's Setups tab\n"
+             "🤖 The autopilot follows the new setups on pretend money too\n"
+             "🧹 Chase's cash sweep (QACDS) is no longer counted as a trade")
 
 
 def _ssl_context():

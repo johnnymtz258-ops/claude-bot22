@@ -45,6 +45,7 @@ class Scanner:
         self.first5_day = ""
         self.bands: dict[str, dict] = {}                          # SPY / QQQ noise band for today
         self.bands_day = ""
+        self._prepare_try = 0.0
 
     # ---- the watchlist -----------------------------------------------------------------------------------------
     def watchlist(self, day: str) -> list[str]:
@@ -75,6 +76,10 @@ class Scanner:
     async def prepare(self, now: float) -> None:
         """Once a day: the SPY / QQQ noise band (from the last 14 days) and everyone's usual first 5 minutes."""
         day = day_of(now)
+        if (self.bands_day == day and (self.first5_day == day or self.cfg.get("ORB5_TOP") <= 0)) \
+                or now - self._prepare_try < 300:
+            return                                         # done today, or failed less than 5 minutes ago
+        self._prepare_try = now
         if self.bands_day != day:
             days = self.market.trading_days_back(day, INPLAY_LOOKBACK + 4)
             try:
@@ -102,6 +107,8 @@ class Scanner:
                 self.first5_hist, self.first5_day = hist, day
             except AlpacaError as exc:
                 self.last_error = f"in play: {exc}"
+        if self.bands_day == day and (self.first5_day == day or self.cfg.get("ORB5_TOP") <= 0):
+            self._prepare_try = 0.0
 
     async def rank_in_play(self, now: float) -> list[tuple[str, int, float]]:
         """At 9:35: the day's stocks in play, best first — [(symbol, rank, rvol5)]. Stored, so a restart keeps it."""

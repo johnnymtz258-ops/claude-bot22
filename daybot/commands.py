@@ -452,10 +452,12 @@ class Commands:
                          f"stock-days, {info.get('trades', '?')} trades, costs included")
         else:
             lines.append("No backtest yet — /backtest")
+        shorts = self.app.cfg.flag("SHORT_ALERTS")
         for r in table:
             bt = r["backtest"]
             pp = r["paper"]
-            line = f"{STATUS_TEXT.get(r['status'], r['status'])} <b>{esc(r['label'])}</b>"
+            status = "✅ proven live" if r.get("live") else STATUS_TEXT.get(r["status"], r["status"])
+            line = f"{status} <b>{esc(r['label'])}</b>" + (" (paper only)" if r["direction"] == "short" and not shorts else "")
             if bt and bt["n"]:
                 line += (f"\n   backtest {int(bt['n'])} trades · {num(bt['avg_r']):+.2f}R avg · {num(bt['won']) * 100:.0f}% won · "
                          f"halves {num(bt['half1']):+.2f}/{num(bt['half2']):+.2f}R")

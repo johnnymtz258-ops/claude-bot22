@@ -76,6 +76,9 @@ def test_crypto_and_cash_sweeps_are_not_day_trades():
     assert normalize_order({**base, "universal_symbol": {"symbol": "DOGE"}}, "a") is None          # no type: known coin
     assert normalize_order({**base, "universal_symbol": {"symbol": "ETH-USD"}}, "a") is None
     assert normalize_order({**base, "universal_symbol": {"symbol": "SPAXX", "type": {"code": "oef"}}}, "a") is None
+    assert normalize_order({**base, "universal_symbol": {"symbol": "QACDS", "type": {"code": "cs"}}}, "a") is None
+    sweep = {"id": "s", "type": "BUY", "units": 500, "price": 1.0, "trade_date": "2026-10-21", "symbol": {"symbol": "QACDS"}}
+    assert normalize_activity(sweep, "a") is None
     stock = normalize_order({**base, "universal_symbol": {"symbol": "AMD", "type": {"code": "cs"}}}, "a")
     assert stock["symbol"] == "AMD" and stock["kind"] == "stock"
     etf = normalize_order({**base, "universal_symbol": {"symbol": "VOO", "type": {"code": "et"}}}, "a")

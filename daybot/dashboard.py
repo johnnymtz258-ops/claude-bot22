@@ -9,11 +9,50 @@ from aiohttp import web
 
 from . import VERSION
 from .clock import clock_text, day_of, et
+from .util import loads, num
 from .coach import leaks
 from .accounts import spendable
 from .config import SETTINGS
 from .ledger import NOT_HOLDING
-from .setups import label
+from .setups import ABOUT, label
+
+
+_CURVES: dict[tuple, list] = {}
+
+
+def _curve(bt: dict | None, points: int = 60) -> list[float]:
+    """A setup's backtest as a running total of R, trade by trade (at most `points` points, for a sparkline)."""
+    if not bt:
+        return []
+    key = (bt.get("ts"), bt.get("setup"), bt.get("direction"))
+    if key not in _CURVES:
+        trades = (loads(bt.get("detail"), {}) or {}).get("trades") or []
+        cum, series = 0.0, []
+        for row in trades:
+            cum += num(row[-1])
+            series.append(round(cum, 2))
+        step = max(1, -(-len(series) // points))
+        if len(_CURVES) > 64:
+            _CURVES.clear()
+        _CURVES[key] = ([0.0] + series[step - 1::step] + ([series[-1]] if series and (len(series) % step) else [])) \
+            if series else []
+    return _CURVES[key]
+
+
+def _in_play(app, day: str, now: float) -> list[dict]:
+    """Today's stocks in play and what each breakout did."""
+    out = []
+    for w in app.db.rows("select * from watch where day=? and source='inplay' order by score desc", (day,)):
+        info = loads(w["data"], {}) or {}
+        p = app.db.row("select * from paper where day=? and symbol=? and setup='orb5' order by id desc limit 1",
+                       (day, w["symbol"])) or {}
+        first = info.get("first5") or []
+        out.append({"symbol": w["symbol"], "rank": info.get("rank"), "rvol5": info.get("rvol5"),
+                    "candle": ("green" if first[3] > first[0] else "red" if first[3] < first[0] else "flat")
+                    if len(first) >= 4 else "", "direction": p.get("direction"), "level": p.get("entry"),
+                    "stop": p.get("stop"), "status": p.get("status"), "r": p.get("r_mult"), "reason": p.get("reason"),
+                    "auto": p.get("auto"), "now": app.data.last_price(w["symbol"])})
+    return out
 
 
 def _market_text(app, now: float) -> str:
@@ -93,8 +132,13 @@ def state(app, now: float | None = None) -> dict:
         "rules": {k: app.cfg.get(k) for k in ("RISK_PER_TRADE_PCT", "DAILY_MAX_LOSS_PCT", "MAX_TRADES_PER_DAY")},
         "today": {k: v for k, v in st.items() if k != "last_loss"}, "trade_list": trades,
         "open": open_rows, "alerts": alerts, "gappers": app.scanner.gappers(day)[:12], "watch": watch,
-        "setups": [{"label": r["label"], "status": r["status"], "live": r.get("live"), "bt": r["backtest"],
+        "setups": [{"setup": r["setup"], "direction": r["direction"], "label": r["label"], "status": r["status"],
+                    "live": r.get("live"), "about": ABOUT.get(r["setup"], ""), "curve": _curve(r["backtest"]),
+                    "bt": {k: v for k, v in (r["backtest"] or {}).items() if k != "detail"} or None,
                     "paper": r["paper"]} for r in table],
+        "backtest_info": {"ts": int(num(app.db.get_meta("backtest_ts"), 0)),
+                          **(loads(app.db.get_meta("backtest_summary"), {}) or {})},
+        "in_play": _in_play(app, day, now),
         "gauge": app.paper.stats(), "journal": lk, "autopilot": auto,
         "feed": feed,
         "status": app.status_text(now), "backtest": app.backtest_progress,

@@ -106,9 +106,19 @@ def type_code(value) -> str:
     return ""
 
 
+# brokers' cash sweeps and money-market funds (always $1.00): parked cash, not a trade
+CASH_SWEEPS = {"QACDS", "QACSS", "SPAXX", "FDRXX", "FZFXX", "SWVXX", "VMFXX", "VUSXX", "SNVXX", "SNOXX", "TTTXX",
+               "FCASH", "CORE", "MMDA", "SWGXX", "SPRXX", "VMRXX", "JPCXX"}
+
+
+def is_sweep(symbol: str) -> bool:
+    s = str(symbol or "").upper()
+    return s in CASH_SWEEPS or (len(s) == 5 and s.endswith("XX"))
+
+
 def tradable(symbol: str, code: str, extra_crypto_hint: bool = False) -> bool:
     """A stock / ETF DayBot should follow (not crypto, not a cash sweep or mutual fund)."""
-    if not symbol or "-" in symbol or "/" in symbol:
+    if not symbol or "-" in symbol or "/" in symbol or is_sweep(symbol):
         return False
     if code:
         return code in TRADABLE_TYPES
@@ -199,7 +209,7 @@ def normalize_position(r: dict, account_id: str) -> dict | None:
                 "qty": units, "avg_price": avg, "price": price, "multiplier": mult}
     if kind and kind not in STOCK_KINDS:
         return None                                   # crypto, funds, bonds, futures: not what DayBot trades
-    if r.get("cash_equivalent"):
+    if r.get("cash_equivalent") or is_sweep(_sym(inst) or _sym(r.get("symbol") or {})):
         return None                                   # a cash sweep / money-market fund
     sym = _sym(inst) or _sym(r.get("symbol") or {})
     if not sym:

@@ -128,6 +128,10 @@ dialog::backdrop{background:rgba(0,0,0,.55)}dialog img{width:100%;border-radius:
       </div>
     </div>
     <div class="card">
+      <div class="card-head"><h2>🔥 Stocks in play today</h2><span class="muted">the busiest stocks at the open — buy only above the first 5-minute high</span></div>
+      <div class="table-wrap"><table id="inplay"></table></div>
+    </div>
+    <div class="card">
       <div class="card-head"><h2>Your open day trades</h2><span class="muted">from Robinhood / Chase, with the plan DayBot gave them</span></div>
       <div class="table-wrap"><table id="open"></table></div>
     </div>
@@ -152,6 +156,7 @@ dialog::backdrop{background:rgba(0,0,0,.55)}dialog img{width:100%;border-radius:
       <div class="card">
         <div class="card-head"><h2>Open now</h2></div>
         <div class="table-wrap"><table id="auto-open"></table></div>
+        <div class="hint" id="auto-waiting" style="margin:10px 0 0"></div>
       </div>
       <div class="card">
         <div class="card-head"><h2>Which setups make money</h2><span class="muted">follow the green ones</span></div>
@@ -171,8 +176,8 @@ dialog::backdrop{background:rgba(0,0,0,.55)}dialog img{width:100%;border-radius:
         <div class="card-head"><h2>How the autopilot trades</h2></div>
         <ul class="list muted" style="font-size:13px">
           <li>Takes every setup DayBot alerts you on — pretend money, nothing touches your accounts.</li>
-          <li>Buys at the next minute's price plus costs, risks 1% of its balance, never more cash than it has.</li>
-          <li>Sells half at the first target and moves the stop to breakeven, the rest at the second target, or at the stop. Out by 3:55pm.</li>
+          <li>Buys at the next minute's price plus costs (in-play breakouts: only when the price breaks the first 5-minute high), risks 1% of its balance, never more cash than it has.</li>
+          <li>Sells by each setup's plan: in-play breakouts hold to 3:55pm unless stopped; SPY/QQQ band trades get out when a half-hour close falls back; the others sell half at the first target, move the stop to breakeven and sell the rest at the second.</li>
           <li>Judge it after 20+ trades — a few trades are mostly luck.</li>
         </ul>
         <div class="row" style="margin-top:12px">
@@ -211,6 +216,7 @@ dialog::backdrop{background:rgba(0,0,0,.55)}dialog img{width:100%;border-radius:
   </section>
 
   <section id="tab-setups" class="tab">
+    <div class="banner" id="data-says"></div>
     <div class="card">
       <div class="card-head"><h2>Setups — what each one has earned</h2></div>
       <p class="hint">A setup is <b>proven</b> when it made money after costs in both halves of the test period, still does without
@@ -301,6 +307,18 @@ function render(s) {
      <td class="wrap">${a.proven ? '✅' : '🧪'} ${esc(a.label)}</td><td class="num">${px(a.entry)}</td>
      <td class="${cls(a.paper_r)}">${a.paper === 'closed' ? rr(a.paper_r) : a.paper === 'open' ? 'in play' : a.paper === 'skipped' ? '<span class="muted">no entry</span>' : '<span class="muted">waiting</span>'}</td></tr>`,
     'No setups yet today. Alerts come during market hours (9:30am–4pm ET).');
+  table('inplay', ['#', 'Stock', 'First 5 min', '#Opening vol', '#Trigger', '#Stop', '#Now', 'What happened'], s.in_play, x => {
+    let what = '<span class="muted">no trade (flat first candle)</span>';
+    if (x.status === 'pending') what = `<span class="muted">waiting — triggers ${x.direction === 'long' ? 'above' : 'below'} ${px(x.level)}</span>`;
+    else if (x.status === 'open') { const r = x.now && x.level && x.stop ? (x.direction === 'long' ? 1 : -1) * (x.now - x.level) / Math.abs(x.level - x.stop) : null;
+      what = `<b>in the trade</b> <span class="${cls(r)}">${r == null ? '' : rr(r)}</span>`; }
+    else if (x.status === 'closed') what = `<span class="${cls(x.r)}">${rr(x.r)}</span> <span class="muted">${x.reason === 'time' ? 'held to the close' : x.reason === 'stop' ? 'stopped out' : esc(x.reason || '')}</span>`;
+    else if (x.status === 'skipped') what = '<span class="muted">never triggered</span>';
+    const shortTxt = x.direction === 'short' && !((s.settings.find(y => y.name === 'SHORT_ALERTS') || {}).value >= 0.5) ? ' <span class="muted">· short, paper only</span>' : '';
+    return `<tr><td class="muted">${x.rank || ''}</td><td>${sym(x.symbol)}${x.auto ? ' 🤖' : ''}</td>
+      <td>${x.candle === 'green' ? '🟢 green' : x.candle === 'red' ? '🔴 red' : '—'}</td><td class="num">${x.rvol5 ? (+x.rvol5).toFixed(1) + '×' : '—'}</td>
+      <td class="num">${px(x.level)}</td><td class="num">${px(x.stop)}</td><td class="num">${px(x.now)}</td><td>${what}${shortTxt}</td></tr>`; },
+    'The list is built at 9:35am ET on market days (🤖 = the autopilot took it).');
   table('open', ['Stock', 'Side', '#Qty', '#Entry', '#Now', '#P&L', '#Stop', '#Target 1', '#Target 2', 'Since'], s.open, o =>
     `<tr><td>${sym(o.underlying)} ${o.kind === 'option' ? `<span class="muted">${esc(o.symbol)}</span>` : ''}</td><td>${esc(o.direction)}</td>
      <td class="num">${qty(o.open_qty)}</td><td class="num">${px(o.entry_avg)}</td><td class="num">${px(o.und_now)}</td>
@@ -351,16 +369,49 @@ function render(s) {
     'No accounts linked yet — send /connect to DayBot in Telegram.');
 
   const st = {proven: ['good', '✅ proven'], promising: ['mid', '🟡 promising'], thin: ['', '⚪ too few trades'],
-    negative: ['bad', '🔴 loses'], benched: ['bad', '⏸ benched'], untested: ['', '⚪ untested']};
-  table('setups', ['Setup', 'Status', '#Backtest trades', '#Avg R', '#Won', '#Live paper'], s.setups, x => {
+    negative: ['bad', '🔴 loses'], benched: ['bad', '⏸ benched'], untested: ['', '⚪ not tested yet']};
+  const shorts = (s.settings.find(x => x.name === 'SHORT_ALERTS') || {}).value >= 0.5;
+  table('setups', ['Setup', 'Status', '#Backtest trades', '#Avg R', '#Won', '#Live paper', 'Backtest, trade by trade'], s.setups, x => {
     const [c, txt] = x.live ? ['good', '✅ proven live'] : (st[x.status] || ['', x.status]);
-    return `<tr><td>${esc(x.label)}</td><td><span class="badge ${c}">${txt}</span></td>
+    const paperOnly = x.direction === 'short' && !shorts;
+    return `<tr${paperOnly ? ' style="opacity:.6"' : ''}><td class="wrap" style="min-width:240px"><b>${esc(x.label)}</b>${paperOnly ? ' <span class="muted">· paper only</span>' : ''}
+       ${x.direction === 'long' ? `<div class="muted" style="font-size:12px">${esc(x.about)}</div>` : ''}</td>
+     <td><span class="badge ${c}">${txt}</span></td>
      <td class="num">${x.bt ? x.bt.n : '—'}</td><td class="num ${x.bt ? cls(x.bt.avg_r) : ''}">${x.bt ? rr(x.bt.avg_r) : '—'}</td>
      <td class="num">${x.bt ? Math.round(x.bt.won * 100) + '%' : '—'}</td>
-     <td class="num ${cls(x.paper.avg_r)}">${x.paper.n ? x.paper.n + ' · ' + rr(x.paper.avg_r) : '—'}</td></tr>`; });
+     <td class="num ${cls(x.paper.avg_r)}">${x.paper.n ? x.paper.n + ' · ' + rr(x.paper.avg_r) : '—'}</td>
+     <td>${spark(x.curve)}</td></tr>`; });
+  renderDataSays(s, shorts);
   $('bt-note').textContent = s.backtest ? 'Running: ' + s.backtest : '';
   $('status').textContent = strip(s.status);
   if ($('tab-settings').classList.contains('on')) renderSettings(s, false);
+}
+
+function spark(points) {
+  if (!points || points.length < 2) return '<span class="muted">—</span>';
+  const W = 140, H = 30, lo = Math.min(0, ...points), hi = Math.max(0, ...points), span = (hi - lo) || 1;
+  const x = i => (i * (W - 2) / (points.length - 1) + 1).toFixed(1), y = v => (H - 2 - (v - lo) * (H - 4) / span).toFixed(1);
+  const end = points[points.length - 1], color = end >= 0 ? 'var(--up)' : 'var(--down)';
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="running total ${end.toFixed(1)}R">
+    <line x1="1" x2="${W - 1}" y1="${y(0)}" y2="${y(0)}" stroke="var(--line)" stroke-width="1"/>
+    <polyline points="${points.map((v, i) => x(i) + ',' + y(v)).join(' ')}" fill="none" stroke="${color}" stroke-width="1.6"/></svg>
+    <span class="${cls(end)}" style="font-size:12px">${end > 0 ? '+' : ''}${end.toFixed(0)}R</span>`;
+}
+
+function renderDataSays(s, shorts) {
+  const bi = s.backtest_info || {}, usable = s.setups.filter(x => x.direction === 'long' || shorts);
+  const good = usable.filter(x => x.status === 'proven'), close = usable.filter(x => x.status === 'promising');
+  const losing = s.setups.filter(x => x.status === 'negative' || x.status === 'benched');
+  const fmt = x => `<b>${esc(x.label)}</b> (${x.bt ? x.bt.n + ' trades, ' + rr(x.bt.avg_r) + ' avg' : 'live paper ' + x.paper.n + ' trades, ' + rr(x.paper.avg_r)})`;
+  let head, kind;
+  if (!bi.ts) { head = 'Not tested yet — the backtest runs by itself after the 4pm close (keep DayBot running).'; kind = ''; }
+  else if (good.length) { head = `✅ Worth following: ${good.map(fmt).join(', ')}. These ping your phone.`; kind = 'good'; }
+  else if (close.length) { head = `🟡 Nothing is proven yet. Closest: ${close.map(fmt).join(', ')} — made money overall but not steadily enough to trust. Follow them small, or on the autopilot only.`; kind = 'mid'; }
+  else { head = '🔴 Nothing has made money after costs in the test yet. Keep your money out of these setups; the autopilot and paper keep measuring, and setups that start winning live get promoted by themselves.'; kind = 'bad'; }
+  const when = bi.ts ? new Date(bi.ts * 1000).toLocaleDateString([], {month: 'short', day: 'numeric'}) : '';
+  const meta = bi.ts ? `<div class="muted" style="margin-top:6px;font-size:13px">Last test: ${when} · ${bi.days || '?'} trading days · ${(bi.trades || 0).toLocaleString()} trades, costs included${losing.length ? ` · ${losing.length} setup${losing.length === 1 ? '' : 's'} lose money and stay on paper` : ''}</div>` : '';
+  $('data-says').className = 'banner ' + kind;
+  $('data-says').innerHTML = `<b>What the data says</b><div style="margin-top:4px">${head}</div>${meta}`;
 }
 
 function renderAutopilot(ap) {
@@ -382,6 +433,8 @@ function renderAutopilot(ap) {
        <td class="num">${px(o.now)}</td><td class="num ${cls(o.unrealized)}">${usd(o.unrealized, true)}</td>
        <td class="num">${o.half_done ? '<span class="up">breakeven</span>' : px(o.stop_now)}</td></tr>`,
     'Nothing open — it waits for the next alert.');
+  const w = ap.waiting || [];
+  $('auto-waiting').innerHTML = w.length ? `⏳ Buy-stops waiting to trigger: ${w.slice(0, 10).map(x => `${sym(x.symbol)} above ${px(x.entry)}`).join(' · ')}${w.length > 10 ? ` +${w.length - 10} more` : ''}` : '';
   const groupRow = g => `<tr><td>${esc(g.name)}</td><td class="num">${g.n}</td><td class="num">${Math.round(g.won / g.n * 100)}%</td>
      <td class="num ${cls(g.avg_r)}">${rr(g.avg_r)}</td><td class="num ${cls(g.pnl)}">${usd(g.pnl, true)}</td></tr>`;
   table('auto-setups', ['Setup', '#Trades', '#Won', '#Avg', '#P&L'], ap.by_setup, groupRow, 'Shows up after the first trades close.');

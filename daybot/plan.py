@@ -71,6 +71,9 @@ def build(cfg, db, data, edge, scanner, now: float, account: float = 0.0, positi
         lines.append("⚪ Backtest not run yet — /backtest (takes a few minutes)")
     if losing:
         lines.append("🔴 Skip these, they lose money here: " + ", ".join(esc(r["label"]) for r in losing))
+    inplay = next((r for r in table if r["setup"] == "orb5" and r["direction"] == "long"), None)
+    if inplay and inplay["status"] not in {"negative", "benched"} and cfg.get("ORB5_TOP") > 0:
+        lines.append("🔥 Today's stocks in play come at 9:35am, each with a buy-stop and a stop")
     gappers = scanner.gappers(day)
     if gappers:
         lines.append("\n<b>Gappers</b>")

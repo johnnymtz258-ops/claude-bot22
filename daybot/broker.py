@@ -34,7 +34,7 @@ LATE_SECONDS = 15 * 60       # a fill older than this when we first see it gets 
 
 
 class BrokerSync:
-    LEDGER_VERSION = "2"
+    LEDGER_VERSION = "3"            # 3: cash sweeps (Chase QACDS…) are no longer booked as trades
 
     def __init__(self, cfg, db, snap, ledger, checker, notify, market, data):
         self.cfg, self.db, self.snap, self.ledger, self.checker = cfg, db, snap, ledger, checker
@@ -45,8 +45,9 @@ class BrokerSync:
         self._rebuild_if_old()
 
     def _rebuild_if_old(self) -> None:
-        """Version 1 booked crypto as stock trades and old investments as open day trades. Start the journal over
-        once with the right rules: your history is read again from the broker (nothing on the broker side changes)."""
+        """Earlier versions booked crypto and cash sweeps as stock trades and old investments as open day trades.
+        Start the journal over once with the right rules: your history is read again from the broker (nothing on the
+        broker side changes)."""
         if self.db.get_meta("ledger_version") == self.LEDGER_VERSION:
             return
         for table in ("fills", "trades", "orders_seen", "positions", "checks"):
