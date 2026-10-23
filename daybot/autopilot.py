@@ -23,7 +23,8 @@ LATE = 30 * 60
 JUDGE_AFTER = 20            # trades before the verdict means anything
 
 REASON = {"target": "half at the first target, the rest at the second", "stop": "stopped out",
-          "breakeven": "half at the first target, the rest back at breakeven", "time": "closed before the bell"}
+          "breakeven": "half at the first target, the rest back at breakeven", "time": "closed before the bell",
+          "trail": "closed back inside the noise band at a half-hour check"}
 
 
 def plural(n: int, word: str) -> str:
@@ -74,9 +75,14 @@ class Autopilot:
     def balance(self) -> float:
         return self.start() + sum(num(t["pnl"]) for t in self.closed())
 
+    def holding(self) -> list[dict]:
+        """Trades that use cash: filled ones, and market entries about to fill. A buy-stop that hasn't triggered
+        holds nothing (it may never fill)."""
+        return [t for t in self.open_rows() if t["status"] == "open" or t["entry_type"] != "stop"]
+
     def in_use(self, exclude: int = 0) -> float:
         used = 0.0
-        for t in self.open_rows():
+        for t in self.holding():
             if t["id"] != exclude:
                 used += num(t["qty"]) * num(t["entry"]) * (0.5 if t["half_done"] else 1.0)
         return used
@@ -98,12 +104,16 @@ class Autopilot:
         if not self.on:
             return "autopilot off"
         self._begin(sig.ts)
-        opens = self.open_rows()
+        opens = self.holding()
         slip = self.cfg.get("SLIPPAGE_PCT") / 100
         entry = sig.entry * (1 + slip if sig.direction == "long" else 1 - slip)
         note = ""
         if sig.ts >= self.market.close_ts(day_of(sig.ts)) - LATE:
             note = "too late in the day"
+        elif sig.entry_type == "stop":
+            # a buy-stop order: whether there's room for it is decided when (if) it fills
+            self.db.run("update paper set auto=1, auto_note='' where id=?", (paper_id,))
+            return ""
         elif any(t["symbol"] == sig.symbol for t in opens):
             note = f"already in {sig.symbol}"
         elif len(opens) >= int(self.cfg.get("AUTOPILOT_MAX_OPEN")):
@@ -118,12 +128,22 @@ class Autopilot:
         self.db.run("update paper set auto_note=? where id=?", (note, paper_id))
         return note
 
-    def size_at_fill(self, p: dict, entry: float) -> float:
-        """The real entry price is known: size again (the stop distance and the free cash may have changed)."""
-        risk_ps = abs(entry - num(p["stop"]))
-        qty = self._size(entry, risk_ps, p["id"]) if risk_ps > 0 else 0.0
+    def size_at_fill(self, p: dict, entry: float, fill_ts: float = 0) -> float:
+        """The real entry price is known: size again (the stop distance and the free cash may have changed). A stop
+        entry is checked against the limits now, when it fills."""
+        risk_ps = num(p["risk"]) if p.get("plan") == "band" and num(p.get("risk")) else abs(entry - num(p["stop"]))
+        note = ""
+        if p.get("entry_type") == "stop":
+            others = [t for t in self.open_rows() if t["status"] == "open" and t["id"] != p["id"]]
+            if fill_ts and fill_ts >= self.market.close_ts(p["day"]) - LATE:
+                note = "filled too late in the day"
+            elif any(t["symbol"] == p["symbol"] for t in others):
+                note = f"already in {p['symbol']}"
+            elif len(others) >= int(self.cfg.get("AUTOPILOT_MAX_OPEN")):
+                note = f"{len(others)} trades already open"
+        qty = self._size(entry, risk_ps, p["id"]) if risk_ps > 0 and not note else 0.0
         if qty * entry < 1:
-            self.db.run("update paper set auto=0, auto_note='no cash free at the entry' where id=?", (p["id"],))
+            self.db.run("update paper set auto=0, auto_note=? where id=?", (note or "no cash free at the entry", p["id"]))
             gauge = self.cfg.get("PAPER_ACCOUNT") * self.cfg.get("RISK_PER_TRADE_PCT") / 100
             return float(int(gauge // risk_ps)) if risk_ps > 0 else 0.0
         return qty
@@ -150,9 +170,16 @@ class Autopilot:
         side = "bought" if t["direction"] == "long" else "shorted"
         qty = fmt_qty(t["qty"])
         if ev["type"] == "entry":
-            return (f"🤖 <b>Autopilot {side} {qty} {sym}</b> @ {fmt_price(px)} ({money(num(t['qty']) * px)})\n"
-                    f"{esc(label(t['setup'], t['direction']))} · stop {fmt_price(t['stop'])} · half at "
-                    f"{fmt_price(t['t1'])} · rest {fmt_price(t['t2'])}\n"
+            plan = t.get("plan") or "standard"
+            if plan == "close":
+                how = f"stop {fmt_price(t['stop'])} · no target: holds to 3:55pm unless stopped"
+            elif plan == "band":
+                how = "out when a half-hour close is back inside the noise band or past VWAP · or 3:55pm"
+            else:
+                how = f"stop {fmt_price(t['stop'])} · half at {fmt_price(t['t1'])} · rest {fmt_price(t['t2'])}"
+            why = " — it broke the first 5-minute high" if t.get("entry_type") == "stop" else ""
+            return (f"🤖 <b>Autopilot {side} {qty} {sym}</b> @ {fmt_price(px)} ({money(num(t['qty']) * px)}){why}\n"
+                    f"{esc(label(t['setup'], t['direction']))} · {how}\n"
                     f"<i>Pretend money — following the alert so you can see if it pays. /autopilot</i>")
         if ev["type"] == "half":
             s = 1 if t["direction"] == "long" else -1
@@ -165,6 +192,8 @@ class Autopilot:
             how = REASON.get(t["reason"], t["reason"])
             if t.get("half_done") and t["reason"] == "time":
                 how = "half at the first target, the rest closed before the bell"
+            elif t.get("plan") == "close" and t["reason"] == "time":
+                how = "held to the close (3:55pm)"
             return (f"{'🟩' if pnl >= 0 else '🟥'} <b>Autopilot closed {sym} {money(pnl, signed=True)}</b> "
                     f"({rmult(t['r_mult'])}) — {esc(how)}\n"
                     f"Balance {money(sm['balance'])} ({pct(sm['return_pct'])}) · {plural(sm['n'], 'trade')}, "
@@ -201,14 +230,16 @@ class Autopilot:
         rs = [num(t["r_mult"]) for t in rows]
         start, bal = self.start(), self.balance()
         opens = [{**t, "unrealized": self._unrealized(t), "now": self.data.last_price(t["symbol"])}
-                 for t in self.open_rows()]
+                 for t in self.holding()]
+        waiting = [{"symbol": t["symbol"], "entry": t["entry"], "stop": t["stop"], "direction": t["direction"],
+                    "setup": t["setup"]} for t in self.open_rows() if t["status"] == "pending" and t["entry_type"] == "stop"]
         equity = bal + sum(o["unrealized"] for o in opens)
         wins, losses = sum(p for p in pnls if p > 0), -sum(p for p in pnls if p < 0)
         out = {"on": self.on, "start": start, "since": self.since(), "balance": bal, "equity": equity,
                "return_pct": (equity / start - 1) * 100 if start else 0.0, "n": len(pnls),
                "won": sum(1 for p in pnls if p > 0) / len(pnls) if pnls else 0.0, "pnl": sum(pnls),
                "avg_r": sum(rs) / len(rs) if rs else 0.0, "pf": wins / losses if losses else (99.0 if wins else 0.0),
-               "best": max(pnls, default=0.0), "worst": min(pnls, default=0.0), "open": opens}
+               "best": max(pnls, default=0.0), "worst": min(pnls, default=0.0), "open": opens, "waiting": waiting}
         if light:
             return out
         day = day_of(now)
@@ -280,6 +311,10 @@ class Autopilot:
                          f"{money(sm['best'], signed=True)} · worst {money(sm['worst'], signed=True)}")
         lines.append(f"Today: {sm['today']['n']} closed, {money(sm['today']['pnl'], signed=True)} · open now: "
                      f"{len(sm['open'])}")
+        if sm["waiting"]:
+            lines.append("Buy-stops waiting to trigger: " + ", ".join(
+                f"{esc(w['symbol'])} {fmt_price(w['entry'])}" for w in sm["waiting"][:8])
+                + (f" +{len(sm['waiting']) - 8} more" if len(sm["waiting"]) > 8 else ""))
         if sm["open"]:
             lines.append("\n<b>Open</b>")
             for o in sm["open"]:

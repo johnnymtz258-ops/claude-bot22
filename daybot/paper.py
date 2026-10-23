@@ -1,4 +1,4 @@
-"""Paper trading: every setup the bot sees is traded on paper with the standard plan.
+"""Paper trading: every setup the bot sees is traded on paper with its exit plan.
 
 Two uses of the same trades:
   • the setup gauge — every signal, measured in R, so a setup that loses live gets benched and one that wins live
@@ -6,14 +6,27 @@ Two uses of the same trades:
   • the autopilot (autopilot.py) — the trades the bot actually alerts you on, sized like a real small account,
     in dollars: "if I had followed DayBot, where would I be?"
 
-The plan: enter at the next minute's open after the signal (plus costs), half off at 1R and the stop to breakeven,
-the rest at 2R, out by 3:55pm. When one bar touches both the stop and a target, the stop counts (the honest way).
+Entries: a market entry fills at the next minute's open after the signal; a stop entry (the in-play breakout's
+buy-stop) fills in the first minute that trades through the level, at the level (or the open if it gapped through),
+and is cancelled at 3:00pm. Costs (SLIPPAGE_PCT) on every fill.
+Exits by plan (setups.py): standard — half at 1R, stop to breakeven, the rest at 2R; close — the stop or 3:55pm;
+band — a half-hour close back inside the noise band / VWAP, or 3:55pm. When one minute touches both the stop and a
+target, the stop counts (the honest way); a stop entry filled in a minute that touches the stop is stopped out.
 """
 from __future__ import annotations
 
-from .bars import C, H, L, O, T
-from .setups import EXIT_BEFORE_CLOSE, Signal
-from .util import num
+from .bars import C, H, L, O, T, V
+from .setups import BAND_EXIT_LAST, BAND_STEP, EXIT_BEFORE_CLOSE, Signal, band_trail
+from .util import dumps, loads, num
+
+
+def _vwaps(bars: list) -> list[float]:
+    out, pv, vol = [], 0.0, 0.0
+    for b in bars:
+        pv += (b[H] + b[L] + b[C]) / 3 * b[V]
+        vol += b[V]
+        out.append(pv / vol if vol else b[C])
+    return out
 
 
 class Paper:
@@ -27,10 +40,13 @@ class Paper:
         qty = int(risk_usd // sig.risk) if sig.risk > 0 else 0
         if qty <= 0:
             return 0
+        plan_data = dumps({k: sig.context[k] for k in ("band", "ref", "open", "dist") if k in sig.context}) \
+            if sig.plan == "band" else ""
         pid = self.db.insert("""insert into paper(alert_id, day, symbol, setup, direction, opened_ts, entry, stop, t1, t2,
-                                qty, stop_now, status) values(?,?,?,?,?,?,?,?,?,?,?,?, 'pending')""",
+                                qty, stop_now, status, plan, entry_type, expires, plan_data, risk)
+                                values(?,?,?,?,?,?,?,?,?,?,?,?, 'pending',?,?,?,?,?)""",
                              (alert_id, day, sig.symbol, sig.setup, sig.direction, sig.ts, sig.entry, sig.stop, sig.t1,
-                              sig.t2, qty, sig.stop))
+                              sig.t2, qty, sig.stop, sig.plan, sig.entry_type, sig.expires, plan_data, sig.risk))
         if pid and auto and self.auto:
             self.auto.take(pid, sig)
         return pid
@@ -44,18 +60,36 @@ class Paper:
         events = []
         slip = self.cfg.get("SLIPPAGE_PCT") / 100
         for p in self.db.rows("select * from paper where status in ('pending','open') order by id"):
-            close = self.market.close_ts(p["day"])
-            bars = [b for b in self.data.bars1(p["symbol"]) if p["opened_ts"] <= b[T] < close]   # its own day only
-            if now > self.market.close_ts(p["day"]) + 3600 and (p["status"] == "pending" or not bars):
-                self.db.run("update paper set status='skipped', reason='no data' where id=?", (p["id"],))
+            open_ts, close = self.market.open_ts(p["day"]), self.market.close_ts(p["day"])
+            session = [b for b in self.data.bars1(p["symbol"]) if open_ts <= b[T] < close]   # its own day only
+            bars = [b for b in session if b[T] >= p["opened_ts"]]
+            if now > close + 3600 and (p["status"] == "pending" or not bars):
+                why = "never triggered" if p["entry_type"] == "stop" and p["status"] == "pending" else "no data"
+                self.db.run("update paper set status='skipped', reason=? where id=?", (why, p["id"]))
                 continue
             if not bars:
                 continue
             s = 1 if p["direction"] == "long" else -1
-            deadline = self.market.close_ts(p["day"]) - EXIT_BEFORE_CLOSE
+            deadline = close - EXIT_BEFORE_CLOSE
+            plan = p["plan"] or "standard"
+            fill_ts = 0
             if p["status"] == "pending":
-                b0 = bars[0]
-                entry = b0[O] * (1 + s * slip)
+                if p["entry_type"] == "stop":
+                    until = p["expires"] or deadline
+                    hit = next((b for b in bars if b[T] + 60 <= now and b[T] < until
+                                and (b[H] if s > 0 else -b[L]) >= num(p["entry"]) * s), None)
+                    if hit is None:
+                        if now >= until + 60:
+                            self.db.run("update paper set status='skipped', reason='never triggered' where id=?",
+                                        (p["id"],))
+                            events.append({"type": "skipped", "trade": {**p, "status": "skipped"}, "price": 0.0})
+                        continue
+                    b0 = hit
+                    entry = max(b0[O] * s, num(p["entry"]) * s) * s * (1 + s * slip)
+                    fill_ts = b0[T]
+                else:
+                    b0 = bars[0]
+                    entry = b0[O] * (1 + s * slip)
                 if s * (entry - p["stop"]) <= 0 or b0[T] >= deadline:
                     self.db.run("update paper set status='skipped', reason=? where id=?",
                                 ("opened past the stop" if b0[T] < deadline else "too late in the day", p["id"]))
@@ -63,15 +97,20 @@ class Paper:
                     continue
                 qty = num(p["qty"])
                 if p["auto"] and self.auto:
-                    qty = self.auto.size_at_fill(p, entry)
-                self.db.run("update paper set status='open', entry=?, opened_ts=?, qty=? where id=?",
-                            (entry, b0[T], qty, p["id"]))
+                    qty = self.auto.size_at_fill(p, entry, b0[T])
+                risk = num(p["risk"]) if plan == "band" else s * (entry - num(p["stop"]))
+                self.db.run("update paper set status='open', entry=?, opened_ts=?, qty=?, risk=? where id=?",
+                            (entry, b0[T], qty, risk, p["id"]))
                 p = self.db.row("select * from paper where id=?", (p["id"],))
                 events.append({"type": "entry", "trade": p, "price": entry})
+                bars = [b for b in session if b[T] >= p["opened_ts"]]
             entry = num(p["entry"])
-            risk = s * (entry - num(p["stop"]))
+            risk = num(p["risk"]) or s * (entry - num(p["stop"]))
             stop_now, half = num(p["stop_now"]), bool(p["half_done"])
             booked = num(p["t1"]) * (1 - s * slip) if half else 0.0
+            ctx = loads(p["plan_data"], {}) or {}
+            vws = _vwaps(session) if plan == "band" else []
+            index = {b[T]: k for k, b in enumerate(session)}
             exit_px, reason, exit_ts = None, "", 0
             seen = int(num(p.get("seen_ts")))
             for b in bars:
@@ -84,19 +123,28 @@ class Paper:
                     exit_px, reason, exit_ts = b[O] * (1 - s * slip), "time", b[T]
                     break
                 lo, hi = (b[L], b[H]) if s > 0 else (-b[H], -b[L])
-                if lo <= stop_now * s:
-                    exit_px = min(b[O] * s, stop_now * s) * s * (1 - s * slip)
+                if plan != "band" and lo <= stop_now * s:
+                    op = num(p["entry"]) / (1 + s * slip) * s if b[T] == fill_ts else b[O] * s
+                    exit_px = min(op, stop_now * s) * s * (1 - s * slip)
                     reason, exit_ts = ("breakeven" if half else "stop"), b[T]
                     break
-                if not half and hi >= num(p["t1"]) * s:
-                    half, booked, stop_now = True, num(p["t1"]) * (1 - s * slip), entry
-                    self.db.run("update paper set half_done=1, stop_now=?, half_ts=? where id=?",
-                                (stop_now, b[T], p["id"]))
-                    events.append({"type": "half", "trade": {**p, "half_done": 1, "stop_now": stop_now,
-                                                             "half_ts": b[T]}, "price": booked})
-                if half and hi >= num(p["t2"]) * s:
-                    exit_px, reason, exit_ts = num(p["t2"]) * (1 - s * slip), "target", b[T]
-                    break
+                if plan == "standard":
+                    if not half and hi >= num(p["t1"]) * s:
+                        half, booked, stop_now = True, num(p["t1"]) * (1 - s * slip), entry
+                        self.db.run("update paper set half_done=1, stop_now=?, half_ts=? where id=?",
+                                    (stop_now, b[T], p["id"]))
+                        events.append({"type": "half", "trade": {**p, "half_done": 1, "stop_now": stop_now,
+                                                                 "half_ts": b[T]}, "price": booked})
+                    if half and hi >= num(p["t2"]) * s:
+                        exit_px, reason, exit_ts = num(p["t2"]) * (1 - s * slip), "target", b[T]
+                        break
+                elif plan == "band" and b[T] > p["opened_ts"]:
+                    minutes = int(round((b[T] + 60 - open_ts) / 60))
+                    if minutes % BAND_STEP == 0 and minutes <= BAND_EXIT_LAST and b[T] in index:
+                        trail = band_trail(ctx, s, minutes, vws[index[b[T]]])
+                        if trail is not None and s * b[C] < trail:
+                            exit_px, reason, exit_ts = b[C] * (1 - s * slip), "trail", b[T] + 60
+                            break
             if exit_px is None and now > deadline + 3600 and bars:
                 last = bars[-1]                                     # the data stopped: close at the last price seen
                 exit_px, reason, exit_ts = last[C] * (1 - s * slip), "time", last[T]

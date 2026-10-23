@@ -297,7 +297,7 @@ def detect(day: Day, i: int, cfg: dict, fired: set, mirror: Day | None = None) -
             plan = PLANS.get(name, "standard")
             if plan == "standard" and not (0.08 * d.atr <= risk <= 0.6 * d.atr):
                 continue
-            if risk <= 0 or risk < 0.0015 * abs(entry):
+            if risk <= 0 or (plan != "band" and risk < 0.0015 * abs(entry)):
                 continue                                     # a stop this tight is eaten by the spread
             s = d.sign
             t1, t2 = ((entry + risk) * s, (entry + 2 * risk) * s) if plan == "standard" else (0.0, 0.0)

@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 import statistics
 
-from .bars import C, H, L, O, T, V, atr, split_day, vwap
+from .bars import C, O, T, V, atr, split_day, vwap
 from .clock import Market, at, day_of
 from .setups import BAND_EXIT_LAST, BAND_STEP, SETUP_NAMES, Day, detect, label, simulate
 from .util import dumps, num

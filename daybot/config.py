@@ -46,7 +46,7 @@ SETTINGS = {s.name: s for s in (
     # --- the scanner -----------------------------------------------------------------------------------------
     Setting("GAP_MIN_PCT", 3, "Morning gappers: smallest gap from yesterday's close (%)", 0.5, 50),
     Setting("MIN_AVG_VOLUME", 1_000_000, "Gappers / in-play names need at least this average daily volume (shares)", 0, 1e9),
-    Setting("WATCH_MAX", 25, "Most symbols the live scanner watches at once", 5, 60),
+    Setting("WATCH_MAX", 40, "Most symbols the live scanner watches at once", 5, 60),
     Setting("ALERTS_ENABLED", 1, "Master switch for setup alerts (1 = on)", 0, 1, True),
     Setting("ALERT_UNPROVEN", 1, "Also send setups the backtest hasn't proven — silently and labelled 'unproven' (1 = on). Proven ones always ping", 0, 1, True),
     Setting("SHORT_ALERTS", 0, "Also send short setups (betting a stock falls). Off: Robinhood and Chase don't let you short stocks — the only way is buying puts. Paper still measures them (1 = on)", 0, 1, True),

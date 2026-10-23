@@ -2,35 +2,30 @@
 
   • Premarket: gappers from a universe of ~250 liquid names + the day's movers and most-active stocks + your
     watchlist, ranked by gap and premarket volume, with the headline behind each move.
-  • During the session: every completed 5-minute bar of every watched stock goes through the setup detectors.
-    A setup with a proven record pings you; an unproven one is sent silently (or not at all — ALERT_UNPROVEN) and
-    paper-traded either way, so the record builds.
+  • 9:35am: the day's stocks in play — the ones trading far more than usual in their first 5 minutes — for the
+    in-play breakout, in one message with a buy-stop and a stop for each.
+  • During the session: every completed 5-minute bar of every watched stock goes through the setup detectors
+    (SPY / QQQ also through the noise band at each half hour). A setup with a proven record pings you; an unproven
+    one is sent silently (or not at all — ALERT_UNPROVEN) and paper-traded either way, so the record builds.
   • Every 10 minutes: new stocks coming into play (big move on heavy volume) join the watchlist, and you hear
     about them — the "found it before I did" part.
 """
 from __future__ import annotations
 
 import datetime as dt
-import re
 
 from .accounts import account_size, fmt_qty, size_shares, spendable
 from .alpaca import AlpacaError, parse_ts, snap_price
-from .backtest import UNIVERSE, Edge, describe
-from .bars import C, T, V, rvol
+from .backtest import (BAND_SYMBOLS, INPLAY_LOOKBACK, LEVERED, LEVERED_NAME, UNIVERSE, Edge, band_moves, band_table,
+                       describe, rank_in_play)
+from .bars import C, H, L, O, T, V, rvol
 from .clock import Market, at, clock_text, day_of, et
 from .news import catalysts, main_catalyst, warning
 from .options import pick_idea, size_contracts
-from .setups import Day, Signal, detect, label
+from .setups import Signal, detect, label
 from .util import big, dumps, esc, loads, money, num, pct, price as fmt_price
 
 ALWAYS = ["SPY", "QQQ"]
-# 2x / 3x / inverse funds: they "gap" every day only because an index or one stock moved, and decay when held
-LEVERED = set("""TQQQ SQQQ SOXL SOXS TNA TZA UVXY UVIX SVXY SPXL SPXS SPXU UPRO SDS SSO QLD QID LABU LABD FAS FAZ TECL
-TECS FNGU FNGD YINN YANG NUGT DUST JNUG JDST BOIL KOLD UCO SCO TMF TMV TSLL TSLQ TSLZ TSLS NVDL NVDX NVDQ NVD NVDU
-MSTU MSTX MSTZ CONL AMDL AAPU GGLL METU AMZU MSFU BITX BITU ETHU SBIT DPST WEBL WEBS HIBL HIBS CURE DRN DRV TSLT
-NAIL ERX ERY GUSH DRIP UDOW SDOW URTY SRTY PLTU SMCX MUU ARMG""".split())
-LEVERED_NAME = re.compile(r"\b\d(\.\d+)?x\b|ultrapro|ultrashort|proshares ultra|\binverse\b|\bleveraged\b|"
-                          r"daily target|\bbear\b.*\b(etf|shares|fund)\b|\bbull\b.*\b(etf|shares|fund)\b", re.I)
 DISCOVER_PER_DAY = 8
 
 
@@ -44,6 +39,12 @@ class Scanner:
         self.extra: list[str] = []              # symbols other parts want watched (open positions)
         self.last_error = ""
         self.last_scan = 0.0
+        self.in_play_today: dict[str, tuple[int, float]] = {}    # symbol -> (rank, first-5-minute relative volume)
+        self.in_play_day = ""
+        self.first5_hist: dict[str, list[float]] = {}            # usual first-5-minute volume, last 14 days
+        self.first5_day = ""
+        self.bands: dict[str, dict] = {}                          # SPY / QQQ noise band for today
+        self.bands_day = ""
 
     # ---- the watchlist -----------------------------------------------------------------------------------------
     def watchlist(self, day: str) -> list[str]:
@@ -66,6 +67,98 @@ class Scanner:
                 return False                                # couldn't ask: keep it, ask again next time
             self.db.set_meta(key, name)
         return bool(LEVERED_NAME.search(name))
+
+    def _in_play_candidates(self, day: str) -> list[str]:
+        rows = self.db.rows("select symbol from watch where day=? and source in ('gapper','in-play')", (day,))
+        return sorted(set(UNIVERSE) | set(self.cfg.watchlist) | {r["symbol"] for r in rows})
+
+    async def prepare(self, now: float) -> None:
+        """Once a day: the SPY / QQQ noise band (from the last 14 days) and everyone's usual first 5 minutes."""
+        day = day_of(now)
+        if self.bands_day != day:
+            days = self.market.trading_days_back(day, INPLAY_LOOKBACK + 4)
+            try:
+                got = await self.data.alpaca.bars(list(BAND_SYMBOLS), "5Min", at(days[0], "04:00"), at(day, "00:00"),
+                                                  feed="sip")
+                for sym in BAND_SYMBOLS:
+                    hist = [band_moves([b for b in got.get(sym) or [] if day_of(b[T]) == d], d, self.market)
+                            for d in days]
+                    table = band_table(hist)
+                    if table:
+                        self.bands[sym] = table
+                self.bands_day = day
+            except AlpacaError as exc:
+                self.last_error = f"band: {exc}"
+        if self.first5_day != day and self.cfg.get("ORB5_TOP") > 0:
+            cands = self._in_play_candidates(day)
+            hist: dict[str, list[float]] = {}
+            try:
+                for d in self.market.trading_days_back(day, INPLAY_LOOKBACK):
+                    o = self.market.open_ts(d)
+                    got = await self.data.alpaca.bars(cands, "5Min", o, o + 300)     # the live feed, like today's
+                    for sym, rows in got.items():
+                        if rows and rows[0][T] == o:
+                            hist.setdefault(sym, []).append(rows[0][V])
+                self.first5_hist, self.first5_day = hist, day
+            except AlpacaError as exc:
+                self.last_error = f"in play: {exc}"
+
+    async def rank_in_play(self, now: float) -> list[tuple[str, int, float]]:
+        """At 9:35: the day's stocks in play, best first — [(symbol, rank, rvol5)]. Stored, so a restart keeps it."""
+        day = day_of(now)
+        top = int(self.cfg.get("ORB5_TOP"))
+        if self.in_play_day == day or top <= 0:
+            return []
+        saved = self.db.rows("select symbol, data from watch where day=? and source='inplay'", (day,))
+        if saved:
+            self.in_play_today = {r["symbol"]: ((loads(r["data"], {}) or {}).get("rank", 0),
+                                                (loads(r["data"], {}) or {}).get("rvol5", 0.0)) for r in saved}
+            self.in_play_day = day
+            return []
+        open_ts = self.market.open_ts(day)
+        if now < open_ts + 300 + 15:
+            return []
+        if now > open_ts + 3600:
+            self.in_play_day = day                         # started too late to rank today
+            return []
+        give_up = now > open_ts + 420                      # couldn't rank by 9:37: today goes on without it
+        await self.prepare(now)
+        if self.first5_day != day:
+            if give_up:
+                self.in_play_day = day
+            return []
+        cands = self._in_play_candidates(day)
+        try:
+            await self.data.load_daily(cands, now)
+            got = await self.data.alpaca.bars(cands, "1Min", open_ts, open_ts + 300)
+        except AlpacaError as exc:
+            self.last_error = f"in play: {exc}"
+            if give_up:
+                self.in_play_day = day
+            return []
+        first5 = {}
+        for sym, rows in got.items():
+            rows = [b for b in rows if open_ts <= b[T] < open_ts + 300]
+            if rows:
+                first5[sym] = (open_ts, rows[0][O], max(b[H] for b in rows), min(b[L] for b in rows), rows[-1][C],
+                               sum(b[V] for b in rows))
+        daily = {sym: self.data.daily(sym) for sym in first5}
+        ranked = []
+        for sym, _, rv in rank_in_play(first5, self.first5_hist, daily, day, self.cfg, top + 5):
+            if await self.levered(sym):
+                continue
+            ranked.append((sym, len(ranked) + 1, rv))
+            if len(ranked) >= top:
+                break
+        for sym, rank, rv in ranked:
+            self.db.run("""insert into watch(day, symbol, source, score, data, added) values(?,?,?,?,?,?)
+                           on conflict(day, symbol) do update set source='inplay', score=excluded.score,
+                           data=excluded.data""",
+                        (day, sym, "inplay", 3000 - rank, dumps({"rank": rank, "rvol5": rv, "first5": first5[sym][1:]}),
+                         int(now)))
+        self.in_play_today = {sym: (rank, rv) for sym, rank, rv in ranked}
+        self.in_play_day = day
+        return ranked
 
     def _reset(self, day: str) -> None:
         if self.day != day:
@@ -212,23 +305,29 @@ class Scanner:
         """Judge every newly completed 5-minute bar of every watched stock. Returns the signals sent."""
         day = day_of(now)
         self._reset(day)
+        await self.prepare(now)
+        await self.rank_in_play(now)
         syms = self.watchlist(day)
         await self.data.load_daily(syms, now)
         await self.data.refresh(syms, now)
-        sent = []
+        sent, in_play = [], []
         for s in syms:
             d = self.data.day_obj(s, now)
             if not d:
                 continue
             if d.bars[-1][C] < self.cfg.get("MIN_PRICE"):
                 continue
+            d.in_play, d.rvol5 = self.in_play_today.get(s, (0, 0.0))
+            d.band = self.bands.get(s)
             start = self.done.get(s, 0)
             fired = self.fired.setdefault(s, set())
             values = {"ORB_MINUTES": self.cfg.get("ORB_MINUTES"), "GAP_MIN_PCT": self.cfg.get("GAP_MIN_PCT")}
-            for i in range(start, len(d.bars)):
-                part = Day(s, d.bars[:i + 1], d.vw[:i + 1], d.open_ts, d.close_ts, d.atr, d.avg_vol, d.pdc, d.pmh,
-                           d.gap_pct, 1, d.pmh_low)
-                sigs = [g for g in detect(part, i, values, fired) if now - g.ts <= 10 * 60]   # old bars: too late
+            ranked = self.in_play_day == day or self.cfg.get("ORB5_TOP") <= 0
+            upto = len(d.bars) if ranked else 0             # the first candle waits for the in-play ranking
+            for i in range(start, upto):
+                sigs = [g for g in detect(d.upto(i), i, values, fired) if now - g.ts <= 10 * 60]   # old bars: too late
+                in_play += [g for g in sigs if g.setup == "orb5"]
+                sigs = [g for g in sigs if g.setup != "orb5"]
                 for direction in ("long", "short"):
                     group = [g for g in sigs if g.direction == direction]
                     if not group:
@@ -236,8 +335,30 @@ class Scanner:
                     group.sort(key=lambda g: RANK.get(self.edge.status(g.setup, g.direction)["status"], 9))
                     if await self.alert(group[0], now, also=group[1:]):
                         sent.append(group[0])
-            self.done[s] = len(d.bars)
+            self.done[s] = max(start, upto)
+        if in_play:
+            await self.alert_in_play(in_play, now)
+            sent += in_play
         return sent
+
+    async def alert_in_play(self, sigs: list[Signal], now: float) -> None:
+        """Every in-play breakout is recorded and paper-traded; you get one message with the best of them."""
+        sigs = sorted(sigs, key=lambda g: g.context.get("rank", 99))
+        for sig in sigs:
+            await self.alert(sig, now, quiet=True)
+        longs = [g for g in sigs if g.direction == "long"]
+        shorts = [g for g in sigs if g.direction == "short"] if self.cfg.flag("SHORT_ALERTS") else []
+        st = self.edge.status("orb5", "long")
+        proven = st["status"] == "proven"
+        if not self.cfg.flag("ALERTS_ENABLED") or not (longs or shorts) or st["status"] in {"negative", "benched"}:
+            return
+        if not proven and not self.cfg.flag("ALERT_UNPROVEN"):
+            return
+        account = account_size(self.db, self.cfg)
+        text = format_in_play(longs[:6], shorts[:3], st, account, self.cfg, now, cash=spendable(self.db))
+        first = (longs or shorts)[0].symbol
+        await self.notify(text, silent=not proven, kind="SETUP", symbol=first,
+                          buttons=[[("📈 Chart " + first, None, f"chart:{first}")]])
 
     def _too_many(self, sig: Signal, now: float) -> bool:
         hour = int(self.db.scalar("select count(*) from alerts where ts>=? and silent=0", (int(now) - 3600,), default=0))
@@ -263,9 +384,11 @@ class Scanner:
                                       self.cfg.get("OPTIONS_MAX_PREMIUM_PCT"), spendable(self.db) if account else None)
         return idea
 
-    async def alert(self, sig: Signal, now: float, account: float = 0.0, also: list[Signal] | None = None) -> int:
+    async def alert(self, sig: Signal, now: float, account: float = 0.0, also: list[Signal] | None = None,
+                    quiet: bool = False) -> int:
         """Record, paper-trade and (maybe) send one setup. `also`: other setups that fired on the same bar in the
-        same direction — paper-traded too, mentioned in the one message."""
+        same direction — paper-traded too, mentioned in the one message. quiet: record and paper-trade only (the
+        in-play breakouts go out together in one message)."""
         st = self.edge.status(sig.setup, sig.direction)
         proven = st["status"] == "proven"
         silent = not proven
@@ -274,6 +397,8 @@ class Scanner:
             send = False                                # known losers: paper only
         if sig.direction == "short" and not self.cfg.flag("SHORT_ALERTS"):
             send = False                                # your broker can't short: paper only unless you turn it on
+        if quiet:
+            send = False
         if send and not silent and self._too_many(sig, now):
             silent = True
         account = account or account_size(self.db, self.cfg)
@@ -302,7 +427,8 @@ class Scanner:
         if self.charts:
             photo = self.charts.render(sig.symbol, self.data.bars1(sig.symbol), day_of(now), self.market,
                                        levels=self.data.levels(sig.symbol, now),
-                                       plan={"entry": sig.entry, "stop": sig.stop, "t1": sig.t1, "t2": sig.t2},
+                                       plan={"entry": sig.entry, "stop": sig.stop if sig.plan != "band" else 0,
+                                             "t1": sig.t1, "t2": sig.t2},
                                        title=f"{sig.symbol} · {sig.label}")
         msg_id = await self.notify(text, silent=silent, kind="SETUP", symbol=sig.symbol, photo=photo,
                                    buttons=[[("🧾 Check it", None, f"check:{sig.symbol}"),
@@ -323,8 +449,16 @@ def format_alert(sig: Signal, st: dict, idea: dict | None, account: float, cfg, 
     if also:
         lines.append("Also fits: " + ", ".join(esc(o.label) for o in also))
     risk = sig.risk
-    lines.append(f"🎯 Entry ~{fmt_price(sig.entry)} · stop {fmt_price(sig.stop)} ({'−' if sig.direction == 'long' else '+'}"
-                 f"${risk:.2f}/share) · half at {fmt_price(sig.t1)} (1R) · rest {fmt_price(sig.t2)} (2R) · out by 3:55pm")
+    long = sig.direction == "long"
+    if sig.plan == "band":
+        lines.append(f"🎯 Entry ~{fmt_price(sig.entry)} · no fixed stop: get out when a half-hour close (10:30, 11:00…) "
+                     f"is back {'under' if long else 'over'} the band or VWAP · out by 3:55pm · 1R ≈ ${risk:.2f}/share")
+    elif sig.plan == "close":
+        lines.append(f"🎯 {'Buy' if long else 'Sell'}-stop {fmt_price(sig.entry)} · stop {fmt_price(sig.stop)} "
+                     f"({'−' if long else '+'}${risk:.2f}/share) · no target: hold until 3:55pm unless stopped")
+    else:
+        lines.append(f"🎯 Entry ~{fmt_price(sig.entry)} · stop {fmt_price(sig.stop)} ({'−' if long else '+'}"
+                     f"${risk:.2f}/share) · half at {fmt_price(sig.t1)} (1R) · rest {fmt_price(sig.t2)} (2R) · out by 3:55pm")
     if account and risk > 0:
         budget = account * cfg.get("RISK_PER_TRADE_PCT") / 100
         sz = size_shares(budget, risk, sig.entry, cash)
@@ -352,3 +486,25 @@ def format_alert(sig: Signal, st: dict, idea: dict | None, account: float, cfg, 
     lines.append(f"<i>{clock_text(sig.ts)} · {label(sig.setup, sig.direction)}</i>")
     return "\n".join(lines)
 
+
+def format_in_play(longs: list[Signal], shorts: list[Signal], st: dict, account: float, cfg, now: float,
+                   cash: float | None = None) -> str:
+    """The 9:35 message: today's stocks in play with a buy-stop and a stop for each."""
+    badge = "✅ proven setup" if st["status"] == "proven" else "🧪 being tested — paper and the autopilot are measuring it"
+    lines = [f"<b>🔥 Stocks in play · {clock_text(now)}</b>", badge,
+             "In-play 5-min breakout: buy only if it trades above the first 5-minute high (a buy-stop order), stop at "
+             "10% of its daily range, no target — hold to 3:55pm. Most trigger and get stopped for a small loss; "
+             "a few run all day and pay for them."]
+    budget = account * cfg.get("RISK_PER_TRADE_PCT") / 100 if account else 0.0
+    for n, sig in enumerate(longs + shorts, 1):
+        verb = "buy-stop" if sig.direction == "long" else "sell-stop (short)"
+        line = (f"{n}. <b>{esc(sig.symbol)}</b> {verb} {fmt_price(sig.entry)} · stop {fmt_price(sig.stop)} "
+                f"({'−' if sig.direction == 'long' else '+'}${sig.risk:.2f}/sh) · "
+                f"{num(sig.context.get('rvol5')):.1f}x opening volume")
+        if budget and sig.risk > 0:
+            sz = size_shares(budget, sig.risk, sig.entry, cash)
+            line += f" · 💼 {fmt_qty(sz['shares'])} sh" if sz["shares"] > 0 else " · 💼 no cash free"
+        lines.append(line)
+    lines.append(f"📊 Record: {describe(st)}")
+    lines.append("<i>Orders not filled by 3:00pm are cancelled. The autopilot follows these on pretend money.</i>")
+    return "\n".join(lines)

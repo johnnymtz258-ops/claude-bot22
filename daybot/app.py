@@ -21,7 +21,7 @@ import aiohttp
 from . import VERSION, charts as charts_mod
 from .ai import AI
 from .alpaca import Alpaca, AlpacaError
-from .backtest import Edge, STATUS_TEXT, run as run_backtest_job, save as save_backtest
+from .backtest import SETUPS_VERSION, STATUS_TEXT, Edge, run as run_backtest_job, save as save_backtest
 from .broker import BrokerSync
 from .check import TradeCheck
 from .clock import Market, at, clock_text, day_of, et
@@ -37,7 +37,7 @@ from .autopilot import Autopilot
 from .paper import Paper
 from .plan import build as build_plan
 from .scanner import Scanner
-from .setups import label
+from .setups import SETUP_NAMES, label
 from .snaptrade import SnapTrade
 from .tg import Notifier, Telegram
 from .util import dumps, esc, loads, num
@@ -136,6 +136,8 @@ class App:
         plan_ts = at(day, f"{plan_at // 100:02d}:{plan_at % 100:02d}") if plan_at else 0
         if session == "pre" and now >= at(day, "07:00") and self.every("premarket", 600, now):
             await self.scanner.premarket(now)
+        if session == "pre" and now >= at(day, "09:00") and self.every("prepare", 300, now):
+            await self.scanner.prepare(now)                # noise bands + usual opening volume, before 9:35
         if plan_ts and plan_ts <= now < open_ts + 1800 and session in {"pre", "open"} \
                 and self.db.once(f"plan:{day}", int(now)):
             if not self.scanner.gappers(day):
@@ -170,9 +172,11 @@ class App:
             self._first_backtest(now)                   # first run: test the setups while the market is quiet
 
     def _first_backtest(self, now: float) -> None:
-        """No backtest yet: start one (and retry every 2 hours if it couldn't finish)."""
+        """No backtest yet, or the setups changed since the last one: start one while the market is quiet (and retry
+        every 2 hours if it couldn't finish)."""
         running = self.backtest_task and not self.backtest_task.done()
-        if not self.db.get_meta("backtest_ts") and not running and self.every("auto_backtest", 7200, now):
+        stale = self.db.get_meta("backtest_setups") != f"{SETUPS_VERSION}:{','.join(SETUP_NAMES)}"
+        if (not self.db.get_meta("backtest_ts") or stale) and not running and self.every("auto_backtest", 7200, now):
             self.start_backtest()
 
     async def _weekend(self, now: float) -> None:

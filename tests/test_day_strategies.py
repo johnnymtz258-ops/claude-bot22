@@ -1,11 +1,11 @@
 """The research strategies: the in-play 5-minute breakout and the index noise band — their rules, entries and exits."""
 import asyncio
 
-from daybot.backtest import band_moves, band_table, rank_in_play, replay_day, run
-from daybot.bars import O, T, resample, vwap
+from daybot.backtest import band_moves, band_table, rank_in_play, run
+from daybot.bars import T, resample, vwap
 from daybot.clock import Market, at
 from daybot.setups import Day, detect, simulate
-from tests.day_helpers import DAY, PREV, FakeAlpaca, daily_history, five, path_bars, premarket
+from tests.day_helpers import DAY, PREV, FakeAlpaca, daily_history, path_bars, premarket
 
 CFG = {"ORB_MINUTES": 15, "GAP_MIN_PCT": 3}
 M = Market()
@@ -119,3 +119,63 @@ def test_backtest_finds_the_stock_in_play_and_trades_it_on_minute_bars():
     assert ("1Min", ("HOT",)) in {(c[2], c[1]) for c in fake.calls if c[0] == "bars"}
     st = res["stats"]["orb5_long"]
     assert st["list"] and st["list"][0][1] == "HOT"
+
+
+def test_live_day_ranks_stocks_in_play_sends_one_message_and_the_autopilot_follows():
+    from tests.day_helpers import make_app
+    prior = PREV[-15:]
+    minute = {}
+    for sym in ("HOT", "SPY", "QQQ"):
+        minute[sym] = [b for d in prior for b in path_bars(d, [("09:30", 100.0), ("16:00", 100.3)], noise=0.0003,
+                                                             vol=20_000)]
+    minute["HOT"] += premarket(DAY, 100.0) + path_bars(DAY, [("09:30", 100.0), ("09:35", 100.6), ("09:40", 100.52),
+                                                             ("09:50", 101.2), ("15:59", 104.0)],
+                                                       noise=0.0002, vol=80_000)
+    for sym in ("SPY", "QQQ"):
+        minute[sym] += path_bars(DAY, [("09:30", 100.0), ("16:00", 100.1)], noise=0.0003)
+    daily = {s: daily_history(PREV, 100.0, 2.0) for s in minute}
+    app = make_app(minute, daily, now=at(DAY, "06:00"))
+    app.cfg.watchlist = ["HOT"]
+
+    async def walk():
+        t = at(DAY, "08:55")
+        while t <= at(DAY, "16:20"):
+            app.fake.now = t
+            await app.market_tick(t)
+            t += 60
+    asyncio.run(walk())
+    assert app.scanner.in_play_today.get("HOT", (0,))[0] == 1
+    msgs = [m for m in app.notes.sent if m["kind"] == "SETUP" and "Stocks in play" in m["text"]]
+    assert len(msgs) == 1 and "HOT" in msgs[0]["text"] and "buy-stop" in msgs[0]["text"]
+    row = app.db.row("select * from paper where symbol='HOT' and setup='orb5'")
+    assert row["auto"] == 1 and row["status"] == "closed" and row["reason"] == "time" and row["r_mult"] > 5
+    auto = [m["text"] for m in app.notes.sent if m["kind"] == "AUTO"]
+    assert any("Autopilot bought" in t and "HOT" in t and "first 5-minute high" in t for t in auto)
+    assert any("Autopilot closed HOT" in t and "held to the close" in t for t in auto)
+    assert app.autopilot.summary(at(DAY, "16:20"))["balance"] > 1000
+
+
+def test_live_spy_band_alert_and_its_half_hour_exit():
+    from tests.day_helpers import make_app
+    prior = PREV[-15:]
+    minute = {sym: [b for d in prior for b in path_bars(d, [("09:30", 100.0), ("16:00", 100.3)], noise=0.0003)]
+              for sym in ("SPY", "QQQ")}
+    minute["SPY"] += path_bars(DAY, [("09:30", 100.0), ("10:00", 100.6), ("10:30", 100.9), ("11:00", 101.0),
+                                     ("11:30", 100.0), ("16:00", 99.9)], noise=0.0002)
+    minute["QQQ"] += path_bars(DAY, [("09:30", 100.0), ("16:00", 100.0)], noise=0.0002)
+    app = make_app(minute, {s: daily_history(PREV, 100.0, 2.0) for s in minute}, now=at(DAY, "06:00"))
+
+    async def walk():
+        t = at(DAY, "08:55")
+        while t <= at(DAY, "16:20"):
+            app.fake.now = t
+            await app.market_tick(t)
+            t += 60
+    asyncio.run(walk())
+    msg = next(m for m in app.notes.sent if m["kind"] == "SETUP" and m["symbol"] == "SPY")
+    assert "noise band" in msg["text"] and "half-hour close" in msg["text"]
+    row = app.db.row("select * from paper where symbol='SPY' and setup='band'")
+    assert row["auto"] == 1 and row["status"] == "closed" and row["reason"] == "trail"
+    assert at(DAY, "11:00") < row["closed_ts"] <= at(DAY, "11:30")
+    assert any("Autopilot closed SPY" in m["text"] and "noise band" in m["text"]
+               for m in app.notes.sent if m["kind"] == "AUTO")
