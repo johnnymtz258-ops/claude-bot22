@@ -303,7 +303,7 @@ def test_dashboard_state_and_routes():
     _walk(app, "10:40", "11:00")
     st = state(app, at(DAY, "11:00"))
     json.dumps(st, default=str)
-    assert st["alerts"] and st["watch"] and len(st["setups"]) == 12 and st["settings"]
+    assert st["alerts"] and st["watch"] and len(st["setups"]) == 14 and st["settings"]
     assert isinstance(st["today"]["trades"], int) and isinstance(st["trade_list"], list)    # a count, not a list
 
     async def go():

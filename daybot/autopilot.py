@@ -24,7 +24,7 @@ JUDGE_AFTER = 20            # trades before the verdict means anything
 
 REASON = {"target": "half at the first target, the rest at the second", "stop": "stopped out",
           "breakeven": "half at the first target, the rest back at breakeven", "time": "closed before the bell",
-          "trail": "closed back inside the noise band at a half-hour check"}
+          "trail": "closed back inside the noise band at a half-hour check", "close": "sold at 3:59pm"}
 
 
 def plural(n: int, word: str) -> str:
@@ -108,7 +108,7 @@ class Autopilot:
         slip = self.cfg.get("SLIPPAGE_PCT") / 100
         entry = sig.entry * (1 + slip if sig.direction == "long" else 1 - slip)
         note = ""
-        if sig.ts >= self.market.close_ts(day_of(sig.ts)) - LATE:
+        if sig.ts >= self.market.close_ts(day_of(sig.ts)) - LATE and sig.plan != "eod":
             note = "too late in the day"
         elif sig.entry_type == "stop":
             # a buy-stop order: whether there's room for it is decided when (if) it fills
@@ -131,7 +131,7 @@ class Autopilot:
     def size_at_fill(self, p: dict, entry: float, fill_ts: float = 0) -> float:
         """The real entry price is known: size again (the stop distance and the free cash may have changed). A stop
         entry is checked against the limits now, when it fills."""
-        risk_ps = num(p["risk"]) if p.get("plan") == "band" and num(p.get("risk")) else abs(entry - num(p["stop"]))
+        risk_ps = num(p["risk"]) if p.get("plan") in ("band", "eod") and num(p.get("risk")) else abs(entry - num(p["stop"]))
         note = ""
         if p.get("entry_type") == "stop":
             others = [t for t in self.open_rows() if t["status"] == "open" and t["id"] != p["id"]]
@@ -175,6 +175,8 @@ class Autopilot:
                 how = f"stop {fmt_price(t['stop'])} · no target: holds to 3:55pm unless stopped"
             elif plan == "band":
                 how = "out when a half-hour close is back inside the noise band or past VWAP · or 3:55pm"
+            elif plan == "eod":
+                how = "the day's biggest losers tend to bounce into the close · sells at 3:59pm"
             else:
                 how = f"stop {fmt_price(t['stop'])} · half at {fmt_price(t['t1'])} · rest {fmt_price(t['t2'])}"
             why = " — it broke the first 5-minute high" if t.get("entry_type") == "stop" else ""

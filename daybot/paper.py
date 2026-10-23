@@ -10,7 +10,7 @@ Entries: a market entry fills at the next minute's open after the signal; a stop
 buy-stop) fills in the first minute that trades through the level, at the level (or the open if it gapped through),
 and is cancelled at 3:00pm. Costs (SLIPPAGE_PCT) on every fill.
 Exits by plan (setups.py): standard — half at 1R, stop to breakeven, the rest at 2R; close — the stop or 3:55pm;
-band — a half-hour close back inside the noise band / VWAP, or 3:55pm. When one minute touches both the stop and a
+band — a half-hour close back inside the noise band / VWAP, or 3:55pm; eod — sold at 3:59pm. When one minute touches both the stop and a
 target, the stop counts (the honest way); a stop entry filled in a minute that touches the stop is stopped out.
 """
 from __future__ import annotations
@@ -70,8 +70,8 @@ class Paper:
             if not bars:
                 continue
             s = 1 if p["direction"] == "long" else -1
-            deadline = close - EXIT_BEFORE_CLOSE
             plan = p["plan"] or "standard"
+            deadline = close - (60 if plan == "eod" else EXIT_BEFORE_CLOSE)
             fill_ts = 0
             if p["status"] == "pending":
                 if p["entry_type"] == "stop":
@@ -98,7 +98,7 @@ class Paper:
                 qty = num(p["qty"])
                 if p["auto"] and self.auto:
                     qty = self.auto.size_at_fill(p, entry, b0[T])
-                risk = num(p["risk"]) if plan == "band" else s * (entry - num(p["stop"]))
+                risk = num(p["risk"]) if plan in ("band", "eod") else s * (entry - num(p["stop"]))
                 self.db.run("update paper set status='open', entry=?, opened_ts=?, qty=?, risk=? where id=?",
                             (entry, b0[T], qty, risk, p["id"]))
                 p = self.db.row("select * from paper where id=?", (p["id"],))
@@ -120,10 +120,10 @@ class Paper:
                     break                                           # still forming
                 seen = b[T]
                 if b[T] >= deadline:
-                    exit_px, reason, exit_ts = b[O] * (1 - s * slip), "time", b[T]
+                    exit_px, reason, exit_ts = b[O] * (1 - s * slip), ("close" if plan == "eod" else "time"), b[T]
                     break
                 lo, hi = (b[L], b[H]) if s > 0 else (-b[H], -b[L])
-                if plan != "band" and lo <= stop_now * s:
+                if plan not in ("band", "eod") and lo <= stop_now * s:
                     op = num(p["entry"]) / (1 + s * slip) * s if b[T] == fill_ts else b[O] * s
                     exit_px = min(op, stop_now * s) * s * (1 - s * slip)
                     reason, exit_ts = ("breakeven" if half else "stop"), b[T]

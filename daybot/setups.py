@@ -9,6 +9,9 @@ Signals are judged on completed 5-minute bars of the regular session:
   band  Index momentum (Zarattini, Aziz & Barbon, 2024): SPY / QQQ breaking out of the day's "noise band" (how far it
         usually moves from the open by that time of day), checked every half hour; out when it closes back inside the
         band or under VWAP at a half-hour check
+  eod   End-of-day bounce (Baltussen, Da & Soebhag, 2024 — 2nd place, Quantpedia Awards 2025): at 3:30pm, the day's
+        biggest losers (bottom tenth of the liquid universe by return since yesterday's close) tend to bounce into the
+        close; bought at 3:30, sold at 3:59. A small edge (a few hundredths of a percent): costs decide it
   orb   Opening-range breakout: first close beyond the opening range (default 15 min), with VWAP and volume behind it
   vwap  VWAP reclaim / rejection: a stock on the right side of yesterday's close dips through VWAP and takes it back
         on volume within 30 minutes
@@ -20,6 +23,7 @@ Exit plans:
   standard  stop as given; half at 1R and the stop to break-even; the rest at 2R          (orb, vwap, pmh, leg2)
   close     stop as given, no target: held to 3:55pm                                       (orb5)
   band      no fixed stop: out when a half-hour close falls back inside the band / VWAP   (band)
+  eod       no stop: bought at 3:30pm, sold at 3:59pm                                      (eod)
 Everything still open is closed at 3:55pm. Inside a bar that touches both the stop and a target the stop is assumed
 to come first. A buy-stop entry that fills in the same bar that touches the stop counts as stopped out.
 """
@@ -37,24 +41,30 @@ STOP_ENTRY_CUTOFF = 60 * 60     # a buy-stop that hasn't filled by 3pm is cancel
 BAND_FIRST, BAND_LAST, BAND_STEP = 30, 330, 30      # band entries checked 10:00am … 3:00pm (minutes after the open)
 BAND_EXIT_LAST = 360            # band exits checked through 3:30pm; 3:55pm closes the rest
 BAND_MIN_R_ATR = 0.20           # a band trade's 1R is never under 20% of the daily ATR (results compare with stops)
-PLANS = {"orb5": "close", "band": "band"}          # everything else: "standard"
+PLANS = {"orb5": "close", "band": "band", "eod": "eod"}    # everything else: "standard"
+EOD_START = 30 * 60             # the end-of-day bounce ranks at 3:30pm (30 minutes before the close)
+EOD_R_ATR = 0.25                # its 1R (it has no stop): a quarter of the daily ATR
+EOD_DECILE = 0.10               # the bottom (top) tenth of the universe by return since yesterday's close
 ENTRIES = {"orb5": "stop"}                         # everything else: "market" (the next bar's open)
 
 LABELS = {
     ("orb5", "long"): "In-play 5-min breakout", ("orb5", "short"): "In-play 5-min breakdown",
     ("band", "long"): "Index momentum up (noise-band breakout)",
     ("band", "short"): "Index momentum down (noise-band breakdown)",
+    ("eod", "long"): "End-of-day bounce (day's biggest losers)", ("eod", "short"): "End-of-day fade (day's biggest winners)",
     ("orb", "long"): "Opening-range breakout", ("orb", "short"): "Opening-range breakdown",
     ("vwap", "long"): "VWAP reclaim", ("vwap", "short"): "VWAP rejection",
     ("pmh", "long"): "Gap-and-go (premarket high break)", ("pmh", "short"): "Gap-down breakdown (premarket low break)",
     ("leg2", "long"): "Second leg up (bull flag)", ("leg2", "short"): "Second leg down (bear flag)",
 }
-SETUP_NAMES = ("orb5", "band", "orb", "vwap", "pmh", "leg2")
+SETUP_NAMES = ("orb5", "band", "eod", "orb", "vwap", "pmh", "leg2")
 ABOUT = {
     "orb5": "The day's ~20 busiest stocks at the open: buy if it breaks its first 5-minute high, small stop (10% of its "
             "daily range), hold to the close. Few winners, but big ones. From Zarattini, Barbon & Aziz (2024).",
     "band": "SPY / QQQ: buy when, at a half-hour check, it's further from the open than it usually gets by that time; "
             "out when it falls back. From Zarattini, Aziz & Barbon (2024).",
+    "eod": "At 3:30pm, buy the day's biggest losers among liquid stocks; sell at 3:59pm. They tend to bounce into the "
+           "close. Small edge — costs decide it. From Baltussen, Da & Soebhag (2024; 2nd place, Quantpedia Awards 2025).",
     "orb": "First 5-minute close above the first 15 minutes' range, on volume, above VWAP. Half at 1R, rest at 2R.",
     "vwap": "On a green day, a dip under VWAP that's bought back on volume. Half at 1R, rest at 2R.",
     "pmh": "A stock that gapped 3%+ breaking its premarket high in the first hour. Half at 1R, rest at 2R.",
@@ -321,6 +331,28 @@ def detect(day: Day, i: int, cfg: dict, fired: set, mirror: Day | None = None) -
     return out
 
 
+def eod_rank(moves: dict[str, float], decile: float = EOD_DECILE, least: int = 5, most: int = 30) -> tuple[list, list]:
+    """{symbol: return since yesterday's close} -> (biggest losers, biggest winners), worst / best first."""
+    order = sorted(moves, key=lambda k: moves[k])
+    n = min(most, max(least, int(len(order) * decile))) if len(order) >= 2 * least else 0
+    return order[:n], order[::-1][:n]
+
+
+def eod_signal(symbol: str, direction: str, price: float, ts: int, close_ts: int, atr: float, move: float,
+               rank: int) -> Signal | None:
+    """The end-of-day bounce (long, a loser) or fade (short, a winner), bought at `price` at 3:30pm."""
+    if price <= 0 or atr <= 0:
+        return None
+    s = 1 if direction == "long" else -1
+    risk = EOD_R_ATR * atr
+    word = "down" if move < 0 else "up"
+    reason = (f"#{rank} {'biggest loser' if s > 0 else 'biggest winner'} of the day at 3:30pm "
+              f"({word} {abs(move) * 100:.1f}% since yesterday's close) — these tend to "
+              f"{'bounce' if s > 0 else 'give some back'} into the close")
+    return Signal("eod", direction, symbol, int(ts), price, price - s * risk, 0.0, 0.0, reason,
+                  {"rank": rank, "move": move}, "eod", "market", 0)
+
+
 def band_trail(ctx: dict, s: int, minutes: int, vw: float) -> float | None:
     """Where a band trade gets out at a half-hour check, in the trade's direction (s=1 long, -1 short): the band edge
     or VWAP, whichever is tighter. None when there's no band value for that time."""
@@ -359,9 +391,17 @@ def simulate(sig: Signal, bars: list, close_ts: int, slippage_pct: float, bar_se
     entry = fill * (1 + s * slip)
     if s * (entry - sig.stop) <= 0:
         return None
-    risk = sig.risk if sig.plan == "band" else s * (entry - sig.stop)
+    risk = sig.risk if sig.plan in ("band", "eod") else s * (entry - sig.stop)
     stop, half, booked = sig.stop, False, 0.0
     exit_price, exit_ts, reason = None, 0, ""
+    if sig.plan == "eod":
+        last = [b for b in bars[k:] if b[T] < close_ts]
+        if not last or last[-1][T] + bar_seconds < close_ts - 60:
+            return None                                      # no data into the close
+        exit_price = last[-1][C] * (1 - s * slip)
+        move = s * (exit_price - entry)
+        return {"entry": entry, "exit": exit_price, "exit_ts": close_ts, "r": move / risk, "half": False,
+                "reason": "close", "risk": risk, "status": "closed", "entry_ts": bars[k][T]}
     for j in range(k, len(bars)):
         b = bars[j]
         if b[T] >= deadline:

@@ -58,6 +58,7 @@ In Telegram, `/status` shows what's connected.
 | **9:00** | 🌅 **Game plan:** market tone, which setups the data backs, gappers with headline, levels and an if-then plan, your positions, and your rules in dollars |
 | **9:35** | 🔥 **Stocks in play:** the day's busiest stocks, each with a buy-stop and a stop (one message) |
 | 9:30–4:00 | ✅ proven setups ping you, 🧪 unproven ones arrive silently, 🆕 in-play stocks, 🔔 your price alerts |
+| **3:30** | 🔄 **End-of-day bounce:** the day's biggest losers, to hold into the close (one message) |
 | any time you trade | 🧾 a check of your fill, a ✂️ note on trims, and a ✅/❌ recap on exits with what the stock did after you left |
 | while you hold | ⚠️ stop hit, 🎯 targets, 🟡 VWAP lost, ⏰ 15 minutes to the close, ⏰ a 0DTE running out of time |
 | 9:30–3:55 | 🤖 the autopilot buys and sells the alerts on pretend money (silent messages) |
@@ -93,6 +94,7 @@ Options checks also look at the bid/ask spread, open interest, delta (lottery ti
 |---|---|---|
 | **In-play 5-min breakout** | Only the ~20 stocks trading far more than usual in their first 5 minutes (against their own last 14 days). A green first 5-minute candle sets a buy-stop at its high; the stop is 10% of the stock's daily range. From Zarattini, Barbon & Aziz (2024), *A Profitable Day Trading Strategy for the U.S. Equity Market*. | No target: held to 3:55pm unless stopped. Most trades lose a little; a few run all day. |
 | **Index momentum (noise band)** | SPY / QQQ, checked every half hour: buy when it's further from the open than it usually gets by that time of day (the "noise band", from the last 14 days) and above VWAP. From Zarattini, Aziz & Barbon (2024), *Beat the Market*. | Out when a half-hour close falls back inside the band or under VWAP, or at 3:55pm. |
+| **End-of-day bounce** | At 3:30pm, the bottom tenth of the liquid universe by return since yesterday's close: the day's biggest losers tend to bounce in the last half hour. From Baltussen, Da & Soebhag, *End-of-Day Reversal* (2024; 2nd place, Quantpedia Awards 2025). The edge is a few hundredths of a percent, so trading costs decide whether it pays. | No stop: sold at 3:59pm. |
 | Opening-range breakout | First close beyond the first 15 minutes' range, with VWAP and volume behind it |
 | VWAP reclaim / rejection | A stock on the right side of yesterday's close dips through VWAP and takes it back on volume | Half at 1R, stop to break-even, rest at 2R |
 | Gap-and-go | A gapper's first close through its premarket high (or low), in the first hour, in play | Half at 1R, stop to break-even, rest at 2R |
@@ -100,7 +102,7 @@ Options checks also look at the bid/ask spread, open interest, delta (lottery ti
 
 The opening-range breakout uses the same 1R / 2R plan. Everything is out by 3:55pm.
 
-**✅ Proven** means it made money after costs in **both halves** of the backtest, still did **without its 3 best trades**, and has **40+ trades**. The backtest replays the last **120 trading days**: the core liquid names every day, every stock on the days it gapped, each day's 20 stocks in play (picked the same way as live, traded on 1-minute bars), and SPY / QQQ with the noise band rebuilt for each day. Costs are charged on every buy and sell. If a bar touches both the stop and the target, the stop is assumed to come first, and a buy-stop filled in a minute that also touches the stop counts as stopped out. The dashboard's **Setups** tab shows each setup's backtest trade by trade, and a plain verdict on top.
+**✅ Proven** means it made money after costs in **both halves** of the backtest, still did **without its 3 best trades**, and has **40+ trades**. The backtest replays the last **120 trading days**: the core liquid names every day, every stock on the days it gapped, each day's 20 stocks in play (picked the same way as live, traded on 1-minute bars), SPY / QQQ with the noise band rebuilt for each day, and each day's 3:30pm losers and winners for the end-of-day bounce. Costs are charged on every buy and sell. If a bar touches both the stop and the target, the stop is assumed to come first, and a buy-stop filled in a minute that also touches the stop counts as stopped out. The dashboard's **Setups** tab shows each setup's backtest trade by trade, and a plain verdict on top.
 
 The short side of every setup is measured too, but stays on paper unless `SHORT_ALERTS` is on (Robinhood and Chase don't let you short stocks).
 

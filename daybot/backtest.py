@@ -10,7 +10,9 @@ every fill, flat by 3:55pm, stop assumed first when a bar touches both).
   • the stocks in play each day: the ORB5_TOP stocks with the most first-5-minute volume against their own usual
     first 5 minutes (price, volume and daily-range filters as in Zarattini, Barbon & Aziz 2024), replayed on
     1-minute bars, and
-  • SPY / QQQ every day for the noise-band strategy (the band is rebuilt from the 14 days before each day).
+  • SPY / QQQ every day for the noise-band strategy (the band is rebuilt from the 14 days before each day), and
+  • the end-of-day bounce: each day at 3:30pm, the universe's biggest losers (and winners, for the short side)
+    since yesterday's close, held to the close.
 
 A setup is PROVEN only when it made money after costs in BOTH halves of the period, still does without its 3
 best trades, and has 40+ trades. Proven setups ping you; the rest are paper-traded (silently) until they are.
@@ -22,7 +24,8 @@ import statistics
 
 from .bars import C, O, T, V, atr, split_day, vwap
 from .clock import Market, at, day_of
-from .setups import BAND_EXIT_LAST, BAND_STEP, SETUP_NAMES, Day, detect, label, simulate
+from .setups import (BAND_EXIT_LAST, BAND_STEP, EOD_START, SETUP_NAMES, Day, detect, eod_rank, eod_signal,
+                     label, simulate)
 from .util import dumps, num
 
 CORE = ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "TSLA", "AMD", "META", "AMZN", "GOOGL", "NFLX", "AVGO", "PLTR",
@@ -52,7 +55,7 @@ BAND_SYMBOLS = ("SPY", "QQQ")
 INPLAY_LOOKBACK = 14            # days of first-5-minute volume an in-play stock is compared with
 INPLAY_MIN_RVOL = 1.0           # at least its usual first 5 minutes
 INPLAY_MIN_ATR = 0.50           # $ — a daily range big enough to trade
-SETUPS_VERSION = "2"            # bump when setups change: the backtest runs again on its own
+SETUPS_VERSION = "3"            # bump when setups change: the backtest runs again on its own
 
 MIN_TRADES_PROVEN = 40
 STATUS_TEXT = {"proven": "✅ proven", "promising": "🟡 promising", "thin": "⚪ not enough trades",
@@ -123,6 +126,22 @@ def band_table(history: list[dict[int, float]], lookback: int = INPLAY_LOOKBACK)
         return {}
     keys = sorted({k for h in days for k in h})
     return {k: sum(h[k] for h in days if k in h) / max(1, sum(1 for h in days if k in h)) for k in keys}
+
+
+def eod_moves(bars30: dict[str, list], daily_prior: dict[str, list], day: str, t0: int, cfg) -> dict:
+    """{symbol: (return since yesterday's close at 3:30pm, the 3:30 bar, daily ATR)} for liquid, non-leveraged stocks."""
+    out = {}
+    for sym, rows in bars30.items():
+        if sym in LEVERED or sym in BAND_SYMBOLS:
+            continue
+        row = next((b for b in rows if b[T] == t0), None)
+        prior = [d for d in daily_prior.get(sym, []) if day_of(d[T]) < day]
+        if not row or len(prior) < 15 or prior[-1][C] <= 0:
+            continue
+        if prior[-1][C] < cfg.get("MIN_PRICE") or statistics.mean(d[V] for d in prior[-14:]) < cfg.get("MIN_AVG_VOLUME"):
+            continue
+        out[sym] = (row[O] / prior[-1][C] - 1, row, atr(prior[-15:], 14))
+    return out
 
 
 def rank_in_play(first5: dict[str, tuple], history: dict[str, list[float]], daily_prior: dict[str, list], day: str,
@@ -261,12 +280,32 @@ async def run(alpaca, market: Market, cfg, today: str, days: int | None = None, 
                 if day in day_list:
                     pairs.add((sym, day))
 
+    # the end-of-day bounce: 3:30pm to the close, the day's biggest losers (and winners)
+    trades: list[dict] = []
+    slip = cfg.get("SLIPPAGE_PCT")
+    eod_universe = [s for s in universe if s not in LEVERED]
+    for n, day in enumerate(day_list):
+        close = market.close_ts(day)
+        t0 = close - EOD_START
+        got = await alpaca.bars(eod_universe, "30Min", t0, close, feed="sip")
+        moves = eod_moves(got, daily, day, t0, cfg)
+        losers, winners = eod_rank({k: v[0] for k, v in moves.items()})
+        for direction, names in (("long", losers), ("short", winners)):
+            for rank, sym in enumerate(names, 1):
+                move, row, daily_atr = moves[sym]
+                sig = eod_signal(sym, direction, row[O], t0, close, daily_atr, move, rank)
+                res = simulate(sig, [row], close, slip, bar_seconds=1800) if sig else None
+                if res and res["status"] == "closed":
+                    trades.append({"setup": "eod", "direction": direction, "symbol": sym, "day": day, "ts": t0,
+                                   "r": res["r"], "reason": res["reason"], "entry": res["entry"], "exit": res["exit"],
+                                   "entry_ts": res["entry_ts"]})
+        if progress and n % 20 == 0:
+            await progress(f"end-of-day test {n + 1}/{len(day_list)}")
+
     by_day: dict[str, list[str]] = {}
     for sym, day in pairs:
         by_day.setdefault(day, []).append(sym)
     values = {name: cfg.get(name) for name in ("ORB_MINUTES", "GAP_MIN_PCT")}
-    slip = cfg.get("SLIPPAGE_PCT")
-    trades: list[dict] = []
     for n, day in enumerate(sorted(by_day)):
         syms = sorted(by_day[day])
         bars = await alpaca.bars(syms, "5Min", at(day, "04:00"), at(day, "16:00"), feed="sip")

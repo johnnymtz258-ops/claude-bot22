@@ -172,7 +172,7 @@ class FakeAlpaca:
                 rows = [b for b in self.daily_store.get(s, []) if start <= b[0] < end]
             else:
                 rows = [b for b in self.minute.get(s, []) if start <= b[0] and b[0] + 60 <= end]
-                step = {"1Min": 1, "5Min": 5, "15Min": 15}[timeframe]
+                step = {"1Min": 1, "5Min": 5, "15Min": 15, "30Min": 30}[timeframe]
                 if step > 1:
                     rows = _resample(rows, step)
             if rows:

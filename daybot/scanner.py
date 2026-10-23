@@ -7,22 +7,24 @@
   • During the session: every completed 5-minute bar of every watched stock goes through the setup detectors
     (SPY / QQQ also through the noise band at each half hour). A setup with a proven record pings you; an unproven
     one is sent silently (or not at all — ALERT_UNPROVEN) and paper-traded either way, so the record builds.
+  • 3:30pm: the day's biggest losers among liquid stocks, for the end-of-day bounce, in one message.
   • Every 10 minutes: new stocks coming into play (big move on heavy volume) join the watchlist, and you hear
     about them — the "found it before I did" part.
 """
 from __future__ import annotations
 
 import datetime as dt
+import statistics
 
 from .accounts import account_size, fmt_qty, size_shares, spendable
 from .alpaca import AlpacaError, parse_ts, snap_price
 from .backtest import (BAND_SYMBOLS, INPLAY_LOOKBACK, LEVERED, LEVERED_NAME, UNIVERSE, Edge, band_moves, band_table,
                        describe, rank_in_play)
-from .bars import C, H, L, O, T, V, rvol
+from .bars import C, H, L, O, T, V, atr, rvol
 from .clock import Market, at, clock_text, day_of, et
 from .news import catalysts, main_catalyst, warning
 from .options import pick_idea, size_contracts
-from .setups import Signal, detect, label
+from .setups import EOD_START, Signal, detect, eod_rank, eod_signal, label
 from .util import big, dumps, esc, loads, money, num, pct, price as fmt_price
 
 ALWAYS = ["SPY", "QQQ"]
@@ -46,6 +48,7 @@ class Scanner:
         self.bands: dict[str, dict] = {}                          # SPY / QQQ noise band for today
         self.bands_day = ""
         self._prepare_try = 0.0
+        self.eod_day = ""
 
     # ---- the watchlist -----------------------------------------------------------------------------------------
     def watchlist(self, day: str) -> list[str]:
@@ -346,7 +349,51 @@ class Scanner:
         if in_play:
             await self.alert_in_play(in_play, now)
             sent += in_play
+        sent += await self.end_of_day(now)
         return sent
+
+    async def end_of_day(self, now: float) -> list[Signal]:
+        """3:30pm: rank the liquid universe by its return since yesterday's close; the biggest losers are bought for
+        the end-of-day bounce (the biggest winners measured on paper as the short side). One message."""
+        day = day_of(now)
+        close = self.market.close_ts(day)
+        t0 = close - EOD_START
+        if self.eod_day == day or not t0 <= now < t0 + 600:
+            return []
+        cands = [x for x in UNIVERSE if x not in LEVERED and x not in BAND_SYMBOLS]
+        await self.data.load_daily(cands, now)
+        snaps = await self.data.snapshots(cands)
+        if not snaps:
+            return []                                      # try again on the next tick
+        self.eod_day = day
+        moves, info = {}, {}
+        for sym in cands:
+            daily, price = self.data.daily(sym), snap_price(snaps.get(sym) or {})
+            if len(daily) < 15 or price <= 0 or daily[-1][C] <= 0:
+                continue
+            if daily[-1][C] < self.cfg.get("MIN_PRICE") or \
+                    statistics.mean(d[V] for d in daily[-14:]) < self.cfg.get("MIN_AVG_VOLUME"):
+                continue
+            moves[sym] = price / daily[-1][C] - 1
+            info[sym] = (price, atr(daily[-15:], 14))
+        losers, winners = eod_rank(moves)
+        sigs = []
+        for direction, names in (("long", losers), ("short", winners)):
+            for rank, sym in enumerate(names, 1):
+                sig = eod_signal(sym, direction, info[sym][0], int(now), close, info[sym][1], moves[sym], rank)
+                if sig:
+                    sigs.append(sig)
+        for sig in sigs:
+            await self.alert(sig, now, quiet=True)
+        longs = [g for g in sigs if g.direction == "long"]
+        st = self.edge.status("eod", "long")
+        proven = st["status"] == "proven"
+        if longs and self.cfg.flag("ALERTS_ENABLED") and st["status"] not in {"negative", "benched"} \
+                and (proven or self.cfg.flag("ALERT_UNPROVEN")):
+            text = format_eod(longs[:8], st, account_size(self.db, self.cfg), self.cfg, now, cash=spendable(self.db))
+            await self.notify(text, silent=not proven, kind="SETUP", symbol=longs[0].symbol,
+                              buttons=[[("📈 Chart " + longs[0].symbol, None, f"chart:{longs[0].symbol}")]])
+        return sigs
 
     async def alert_in_play(self, sigs: list[Signal], now: float) -> None:
         """Every in-play breakout is recorded and paper-traded; you get one message with the best of them."""
@@ -514,4 +561,23 @@ def format_in_play(longs: list[Signal], shorts: list[Signal], st: dict, account:
         lines.append(line)
     lines.append(f"📊 Record: {describe(st)}")
     lines.append("<i>Orders not filled by 3:00pm are cancelled. The autopilot follows these on pretend money.</i>")
+    return "\n".join(lines)
+
+
+def format_eod(longs: list[Signal], st: dict, account: float, cfg, now: float, cash: float | None = None) -> str:
+    """The 3:30pm message: the day's biggest losers, to hold into the close."""
+    badge = "✅ proven setup" if st["status"] == "proven" else "🧪 being tested — paper and the autopilot are measuring it"
+    lines = [f"<b>🔄 End-of-day bounce · {clock_text(now)}</b>", badge,
+             "The day's biggest losers tend to bounce in the last half hour (Baltussen, Da & Soebhag; 2nd place, "
+             "Quantpedia Awards 2025). Buy now, sell at 3:59pm, no stop. The edge is small — a few hundredths of a "
+             "percent on average — so it only pays where buying and selling costs very little."]
+    budget = account * cfg.get("RISK_PER_TRADE_PCT") / 100 if account else 0.0
+    for n, sig in enumerate(longs, 1):
+        line = (f"{n}. <b>{esc(sig.symbol)}</b> {pct(num(sig.context.get('move')) * 100)} today · "
+                f"{fmt_price(sig.entry)}")
+        if budget and sig.risk > 0:
+            sz = size_shares(budget, sig.risk, sig.entry, cash)
+            line += f" · 💼 {fmt_qty(sz['shares'])} sh" if sz["shares"] > 0 else " · 💼 no cash free"
+        lines.append(line)
+    lines.append(f"📊 Record: {describe(st)}")
     return "\n".join(lines)

@@ -179,3 +179,48 @@ def test_live_spy_band_alert_and_its_half_hour_exit():
     assert at(DAY, "11:00") < row["closed_ts"] <= at(DAY, "11:30")
     assert any("Autopilot closed SPY" in m["text"] and "noise band" in m["text"]
                for m in app.notes.sent if m["kind"] == "AUTO")
+
+
+def test_end_of_day_bounce_ranks_losers_and_holds_to_the_close():
+    from daybot.setups import eod_rank, eod_signal
+    moves = {f"S{i:02d}": (i - 50) / 1000 for i in range(100)}             # -5% … +4.9%
+    losers, winners = eod_rank(moves)
+    assert losers[:2] == ["S00", "S01"] and winners[0] == "S99" and len(losers) == 10
+    close = M.close_ts(DAY)
+    sig = eod_signal("S00", "long", 50.0, close - 1800, close, 2.0, -0.05, 1)
+    assert sig.plan == "eod" and abs(sig.risk - 0.5) < 1e-9 and "biggest loser" in sig.reason
+    bar = (close - 1800, 50.0, 50.6, 49.9, 50.4, 9e5)                       # bounced 0.8% into the close
+    res = simulate(sig, [bar], close, 0.05, bar_seconds=1800)
+    assert res["reason"] == "close" and 0.6 < res["r"] < 0.8                 # costs both ways come off
+
+
+def test_live_end_of_day_bounce_message_and_autopilot():
+    from tests.day_helpers import make_app
+    from daybot.backtest import UNIVERSE
+    names = [s for s in UNIVERSE if s not in ("SPY", "QQQ")][:40]
+    minute, daily = {}, {}
+    for i, sym in enumerate(names):
+        end = 100.0 * (1 + (i - 20) / 400)                                    # -5% … +4.75% by 3:30
+        minute[sym] = path_bars(DAY, [("09:30", 100.0), ("15:30", end), ("15:59", end * (1.006 if i < 4 else 1.0))],
+                                noise=0.0001)
+        daily[sym] = daily_history(PREV, 100.0, 2.0)
+    for sym in ("SPY", "QQQ"):
+        minute[sym] = path_bars(DAY, [("09:30", 100.0), ("16:00", 100.0)], noise=0.0001)
+        daily[sym] = daily_history(PREV, 100.0, 2.0)
+    app = make_app(minute, daily, now=at(DAY, "15:00"))
+    app.cfg.set("ORB5_TOP", "0")
+
+    async def walk():
+        t = at(DAY, "15:20")
+        while t <= at(DAY, "16:20"):
+            app.fake.now = t
+            await app.market_tick(t)
+            t += 60
+    asyncio.run(walk())
+    msg = next(m for m in app.notes.sent if m["kind"] == "SETUP" and "End-of-day bounce" in m["text"])
+    assert names[0] in msg["text"]
+    rows = app.db.rows("select * from paper where setup='eod' and direction='long' order by id")
+    assert len(rows) == 5 and rows[0]["symbol"] == names[0]
+    assert all(r["status"] == "closed" and r["reason"] == "close" for r in rows)
+    auto = [r for r in rows if r["auto"]]
+    assert len(auto) == 3 and all(r["r_mult"] > 0 for r in auto[:3])         # the 3 worst bounced
