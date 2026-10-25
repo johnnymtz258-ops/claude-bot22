@@ -51,9 +51,12 @@ def test_in_play_breakout_never_filled_or_stopped_in_the_fill_minute():
     spike = list(_runner())
     k = next(i for i, b in enumerate(spike) if b[T] == at(DAY, "09:40"))
     t, o, h, l, c, v = spike[k]
-    spike[k] = (t, o, sig.entry + 0.5, sig.stop - 0.5, c, v)                     # through the level and the stop
+    spike[k] = (t, o, sig.entry + 0.5, sig.stop - 0.5, sig.stop - 0.1, v)       # broke out, closed under the stop
     res = simulate(sig, spike, M.close_ts(DAY), 0.05, bar_seconds=60)
     assert res["reason"] == "stop" and -1.6 < res["r"] < -0.9
+    spike[k] = (t, o, sig.entry + 0.5, sig.stop - 0.5, c, v)                     # dipped first, closed above the stop
+    res = simulate(sig, spike, M.close_ts(DAY), 0.05, bar_seconds=60)
+    assert res["reason"] == "time"                                                # its low came before the fill
 
 
 def _band_day():
@@ -224,3 +227,51 @@ def test_live_end_of_day_bounce_message_and_autopilot():
     assert all(r["status"] == "closed" and r["reason"] == "close" for r in rows)
     auto = [r for r in rows if r["auto"]]
     assert len(auto) == 3 and all(r["r_mult"] > 0 for r in auto[:3])         # the 3 worst bounced
+
+
+def test_costs_follow_how_much_a_stock_trades_and_the_market_wide_list():
+    from daybot.universe import cost_pct, is_stock
+    assert cost_pct(3e10, 0.01) < cost_pct(3e8, 0.01) < cost_pct(5e6, 0.01)       # SPY < mid cap < small cap
+    assert is_stock({"symbol": "BABA", "exchange": "NYSE", "tradable": True, "status": "active",
+                     "name": "Alibaba Group Holding Limited American Depositary Shares"})
+    for name, sym in (("SPDR S&P 500 ETF Trust", "SPY"), ("Direxion Daily Semiconductor Bull 3X Shares", "SOXL"),
+                      ("Acme Corp Warrants", "ACMEW"), ("T-Rex 2X Long NVIDIA Daily Target ETF", "NVDX")):
+        assert not is_stock({"symbol": sym, "exchange": "ARCA", "tradable": True, "status": "active", "name": name})
+    assert not is_stock({"symbol": "OTCX", "exchange": "OTC", "tradable": True, "status": "active", "name": "X Inc"})
+
+
+def _hot_market(sym="HOTX"):
+    prior = PREV[-16:]
+    minute = {x: [b for d in prior for b in path_bars(d, [("09:30", 100.0), ("16:00", 100.3)], noise=0.0003,
+                                                          vol=20_000)] for x in (sym, "SPY", "QQQ")}
+    minute[sym] += premarket(DAY, 100.0) + path_bars(DAY, [("09:30", 100.0), ("09:35", 100.6), ("09:40", 100.52),
+                                                           ("09:50", 101.2), ("15:59", 104.0)], noise=0.0002, vol=80_000)
+    for x in ("SPY", "QQQ"):
+        minute[x] += path_bars(DAY, [("09:30", 100.0), ("16:00", 100.1)], noise=0.0003)
+    return minute, {x: daily_history(PREV, 100.0, 2.0) for x in minute}
+
+
+def test_backtest_looks_for_stocks_in_play_across_the_whole_market(tmp_path):
+    from daybot.config import Config
+    minute, daily = _hot_market()
+    fake = FakeAlpaca(minute, daily, now=at(DAY, "20:00"), assets=["HOTX"])
+    res = asyncio.run(run(fake, M, Config(), "2026-10-22", days=1, core=["SPY", "QQQ"], cache=tmp_path / "s.json"))
+    assert "HOTX" not in __import__("daybot.backtest", fromlist=["UNIVERSE"]).UNIVERSE
+    assert res["scanned"] >= 1 and res["in_play"] == 1
+    assert [t["symbol"] for t in res["list"] if t["setup"] == "orb5"] == ["HOTX"]
+    assert (tmp_path / "s.json").exists()                                        # the stock list is kept a week
+
+
+def test_live_stocks_in_play_come_from_the_whole_market():
+    from tests.day_helpers import make_app
+    minute, daily = _hot_market()
+    app = make_app(minute, daily, now=at(DAY, "06:00"), assets=["HOTX"])
+
+    async def walk():
+        t = at(DAY, "08:55")
+        while t <= at(DAY, "10:00"):
+            app.fake.now = t
+            await app.market_tick(t)
+            t += 60
+    asyncio.run(walk())
+    assert app.scanner.broad == ["HOTX"] and app.scanner.in_play_today.get("HOTX", (0,))[0] == 1

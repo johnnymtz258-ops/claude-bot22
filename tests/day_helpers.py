@@ -143,7 +143,7 @@ class FakeAlpaca:
     """Serves synthetic bars as if it were Alpaca, as of `self.now` (set by the test)."""
 
     def __init__(self, minute: dict | None = None, daily: dict | None = None, *, chain=None, contracts=None,
-                 news=None, movers=None, actives=None, now: float | None = None):
+                 news=None, movers=None, actives=None, now: float | None = None, assets=None):
         self.minute = minute or {}
         self.daily_store = daily or {}
         self.feed = "iex"
@@ -158,6 +158,8 @@ class FakeAlpaca:
         self.actives = actives or []
         self.now = now or at(DAY, "16:00")
         self.calls: list[tuple] = []
+        self.assets_list = [{"symbol": a, "exchange": "NASDAQ", "tradable": True, "status": "active",
+                             "name": f"{a} Inc"} for a in (assets or [])]
 
     @property
     def ok(self) -> bool:
@@ -223,6 +225,9 @@ class FakeAlpaca:
 
     async def calendar(self, start, end):
         return []
+
+    async def assets(self):
+        return list(self.assets_list)
 
     async def clock(self):
         return {}
@@ -299,8 +304,11 @@ def make_app(minute=None, daily=None, *, now=None, total=25_000.0, charts=None, 
     from daybot.app import App
     from daybot.config import Config
     from daybot.db import Database
+    import tempfile
+    from pathlib import Path
     cfg = Config(alpaca_key="k", alpaca_secret="s", snaptrade_client_id="c", snaptrade_consumer_key="ck",
                  telegram_chat_id="1", dashboard_enabled=False)
+    cfg.state_dir = Path(tempfile.mkdtemp(prefix="daybot-test-"))
     fake = FakeAlpaca(minute, daily, now=now, **fake_kw)
     snap = FakeSnap(total)
     notes = Notes()

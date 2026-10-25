@@ -19,11 +19,12 @@ best trades, and has 40+ trades. Proven setups ping you; the rest are paper-trad
 """
 from __future__ import annotations
 
-import re
 import statistics
+from pathlib import Path
 
 from .bars import C, O, T, V, atr, split_day, vwap
 from .clock import Market, at, day_of
+from .universe import LEVERED, all_stocks, cost_pct, dollar_volume, liquid
 from .setups import (BAND_EXIT_LAST, BAND_STEP, EOD_START, SETUP_NAMES, Day, detect, eod_rank, eod_signal,
                      label, simulate)
 from .util import dumps, num
@@ -44,18 +45,11 @@ TQQQ TSM TTD TXN U UAL UNH UNP UPS UPST USB V VALE VZ W WBA WBD WDAY WFC WMT X X
 TNA UVXY GLD SLV TLT HYG EEM FXI KWEB ARKK XBI KRE OKLO RKLB SOUN ACHR JOBY CLSK HIMS TEM VST CEG NBIS CRWV
 """.split()))
 
-# 2x / 3x / inverse funds: they "gap" every day only because an index or one stock moved, and decay when held
-LEVERED = set("""TQQQ SQQQ SOXL SOXS TNA TZA UVXY UVIX SVXY SPXL SPXS SPXU UPRO SDS SSO QLD QID LABU LABD FAS FAZ TECL
-TECS FNGU FNGD YINN YANG NUGT DUST JNUG JDST BOIL KOLD UCO SCO TMF TMV TSLL TSLQ TSLZ TSLS NVDL NVDX NVDQ NVD NVDU
-MSTU MSTX MSTZ CONL AMDL AAPU GGLL METU AMZU MSFU BITX BITU ETHU SBIT DPST WEBL WEBS HIBL HIBS CURE DRN DRV TSLT
-NAIL ERX ERY GUSH DRIP UDOW SDOW URTY SRTY PLTU SMCX SMCZ MUU ARMG KORU""".split())
-LEVERED_NAME = re.compile(r"\b\d(\.\d+)?x\b|ultrapro|ultrashort|proshares ultra|\binverse\b|\bleveraged\b|"
-                          r"daily target|\bbear\b.*\b(etf|shares|fund)\b|\bbull\b.*\b(etf|shares|fund)\b", re.I)
 BAND_SYMBOLS = ("SPY", "QQQ")
 INPLAY_LOOKBACK = 14            # days of first-5-minute volume an in-play stock is compared with
 INPLAY_MIN_RVOL = 1.0           # at least its usual first 5 minutes
 INPLAY_MIN_ATR = 0.50           # $ — a daily range big enough to trade
-SETUPS_VERSION = "3"            # bump when setups change: the backtest runs again on its own
+SETUPS_VERSION = "4"            # bump when setups change: the backtest runs again on its own (4: whole market, real costs)
 
 MIN_TRADES_PROVEN = 40
 STATUS_TEXT = {"proven": "✅ proven", "promising": "🟡 promising", "thin": "⚪ not enough trades",
@@ -221,6 +215,8 @@ def gapper_days(daily: dict[str, list], days: list[str], cfg) -> list[tuple[str,
     out = []
     want = set(days)
     for sym, rows in daily.items():
+        if sym in LEVERED:
+            continue
         for idx in range(1, len(rows)):
             prev, cur = rows[idx - 1], rows[idx]
             day = day_of(cur[T])
@@ -235,16 +231,36 @@ def gapper_days(daily: dict[str, list], days: list[str], cfg) -> list[tuple[str,
 
 
 async def run(alpaca, market: Market, cfg, today: str, days: int | None = None, progress=None,
-              core: list[str] | None = None, universe: list[str] | None = None) -> dict:
-    """Fetch history and replay. Returns {"stats": {...}, "trades": n, "pairs": n, "days": [...]}."""
+              core: list[str] | None = None, universe: list[str] | None = None, cache: Path | None = None) -> dict:
+    """Fetch history and replay. Returns {"stats": {...}, "trades": n, "pairs": n, "days": [...]}.
+
+    With no `universe`, gappers and stocks in play are looked for across the whole market (every listed stock that
+    trades enough), like the research does; the end-of-day bounce stays on the ~250 big names, where it's cheap to
+    trade. Every trade pays the cost of its stock (spread + slippage by how much money trades in it)."""
     days = int(days or cfg.get("BACKTEST_DAYS"))
     ext = market.trading_days_back(today, days + INPLAY_LOOKBACK)
     day_list = ext[INPLAY_LOOKBACK:]
     core = core or CORE
-    universe = universe or UNIVERSE
     first_ts = at(day_list[0], "00:00")
-    daily = await alpaca.bars(universe, "1Day", first_ts - 45 * 86400, at(day_list[-1], "20:00"), feed="sip")
-    pairs = {(s, d) for s in core for d in day_list}
+    start, end = first_ts - 45 * 86400, at(day_list[-1], "20:00")
+    if universe is None:
+        names = await all_stocks(alpaca, cache)
+        if progress:
+            await progress(f"reading {len(names):,} stocks")
+        daily = await liquid(alpaca, sorted(set(names) | set(UNIVERSE)), start, end, cfg)
+        missing = [x for x in set(core) | set(UNIVERSE) | set(BAND_SYMBOLS) if x not in daily]
+        if missing:
+            daily.update(await alpaca.bars(missing, "1Day", start, end, feed="sip"))
+        scan, eod_names = sorted(x for x in daily if x not in LEVERED), list(UNIVERSE)
+    else:
+        daily = await alpaca.bars(universe, "1Day", start, end, feed="sip")
+        scan, eod_names = list(universe), list(universe)
+    extra = cfg.get("SLIPPAGE_PCT")
+
+    def cost(sym: str, day: str) -> float:
+        return cost_pct(dollar_volume(daily.get(sym) or [], at(day, "00:00")), extra)
+
+    pairs = {(x, d) for x in core for d in day_list}
     pairs |= set(gapper_days(daily, day_list, cfg))
 
     # stocks in play: everyone's first 5 minutes, each day, against their own usual first 5 minutes
@@ -253,73 +269,72 @@ async def run(alpaca, market: Market, cfg, today: str, days: int | None = None, 
     first5_hist: dict[str, list[float]] = {}
     for n, day in enumerate(ext):
         open_ts = market.open_ts(day)
-        got = await alpaca.bars(universe, "5Min", open_ts, open_ts + 300, feed="sip")
-        first5 = {sym: rows[0] for sym, rows in got.items() if rows and rows[0][T] == open_ts}
+        got = await alpaca.bars(scan, "5Min", open_ts, open_ts + 300, feed="sip")
+        first5 = {x: rows[0] for x, rows in got.items() if rows and rows[0][T] == open_ts}
         if day in day_list and top > 0:
-            for sym, rank, rv in rank_in_play(first5, first5_hist, daily, day, cfg, top):
-                in_play[(sym, day)] = (rank, rv)
-        for sym, bar in first5.items():
-            first5_hist.setdefault(sym, []).append(bar[V])
-        if progress and n % 10 == 0:
-            await progress(f"finding stocks in play {n + 1}/{len(ext)}")
+            for x, rank, rv in rank_in_play(first5, first5_hist, daily, day, cfg, top):
+                in_play[(x, day)] = (rank, rv)
+        for x, bar in first5.items():
+            first5_hist.setdefault(x, []).append(bar[V])
+        if progress and n % 5 == 0:
+            await progress(f"finding stocks in play {n + 1}/{len(ext)} days ({len(scan):,} stocks)")
     pairs |= set(in_play)
 
     # SPY / QQQ noise bands, each day from the 14 before it
     bands: dict[tuple[str, str], dict] = {}
-    band_syms = [s for s in BAND_SYMBOLS if s in universe or s in core]
+    band_syms = [x for x in BAND_SYMBOLS if x in daily or x in core]
     if band_syms:
-        got = await alpaca.bars(band_syms, "5Min", at(ext[0], "04:00"), at(day_list[-1], "20:00"), feed="sip")
-        for sym in band_syms:
+        got = await alpaca.bars(band_syms, "5Min", at(ext[0], "04:00"), end, feed="sip")
+        for x in band_syms:
             history = []
             for day in ext:
                 if day in day_list:
                     table = band_table(history)
                     if table:
-                        bands[(sym, day)] = table
-                history.append(band_moves([b for b in got.get(sym) or [] if day_of(b[T]) == day], day, market))
+                        bands[(x, day)] = table
+                history.append(band_moves([b for b in got.get(x) or [] if day_of(b[T]) == day], day, market))
                 if day in day_list:
-                    pairs.add((sym, day))
+                    pairs.add((x, day))
 
     # the end-of-day bounce: 3:30pm to the close, the day's biggest losers (and winners)
     trades: list[dict] = []
-    slip = cfg.get("SLIPPAGE_PCT")
-    eod_universe = [s for s in universe if s not in LEVERED]
+    eod_universe = [x for x in eod_names if x not in LEVERED]
     for n, day in enumerate(day_list):
         close = market.close_ts(day)
         t0 = close - EOD_START
         got = await alpaca.bars(eod_universe, "30Min", t0, close, feed="sip")
         moves = eod_moves(got, daily, day, t0, cfg)
         losers, winners = eod_rank({k: v[0] for k, v in moves.items()})
-        for direction, names in (("long", losers), ("short", winners)):
-            for rank, sym in enumerate(names, 1):
-                move, row, daily_atr = moves[sym]
-                sig = eod_signal(sym, direction, row[O], t0, close, daily_atr, move, rank)
-                res = simulate(sig, [row], close, slip, bar_seconds=1800) if sig else None
+        for direction, names_ in (("long", losers), ("short", winners)):
+            for rank, x in enumerate(names_, 1):
+                move, row, daily_atr = moves[x]
+                sig = eod_signal(x, direction, row[O], t0, close, daily_atr, move, rank)
+                res = simulate(sig, [row], close, cost(x, day), bar_seconds=1800) if sig else None
                 if res and res["status"] == "closed":
-                    trades.append({"setup": "eod", "direction": direction, "symbol": sym, "day": day, "ts": t0,
+                    trades.append({"setup": "eod", "direction": direction, "symbol": x, "day": day, "ts": t0,
                                    "r": res["r"], "reason": res["reason"], "entry": res["entry"], "exit": res["exit"],
                                    "entry_ts": res["entry_ts"]})
         if progress and n % 20 == 0:
             await progress(f"end-of-day test {n + 1}/{len(day_list)}")
 
     by_day: dict[str, list[str]] = {}
-    for sym, day in pairs:
-        by_day.setdefault(day, []).append(sym)
+    for x, day in pairs:
+        by_day.setdefault(day, []).append(x)
     values = {name: cfg.get(name) for name in ("ORB_MINUTES", "GAP_MIN_PCT")}
     for n, day in enumerate(sorted(by_day)):
         syms = sorted(by_day[day])
         bars = await alpaca.bars(syms, "5Min", at(day, "04:00"), at(day, "16:00"), feed="sip")
-        hot = sorted(s for s in syms if (s, day) in in_play)
+        hot = sorted(x for x in syms if (x, day) in in_play)
         bars1 = await alpaca.bars(hot, "1Min", market.open_ts(day), market.close_ts(day), feed="sip") if hot else {}
-        for sym in syms:
-            rank, rv = in_play.get((sym, day), (0, 0.0))
-            trades.extend(replay_day(sym, day, bars.get(sym) or [], daily.get(sym) or [], market, values, slip,
-                                     in_play=rank, rvol5=rv, band=bands.get((sym, day)), bars1=bars1.get(sym)))
+        for x in syms:
+            rank, rv = in_play.get((x, day), (0, 0.0))
+            trades.extend(replay_day(x, day, bars.get(x) or [], daily.get(x) or [], market, values, cost(x, day),
+                                     in_play=rank, rvol5=rv, band=bands.get((x, day)), bars1=bars1.get(x)))
         if progress:
             await progress(f"{n + 1}/{len(by_day)} days")
     stats = summarize(trades)
     return {"stats": stats, "trades": len(trades), "pairs": len(pairs), "days": day_list, "list": trades,
-            "in_play": len(in_play)}
+            "in_play": len(in_play), "scanned": len(scan)}
 
 
 def save(db, result: dict, now: int) -> None:
@@ -334,7 +349,8 @@ def save(db, result: dict, now: int) -> None:
     db.run("delete from backtests where ts<?", (now - 120 * 86400,))         # keep a few months of history
     db.set_meta("backtest_ts", now)
     db.set_meta("backtest_setups", f"{SETUPS_VERSION}:{','.join(SETUP_NAMES)}")
-    db.set_meta("backtest_summary", dumps({"trades": result.get("trades"), "pairs": result.get("pairs"), "days": days}))
+    db.set_meta("backtest_summary", dumps({"trades": result.get("trades"), "pairs": result.get("pairs"), "days": days,
+                                           "scanned": result.get("scanned"), "in_play": result.get("in_play")}))
 
 
 class Edge:

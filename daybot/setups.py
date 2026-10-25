@@ -353,6 +353,15 @@ def eod_signal(symbol: str, direction: str, price: float, ts: int, close_ts: int
                   {"rank": rank, "move": move}, "eod", "market", 0)
 
 
+def fill_minute_stopped(b: tuple, s: int, level: float, stop: float) -> bool:
+    """A buy-stop filled inside this minute: was it stopped in the same minute? Yes if the minute closed past the
+    stop, or if it opened through the level (filled at the open) and then traded through the stop. A minute that
+    climbed through the level and closed above the stop most likely made its low before the fill."""
+    op, cl = b[O] * s, b[C] * s
+    low = b[L] if s > 0 else -b[H]
+    return cl <= stop * s or (op >= level * s and low <= stop * s)
+
+
 def band_trail(ctx: dict, s: int, minutes: int, vw: float) -> float | None:
     """Where a band trade gets out at a half-hour check, in the trade's direction (s=1 long, -1 short): the band edge
     or VWAP, whichever is tighter. None when there's no band value for that time."""
@@ -408,7 +417,8 @@ def simulate(sig: Signal, bars: list, close_ts: int, slippage_pct: float, bar_se
             exit_price, exit_ts, reason = b[O] * (1 - s * slip), b[T], "time"
             break
         lo, hi = (b[L], b[H]) if s > 0 else (-b[H], -b[L])
-        if sig.plan != "band" and lo <= stop * s:
+        if sig.plan != "band" and lo <= stop * s and not (j == k and sig.entry_type == "stop"
+                                                          and not fill_minute_stopped(b, s, sig.entry, stop)):
             op = b[O] * s if j > k or sig.entry_type != "stop" else fill * s
             px = min(op, stop * s) * s
             exit_price, exit_ts = px * (1 - s * slip), b[T]

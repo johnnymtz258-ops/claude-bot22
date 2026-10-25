@@ -238,7 +238,8 @@ class App:
             self.backtest_progress = str(text)
         try:
             await self.load_calendar(now)
-            res = await run_backtest_job(self.alpaca, self.market, self.cfg, day_of(now), progress=progress)
+            res = await run_backtest_job(self.alpaca, self.market, self.cfg, day_of(now), progress=progress,
+                                         cache=self.cfg.state_dir / "stocks.json")
         except Exception as exc:
             self.backtest_progress = f"failed: {exc}"
             self.last_error = f"backtest: {exc}"
@@ -252,9 +253,10 @@ class App:
         return res
 
     def backtest_summary(self, res: dict) -> str:
-        lines = [f"<b>🧪 Backtest done</b> · {len(res['days'])} trading days · {res['pairs']} stock-days · "
-                 f"{res['trades']} trades (costs included)"
-                 + (f" · {res['in_play']} stocks in play" if res.get("in_play") else "")]
+        lines = [f"<b>🧪 Backtest done</b> · {len(res['days'])} trading days · {res['pairs']:,} stock-days · "
+                 f"{res['trades']:,} trades (each stock's own costs included)"
+                 + (f" · searched {res['scanned']:,} stocks" if res.get("scanned") else "")
+                 + (f" · {res['in_play']:,} stocks in play" if res.get("in_play") else "")]
         shorts = self.cfg.flag("SHORT_ALERTS")
         usable = {k: st for k, st in res["stats"].items() if k.endswith("_long") or shorts}
         proven = [k for k, st in usable.items() if st["status"] == "proven"]
@@ -477,15 +479,14 @@ class App:
 
 
 WHATS_NEW = ("<b>🆕 New in this version</b>\n"
-             "🔥 <b>Stocks in play</b>: at 9:35am DayBot ranks the day's busiest stocks and sends one message with a "
-             "buy-stop and a stop for each (a strategy from 2024 day-trading research)\n"
-             "📈 <b>SPY / QQQ momentum</b>: alerts when the index breaks out of its usual daily range\n"
-             "🔄 <b>End-of-day bounce</b> at 3:30pm: the day's biggest losers, held into the close (from research that "
-             "won 2nd place at the Quantpedia Awards 2025)\n"
-             "🧪 Tonight after the close it re-tests every setup over 120 days (instead of 60) — the result comes here, "
-             "with charts on the dashboard's Setups tab\n"
-             "🤖 The autopilot follows the new setups on pretend money too\n"
-             "🧹 Chase's cash sweep (QACDS) is no longer counted as a trade")
+             "🌎 <b>The whole market</b>: stocks in play and gappers now come from every liquid US stock (about 2,000), "
+             "like the research — not just 250 big names. Last week's in-play test picked steady names like GLD and "
+             "3M; that's fixed\n"
+             "💸 <b>Real trading costs</b> for each stock: SPY costs ~0.015% a trade, a small stock ~0.15% — the old "
+             "flat 0.05% made SPY setups look worse and small stocks look better than they are\n"
+             "🎯 Fairer buy-stop fills: a breakout that closes its minute above the stop isn't counted as stopped\n"
+             "🔄 End-of-day bounce at 3:30pm, 🔥 stocks in play at 9:35am, 📈 SPY / QQQ momentum\n"
+             "🧪 Everything is re-tested now — about 20 minutes; the result comes here")
 
 
 def _ssl_context():

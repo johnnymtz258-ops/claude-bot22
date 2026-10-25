@@ -16,7 +16,8 @@ target, the stop counts (the honest way); a stop entry filled in a minute that t
 from __future__ import annotations
 
 from .bars import C, H, L, O, T, V
-from .setups import BAND_EXIT_LAST, BAND_STEP, EXIT_BEFORE_CLOSE, Signal, band_trail
+from .setups import BAND_EXIT_LAST, BAND_STEP, EXIT_BEFORE_CLOSE, Signal, band_trail, fill_minute_stopped
+from .universe import cost_pct, dollar_volume
 from .util import dumps, loads, num
 
 
@@ -43,13 +44,19 @@ class Paper:
         plan_data = dumps({k: sig.context[k] for k in ("band", "ref", "open", "dist") if k in sig.context}) \
             if sig.plan == "band" else ""
         pid = self.db.insert("""insert into paper(alert_id, day, symbol, setup, direction, opened_ts, entry, stop, t1, t2,
-                                qty, stop_now, status, plan, entry_type, expires, plan_data, risk)
-                                values(?,?,?,?,?,?,?,?,?,?,?,?, 'pending',?,?,?,?,?)""",
+                                qty, stop_now, status, plan, entry_type, expires, plan_data, risk, cost)
+                                values(?,?,?,?,?,?,?,?,?,?,?,?, 'pending',?,?,?,?,?,?)""",
                              (alert_id, day, sig.symbol, sig.setup, sig.direction, sig.ts, sig.entry, sig.stop, sig.t1,
-                              sig.t2, qty, sig.stop, sig.plan, sig.entry_type, sig.expires, plan_data, sig.risk))
+                              sig.t2, qty, sig.stop, sig.plan, sig.entry_type, sig.expires, plan_data, sig.risk,
+                              self.cost(sig.symbol)))
         if pid and auto and self.auto:
             self.auto.take(pid, sig)
         return pid
+
+    def cost(self, symbol: str) -> float:
+        """What one buy or sell of this stock costs, % (its spread + SLIPPAGE_PCT)."""
+        daily = self.data.daily(symbol) if hasattr(self.data, "daily") else []
+        return cost_pct(dollar_volume(daily), self.cfg.get("SLIPPAGE_PCT"))
 
     def symbols(self) -> list[str]:
         return [r["symbol"] for r in self.db.rows("select distinct symbol from paper where status in ('pending','open')")]
@@ -58,8 +65,8 @@ class Paper:
         """Walk open paper trades through the minute bars that arrived.
         Returns what happened: [{"type": entry | half | close | skipped, "trade": the row after it, "price": …}]."""
         events = []
-        slip = self.cfg.get("SLIPPAGE_PCT") / 100
         for p in self.db.rows("select * from paper where status in ('pending','open') order by id"):
+            slip = (num(p.get("cost")) or self.cfg.get("SLIPPAGE_PCT")) / 100
             open_ts, close = self.market.open_ts(p["day"]), self.market.close_ts(p["day"])
             session = [b for b in self.data.bars1(p["symbol"]) if open_ts <= b[T] < close]   # its own day only
             bars = [b for b in session if b[T] >= p["opened_ts"]]
@@ -123,7 +130,8 @@ class Paper:
                     exit_px, reason, exit_ts = b[O] * (1 - s * slip), ("close" if plan == "eod" else "time"), b[T]
                     break
                 lo, hi = (b[L], b[H]) if s > 0 else (-b[H], -b[L])
-                if plan not in ("band", "eod") and lo <= stop_now * s:
+                if plan not in ("band", "eod") and lo <= stop_now * s and not (
+                        b[T] == fill_ts and not fill_minute_stopped(b, s, num(p["entry"]) / (1 + s * slip), stop_now)):
                     op = num(p["entry"]) / (1 + s * slip) * s if b[T] == fill_ts else b[O] * s
                     exit_px = min(op, stop_now * s) * s * (1 - s * slip)
                     reason, exit_ts = ("breakeven" if half else "stop"), b[T]

@@ -243,6 +243,11 @@ class Alpaca:
         """Name, exchange, fractionable… of one stock or ETF."""
         return await self._get(self.trading, f"/v2/assets/{symbol}") or {}
 
+    async def assets(self) -> list[dict]:
+        """Every active US stock and ETF Alpaca lists (about 11,000)."""
+        data = await self._get(self.trading, "/v2/assets", {"status": "active", "asset_class": "us_equity"})
+        return data if isinstance(data, list) else []
+
 
 def snap_price(snap: dict) -> float:
     """Best current price from a stock snapshot: last trade, else the quote's mid, else the minute bar."""

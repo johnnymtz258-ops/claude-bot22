@@ -66,7 +66,7 @@ SETTINGS = {s.name: s for s in (
     Setting("AUTOPILOT_MAX_OPEN", 3, "Most autopilot trades open at once", 1, 20),
     Setting("AUTOPILOT_NOTIFY", 1, "Tell me (silently) each time the autopilot buys and sells (1 = on)", 0, 1, True),
     Setting("PAPER_ACCOUNT", 25_000, "Size the setup gauge uses internally ($; results are measured in R, so it barely matters)", 1000, 10_000_000),
-    Setting("SLIPPAGE_PCT", 0.05, "Cost per side used by the backtest and paper (% of price: spread + slippage)", 0, 2),
+    Setting("SLIPPAGE_PCT", 0.01, "Extra cost per buy or sell (%) on top of each stock's spread — the spread is estimated from how much money trades in it (SPY ~0.005%, a small stock ~0.15%)", 0, 2),
     Setting("BACKTEST_DAYS", 120, "Trading days of history each setup is replayed over", 10, 250),
     # --- your trades ---------------------------------------------------------------------------------------------
     Setting("CHECK_MY_TRADES", 1, "Check every trade you make the moment it fills (1 = on)", 0, 1, True),

@@ -409,7 +409,7 @@ function renderDataSays(s, shorts) {
   else if (close.length) { head = `🟡 Nothing is proven yet. Closest: ${close.map(fmt).join(', ')} — made money overall but not steadily enough to trust. Follow them small, or on the autopilot only.`; kind = 'mid'; }
   else { head = '🔴 Nothing has made money after costs in the test yet. Keep your money out of these setups; the autopilot and paper keep measuring, and setups that start winning live get promoted by themselves.'; kind = 'bad'; }
   const when = bi.ts ? new Date(bi.ts * 1000).toLocaleDateString([], {month: 'short', day: 'numeric'}) : '';
-  const meta = bi.ts ? `<div class="muted" style="margin-top:6px;font-size:13px">Last test: ${when} · ${bi.days || '?'} trading days · ${(bi.trades || 0).toLocaleString()} trades, costs included${losing.length ? ` · ${losing.length} setup${losing.length === 1 ? '' : 's'} lose money and stay on paper` : ''}</div>` : '';
+  const meta = bi.ts ? `<div class="muted" style="margin-top:6px;font-size:13px">Last test: ${when} · ${bi.days || '?'} trading days · ${(bi.trades || 0).toLocaleString()} trades, costs included${bi.scanned ? ` · searched ${(+bi.scanned).toLocaleString()} stocks` : ''}${losing.length ? ` · ${losing.length} setup${losing.length === 1 ? '' : 's'} lose money and stay on paper` : ''}</div>` : '';
   $('data-says').className = 'banner ' + kind;
   $('data-says').innerHTML = `<b>What the data says</b><div style="margin-top:4px">${head}</div>${meta}`;
 }

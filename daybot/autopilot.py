@@ -105,7 +105,8 @@ class Autopilot:
             return "autopilot off"
         self._begin(sig.ts)
         opens = self.holding()
-        slip = self.cfg.get("SLIPPAGE_PCT") / 100
+        slip = num(self.db.scalar("select cost from paper where id=?", (paper_id,))) / 100 \
+            or self.cfg.get("SLIPPAGE_PCT") / 100
         entry = sig.entry * (1 + slip if sig.direction == "long" else 1 - slip)
         note = ""
         if sig.ts >= self.market.close_ts(day_of(sig.ts)) - LATE and sig.plan != "eod":

@@ -18,8 +18,8 @@ import statistics
 
 from .accounts import account_size, fmt_qty, size_shares, spendable
 from .alpaca import AlpacaError, parse_ts, snap_price
-from .backtest import (BAND_SYMBOLS, INPLAY_LOOKBACK, LEVERED, LEVERED_NAME, UNIVERSE, Edge, band_moves, band_table,
-                       describe, rank_in_play)
+from .backtest import BAND_SYMBOLS, INPLAY_LOOKBACK, UNIVERSE, Edge, band_moves, band_table, describe, rank_in_play
+from .universe import LEVERED, LEVERED_NAME, all_stocks, liquid
 from .bars import C, H, L, O, T, V, atr, rvol
 from .clock import Market, at, clock_text, day_of, et
 from .news import catalysts, main_catalyst, warning
@@ -49,6 +49,8 @@ class Scanner:
         self.bands_day = ""
         self._prepare_try = 0.0
         self.eod_day = ""
+        self.broad: list[str] = []                                 # every liquid listed stock (refreshed daily)
+        self.broad_day = ""
 
     # ---- the watchlist -----------------------------------------------------------------------------------------
     def watchlist(self, day: str) -> list[str]:
@@ -72,9 +74,25 @@ class Scanner:
             self.db.set_meta(key, name)
         return bool(LEVERED_NAME.search(name))
 
+    async def market_wide(self, now: float) -> list[str]:
+        """Once a day: every listed stock that trades enough to day-trade (about 2,000), so gappers and stocks in
+        play come from the whole market — like the research — not only the big names."""
+        day = day_of(now)
+        if self.broad_day == day:
+            return self.broad
+        self.broad_day = day                               # once a day, even if Alpaca can't be asked
+        try:
+            names = await all_stocks(self.data.alpaca, self.cfg.state_dir / "stocks.json", now)
+            got = await liquid(self.data.alpaca, names, now - 40 * 86400, at(day, "00:00"), self.cfg, keep_bars=False)
+            self.broad = sorted(x for x in got if x not in LEVERED)
+        except (AlpacaError, AttributeError) as exc:
+            self.last_error = f"market-wide list: {exc}"
+        return self.broad
+
     def _in_play_candidates(self, day: str) -> list[str]:
         rows = self.db.rows("select symbol from watch where day=? and source in ('gapper','in-play')", (day,))
-        return sorted(set(UNIVERSE) | set(self.cfg.watchlist) | {r["symbol"] for r in rows})
+        return sorted((set(UNIVERSE) | set(self.cfg.watchlist) | {r["symbol"] for r in rows} | set(self.broad))
+                      - LEVERED)
 
     async def prepare(self, now: float) -> None:
         """Once a day: the SPY / QQQ noise band (from the last 14 days) and everyone's usual first 5 minutes."""
@@ -83,6 +101,7 @@ class Scanner:
                 or now - self._prepare_try < 300:
             return                                         # done today, or failed less than 5 minutes ago
         self._prepare_try = now
+        await self.market_wide(now)
         if self.bands_day != day:
             days = self.market.trading_days_back(day, INPLAY_LOOKBACK + 4)
             try:
@@ -181,7 +200,7 @@ class Scanner:
     async def premarket(self, now: float) -> list[dict]:
         """Rank today's gappers. Stored in the watch table; returns them best first."""
         day = day_of(now)
-        cands = set(UNIVERSE) | set(self.cfg.watchlist)
+        cands = set(UNIVERSE) | set(self.cfg.watchlist) | set(await self.market_wide(now))
         try:
             movers = await self.data.alpaca.movers(50)
             for side in ("gainers", "losers"):
@@ -189,7 +208,7 @@ class Scanner:
             cands |= {str(m.get("symbol")) for m in await self.data.alpaca.most_actives(50) if m.get("symbol")}
         except AlpacaError as exc:
             self.last_error = str(exc)
-        cands = sorted(s for s in cands if s and s.isascii() and len(s) <= 5)
+        cands = sorted(s for s in cands if s and s.isascii() and len(s) <= 5 and s not in LEVERED)
         await self.data.load_daily(cands, now)
         open_ts = self.market.open_ts(day)
         end = min(now, open_ts)
