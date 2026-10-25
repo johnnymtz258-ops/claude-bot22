@@ -38,6 +38,10 @@ HELP = f"""<b>📈 DayBot {VERSION}</b> — your day-trading assistant. It reads
 • /autopilot the pretend account that follows every alert — is the bot making money?
 • /setups what each setup has earned · /backtest re-test them
 
+<b>Crypto</b>
+• /crypto the daily trend plan for Bitcoin and the big coins, its pretend account and its backtest
+• /btc15 which way Bitcoin most likely finishes this 15 minutes (Up or Down markets) · /btc15 62 vs a 62¢ price
+
 <b>Assistant</b>
 • /ask anything, or end a message with "?" — it answers from your live data
 
@@ -501,6 +505,47 @@ class Commands:
                      f"avg, {st['won'] * 100:.0f}% won — /setups for each one")
         return [reply(text)]
 
+    async def cmd_crypto(self, rest: str, now: float) -> list[dict]:
+        cr, cfg, db = self.app.crypto, self.app.cfg, self.app.db
+        words = rest.strip().lower().split()
+        verb = words[0] if words else ""
+        if verb in {"on", "off"}:
+            cfg.set("CRYPTO", "1" if verb == "on" else "0")
+            db.set_meta("set:CRYPTO", cfg.get("CRYPTO"))
+            if verb == "off":
+                return [reply("🪙 Crypto plan off. /crypto on turns it back on (the pretend account is kept).")]
+            await cr.tick(now)
+        elif verb in {"reset", "restart", "start"}:
+            amount = num(words[1].replace("$", "").replace(",", "")) if len(words) > 1 else 0.0
+            amount = cr.reset(now, amount)
+            await cr.tick(now)
+            return [reply(f"🪙 The crypto autopilot starts over with a pretend {money(amount)} and buys into whatever is "
+                          "trending now.\n\n" + cr.autopilot_line())]
+        elif verb in {"test", "backtest", "bt"}:
+            if not cr.on:
+                return [reply("🪙 The crypto plan is off. /crypto on first.")]
+            if not cr.series:
+                await cr.tick(now)
+            if not cr.series:
+                return [reply(cr.text(now))]
+            res = await cr.run_backtest(now, announce=False)
+            if res.get("error"):
+                return [reply(f"🪙 Couldn't test: {esc(res['error'])}")]
+            return [reply(cr.backtest_text(res))]
+        elif cr.on and not cr.series:
+            await cr.tick(now)
+        return [reply(cr.text(now))]
+
+    async def cmd_btc15(self, rest: str, now: float) -> list[dict]:
+        ud = self.app.updown
+        if ud.on and getattr(self.app.alpaca, "ok", False):
+            if not ud.bars:
+                await ud.tick(now)
+            else:
+                await ud.load(now)
+                await ud.refresh_price(now)
+        return [reply(ud.text(now, rest))]
+
     # ---- the assistant ----------------------------------------------------------------------------------------
     async def cmd_ask(self, rest: str, now: float) -> list[dict]:
         ai = self.app.ai
@@ -562,7 +607,9 @@ class Commands:
 ALIASES = {"c": "check", "edge": "setups", "gap": "gappers", "g": "gappers", "j": "journal", "leaks": "journal",
            "p": "plan", "report": "day", "pos": "positions", "acct": "accounts", "account": "accounts",
            "settings": "rules", "health": "status", "q": "ask", "w": "watch", "today": "trades",
-           "paper": "autopilot", "auto": "autopilot", "ap": "autopilot", "bot": "autopilot"}
+           "paper": "autopilot", "auto": "autopilot", "ap": "autopilot", "bot": "autopilot",
+           "coin": "crypto", "coins": "crypto", "cr": "crypto", "trend": "crypto",
+           "btc": "btc15", "bitcoin": "btc15", "updown": "btc15", "15m": "btc15", "btc15m": "btc15", "ud": "btc15"}
 
 NO_DATA = ("Market data isn't connected. DayBot needs a free Alpaca account for prices: sign up at alpaca.markets, "
            "create paper-trading API keys, and put them in .env as ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY "

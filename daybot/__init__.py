@@ -4,4 +4,4 @@ It reads your Robinhood / Chase trades (read-only, through SnapTrade), checks ev
 watches the market for setups that have a measured edge, reads charts (yours too: send a screenshot), keeps your
 journal and tells you where your money actually leaks. It never places a trade.
 """
-VERSION = "1.3.0"
+VERSION = "1.4.0"

@@ -226,11 +226,70 @@ class FakeAlpaca:
     async def calendar(self, start, end):
         return []
 
+    # ---- crypto (set crypto_daily / crypto_minute: {coin: bars}) --------------------------------------------------
+    crypto_daily: dict = {}
+    crypto_minute: dict = {}
+    crypto_list: list = []
+
+    async def crypto_bars(self, coins, timeframe, start, end=None):
+        end = min(end or self.now, self.now)
+        store = self.crypto_daily if timeframe == "1Day" else self.crypto_minute
+        self.calls.append(("crypto_bars", tuple(coins), timeframe))
+        out = {}
+        for c in coins:
+            rows = [b for b in store.get(c, []) if start <= b[0] <= end]
+            if rows:
+                out[c] = rows
+        return out
+
+    async def crypto_snapshots(self, coins):
+        out = {}
+        for c in coins:
+            rows = [b for b in self.crypto_minute.get(c, []) if b[0] + 60 <= self.now] or \
+                [b for b in self.crypto_daily.get(c, []) if b[0] <= self.now]
+            if rows:
+                out[c] = {"latestTrade": {"p": rows[-1][4]}, "prevDailyBar": {"c": rows[-2][4] if len(rows) > 1 else rows[-1][4]}}
+        return out
+
+    async def crypto_assets(self):
+        return list(self.crypto_list or self.crypto_daily)
+
     async def assets(self):
         return list(self.assets_list)
 
     async def clock(self):
         return {}
+
+
+def crypto_days(start_ts: int, n: int, start: float = 100.0, seed: int = 1, regime: int = 120, drift: float = 0.004,
+                vol: float = 0.03) -> list[tuple]:
+    """Daily crypto candles: alternating up and down regimes with noise."""
+    import math
+    rnd = random.Random(seed)
+    out, c = [], start
+    for i in range(n):
+        o = c
+        c = c * math.exp((drift if (i // regime) % 2 == 0 else -drift) + rnd.gauss(0, vol))
+        out.append((start_ts + i * 86400, o, max(o, c), min(o, c), c, 0.0))
+    return out
+
+
+def btc_minutes(start_ts: int, minutes: int, start: float = 70_000.0, seed: int = 2, vol: float = 0.0006,
+                momentum: float = 0.0) -> list[tuple]:
+    """1-minute Bitcoin candles; momentum > 0 makes each 15-minute window lean the way the last one went."""
+    import math
+    rnd = random.Random(seed)
+    out, c, last_dir, w_start, w_open = [], start, 0, None, start
+    for i in range(minutes):
+        t = start_ts + i * 60
+        if t % 900 == 0:
+            if w_start is not None:
+                last_dir = 1 if c >= w_open else -1
+            w_start, w_open = t, c
+        o = c
+        c = c * math.exp(rnd.gauss(momentum * last_dir * vol, vol))
+        out.append((t, o, max(o, c), min(o, c), c, 1.0))
+    return out
 
 
 class FakeSnap:

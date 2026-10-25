@@ -1,4 +1,4 @@
-# 📈 DayBot — your day-trading assistant (stocks + options)
+# 📈 DayBot — your trading assistant (stocks, options and crypto)
 
 DayBot sits next to your Robinhood and Chase accounts and does the things a good trading partner would:
 
@@ -8,6 +8,8 @@ DayBot sits next to your Robinhood and Chase accounts and does the things a good
 - **Reads charts.** Send it a screenshot (Robinhood, TradingView, anything) and Claude reads it. The bot adds its own numbers for that ticker.
 - **Keeps your journal and tells you where the money leaks.** Losses get grouped by time of day, 0DTE, chasing, revenge, held past the stop, own ideas vs. setups, and so on. Each leak is ranked in dollars.
 - **Answers questions from your live data:** `/ask should I hold AMD into the close?`
+- **🪙 Crypto trend plan.** Once a day it says which of the biggest coins Robinhood sells to hold (the ones trending up) and which to sell, in dollars for your crypto money. A pretend crypto account follows it. Tested on six years of real prices: about 18% a year with a worst drop of −34%, where Bitcoin alone fell −77%.
+- **⏱ BTC 15-minute Up or Down.** The odds Bitcoin finishes the current quarter hour up or down (the Polymarket / Kalshi / Robinhood prediction markets), with its own track record.
 - **🤖 Autopilot: proves it with pretend money.** A pretend $1,000 account takes every trade the bot alerts you on, by itself, with the alert's plan and real costs, and tells you each buy and sell. After a couple of weeks you know in dollars whether following DayBot makes money, which setups do, and at what time of day, before you risk yours.
 
 It **never places a trade.** Market data is read-only, and your broker link is read-only.
@@ -126,6 +128,42 @@ Read it like this: if it's up after 20+ trades, the alerts are worth following, 
 
 ---
 
+## 🪙 Crypto
+
+Crypto trades around the clock, and day-trading it doesn't pay at Robinhood: studies of intraday crypto rules find an edge of a few hundredths of a percent a day, and Robinhood's spread costs about **1% on every buy and every sell**. So DayBot's crypto side is a **trend plan** that trades a few times a month, plus a 15-minute Bitcoin tool for prediction markets.
+
+### The trend plan (`/crypto`, dashboard 🪙 Crypto tab)
+
+From *Catching Crypto Trends* (Zarattini, Pagani & Barbon, 2025), with the 10 biggest coins Robinhood sells that Alpaca has prices for (`CRYPTO_COINS`):
+
+- **Signal.** Nine trend models per coin look back 5, 10, 20, 30, 60, 90, 150, 250 and 360 days. Each one buys when the close beats every close in its lookback, and sells when it falls under its trailing stop (the middle of the lookback's high and low, which only moves up). The **trend score** (0–9) is how many are in.
+- **Size.** Each coin gets an equal slice of your crypto money (`CRYPTO_BUDGET`). Inside its slice it holds more the stronger the trend and the calmer the coin: score ÷ 9 × (risk level ÷ the coin's 90-day swing), at most 2× the slice, never more than 100% overall. No trends = all cash.
+- **Trade.** Once a day when the daily candle closes. A coin already held is only re-sized when it's 50%+ off its target. You get a message only when something changes: "🟢 Buy SOL $4.20 · 🔴 Sell all DOGE".
+- **The crypto autopilot** (`CRYPTO_AUTOPILOT_START`, $1,000) follows the plan with pretend money and Robinhood's 1% cost, and is compared with putting the same money in Bitcoin. `/crypto reset 500` starts it over.
+
+**How it tested before shipping.** On Coin Metrics daily prices with each month's real top-10 coins, dead ones like LUNA and FTT included (no hindsight), from mid-2020 to May 2026, with a 1% cost on every buy and sell:
+
+| | Total | A year | Worst drop | Sharpe |
+|---|---|---|---|---|
+| Trend plan, risk level 50 (default) | +173% | +18% | −34% | 0.95 |
+| Trend plan, risk level 25 (the paper's) | +71% | +9% | −18% | 0.94 |
+| Just holding Bitcoin | +767% | +43% | −77% | 0.92 |
+
+In 2022 the plan lost 15% while Bitcoin lost 64%. In big bull years it lags a lot (2023: +26% vs +155%). It's built to keep you out of the crashes, not to beat Bitcoin's best years. At a 0.1%-cost exchange the same plan made +268%, so Robinhood's spread costs about a third of the gains. DayBot re-runs the test on Alpaca's prices when it starts, then weekly, and labels it ✅ / 🟡 / 🔴 like the setups (`/crypto test`).
+
+### ⏱ BTC 15-minute Up or Down (`/btc15`, top of the Crypto tab)
+
+For the "Bitcoin Up or Down — 15 minutes" markets: windows 3:00–3:15, 3:15–3:30… New York time. Up wins when the price at the end is at or above the **price to beat** (the price at the start).
+
+- **During a window the odds are real.** They come from how far Bitcoin is from the price to beat, how much time is left and how much it's been swinging (the last 2 hours of 1-minute moves). Its one setting, how fat the tails are, is fitted on the 30 days *before* the 30 days it's scored on, so the **track record** it shows (how often its favorite won at 5 and 10 minutes in, and "said 80% → won 81%") comes from windows it never saw.
+- **At the start of a window it's a coin flip, and it says so.** Studies find nothing reliably beats a coin toss at these horizons. DayBot checks every 6 hours whether the last 30 days had a pattern from one window to the next; it only shows a **lean** when the pattern is statistically clear.
+- `/btc15 62` compares with a market price of 62¢ for Up (it tells you if Up or Down is cheap by 4¢ or more). `/btc15 76543` uses the market's own price to beat. The markets settle on their own price feed (Polymarket: Chainlink), so when Bitcoin sits right at the line, treat it as 50/50.
+- `BTC15_ALERTS` = 1 sends the call (silently) a minute into every window: 96 messages a day, so it's off by default.
+
+DayBot never trades crypto or prediction markets for you either. Your own Robinhood crypto trades aren't read or journaled yet.
+
+---
+
 ## Commands
 
 | Command | |
@@ -140,11 +178,13 @@ Read it like this: if it's up after 20+ trades, the alerts are worth following, 
 | `/journal [days]` `/day` `/week` | where the money leaks, reports |
 | `/autopilot` · `/autopilot reset 1000` · `/autopilot off` | the pretend account that follows every alert |
 | `/setups` `/backtest` | what the setups have earned |
+| `/crypto` · `/crypto test` · `/crypto reset 1000` · `/crypto off` | the crypto trend plan, its backtest, its pretend account |
+| `/btc15` · `/btc15 62` · `/btc15 76543` | Bitcoin's odds for this 15-minute window (vs a 62¢ market price, or the market's price to beat) |
 | `/ask …` or end a message with `?` | the assistant, using your live data |
 | `/rules` · `/set NAME value` | your rules and settings |
 | `/pause` `/resume` · `/connect` · `/status` · `/export` | |
 
-Dashboard: **http://localhost:8788** (only on your computer). Tabs: **Today** (your numbers, a trade check box, alerts, open trades), **Autopilot**, **Market** (gappers, watchlist, click any ticker for its chart), **My trades** (journal, leaks, holdings, accounts), **Setups**, **Settings**.
+Dashboard: **http://localhost:8788** (only on your computer). Tabs: **Today** (your numbers, a trade check box, alerts, open trades), **Autopilot**, **🪙 Crypto** (the BTC 15-minute call, the trend plan, its autopilot and backtest), **Market** (gappers, watchlist, click any ticker for its chart), **My trades** (journal, leaks, holdings, accounts), **Setups**, **Settings**.
 
 ---
 
@@ -163,6 +203,10 @@ Dashboard: **http://localhost:8788** (only on your computer). Tabs: **Today** (y
 | `SHORT_ALERTS` | 0 | short setups stay on paper: Robinhood and Chase don't let you short stocks |
 | `AUTOPILOT` / `AUTOPILOT_START` | 1 / 1000 | the pretend account that follows the alerts |
 | `ORB5_TOP` | 20 | how many stocks in play the in-play breakout trades each day |
+| `CRYPTO_BUDGET` | 100 | crypto money the plan's dollar amounts are for |
+| `CRYPTO_TARGET_VOL` | 50 | risk level: 25 → ~9%/yr, worst drop −18%; 50 → ~18%/yr, −34%; 100 → ~28%/yr, −58% (tested) |
+| `CRYPTO_COST_PCT` | 1 | cost per crypto buy or sell (Robinhood's spread) |
+| `BTC15` / `BTC15_ALERTS` | 1 / 0 | the BTC 15-minute call / a message every window |
 
 **Sizes fit your cash.** Alerts and checks size by your risk rule, then cap it at the cash you can actually buy with (the smaller of cash and buying power, so margin is never counted as your money). When a whole share doesn't fit, you get a fractional size (Robinhood and Chase both sell fractional shares of most stocks).
 
@@ -174,7 +218,7 @@ Dashboard: **http://localhost:8788** (only on your computer). Tabs: **Today** (y
 
 - **The $25K day-trading rule is gone.** FINRA replaced the pattern-day-trader rule with intraday margin standards on June 4, 2026, and Robinhood removed its day-trade limits on margin accounts. Brokers have until Oct 20, 2027 to switch over, so check your own broker. DayBot doesn't count day trades. It watches your size and your losses instead.
 - **Robinhood asks you to log in again every so often.** When the link breaks, DayBot tells you, and `/connect` fixes it.
-- **Crypto, cash sweeps and funds aren't day trades.** They're left out of checks and the journal. Leveraged and inverse ETFs (TQQQ, SOXL…) are left out of the gapper list: they "gap" every day only because the index moved.
+- **Your crypto, cash sweeps and funds aren't day trades.** They're left out of checks and the journal (the crypto plan is separate, above). Leveraged and inverse ETFs (TQQQ, SOXL…) are left out of the gapper list: they "gap" every day only because the index moved.
 - **Cash accounts (like Chase) settle the next business day.** Money from a sale is usable to buy right away, but sell what you bought with it before it settles and you get a good-faith violation (three in a year restricts the account). With a small cash account, one round trip a day is the safe pace.
 - **Selling a holding from before DayBot** (stock you've had for months) is recognised as such: priced against your average cost, never mistaken for a short, and kept out of the day-trading journal.
 - **Fills arrive in seconds to a minute** through SnapTrade. The very first sync books your existing positions quietly. A fill DayBot only sees well after the fact (it was off) is booked and recapped, but not "checked".

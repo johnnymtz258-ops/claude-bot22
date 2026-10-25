@@ -6,6 +6,8 @@ Loops
            week report, Saturday's backtest
   broker   every 20s while the market is active (5 min otherwise): your fills -> checks and recaps
   telegram commands, chart screenshots, buttons (only from your own chat)
+  crypto   every 15s, around the clock: crypto prices, the daily trend re-plan, the crypto autopilot and the BTC
+           15-minute Up or Down call
   web      the dashboard at http://localhost:8788
 """
 from __future__ import annotations
@@ -28,6 +30,8 @@ from .clock import Market, at, clock_text, day_of, et
 from .coach import day_report as coach_day_report, leaks, week_report
 from .commands import Commands
 from .config import Config, load
+from .crypto import Crypto
+from .updown import UpDown
 from .data import MarketData
 from .db import Database
 from .earnings import Earnings
@@ -74,6 +78,8 @@ class App:
             self.charts = charts if charts is not None else (charts_mod if charts_mod.available() else None)
         self.scanner = Scanner(cfg, self.db, self.data, self.market, self.edge, self.paper, self.notify, self.charts)
         self.monitor = Monitor(cfg, self.db, self.data, self.market, self.notify)
+        self.crypto = Crypto(cfg, self.db, self.alpaca, self.notify)
+        self.updown = UpDown(cfg, self.db, self.alpaca, self.notify)
         self.snap = snap or SnapTrade(session, cfg.snaptrade_client_id, cfg.snaptrade_consumer_key,
                                       cfg.snaptrade_user_id, cfg.snaptrade_user_secret)
         self.broker = BrokerSync(cfg, self.db, self.snap, self.ledger, self.checker, self.notify, self.market, self.data)
@@ -165,8 +171,8 @@ class App:
             if et(now).weekday() == 4 and now >= self.market.close_ts(day) + 1200 \
                     and self.db.once(f"week:{day}", int(now)):
                 week = week_report(self.db, 7, now)
-                auto = self.autopilot.week_line(now)
-                await self.notify(week + ("\n\n" + auto if auto else ""), kind="REPORT")
+                extra = [x for x in (self.autopilot.week_line(now), self.crypto.week_line(now)) if x]
+                await self.notify(week + ("\n\n" + "\n".join(extra) if extra else ""), kind="REPORT")
         quiet = session in {"closed", "post"} or (session == "pre" and now < at(day, "07:00"))
         if quiet:
             self._first_backtest(now)                   # first run: test the setups while the market is quiet
@@ -319,7 +325,20 @@ class App:
                         "backtest_avg_r": num((r["backtest"] or {}).get("avg_r")), "backtest_n": int(num((r["backtest"] or {}).get("n"))),
                         "paper_n": r["paper"]["n"], "paper_avg_r": round(r["paper"]["avg_r"], 2)} for r in self.edge.table()],
             "journal_30d": {"total": lk["total"], "biggest_leaks": lk["leaks"][:3], "strengths": lk["edges"][:2]},
+            "crypto_plan": self._crypto_context(),
         }
+
+    def _crypto_context(self) -> dict:
+        c = self.crypto
+        if not c.on or not c.series:
+            return {"on": c.on}
+        res = c.bt() or {}
+        return {"on": True, "budget": self.cfg.get("CRYPTO_BUDGET"),
+                "coins": [{"coin": r["coin"], "price": r["price"], "trend_score_of_9": r["on"],
+                           "target_pct": round(r["target_w"] * 100, 1), "plan_usd": round(r["plan_usd"], 2)}
+                          for r in c.board_rows()],
+                "autopilot": c.autopilot_line(), "backtest_status": res.get("status"),
+                "backtest": {k: res.get(k) for k in ("strategy", "btc", "half1", "half2", "exposure")} if res else {}}
 
     # ---- status -----------------------------------------------------------------------------------------------------
     def status_text(self, now: float) -> str:
@@ -353,11 +372,17 @@ class App:
         if self.tg and self.cfg.telegram_send_only:
             lines.append("⚠️ Telegram: sending through FomoBot's bot, so commands are off — give DayBot its own bot "
                          "(DAY_TELEGRAM_BOT_TOKEN) to use them")
+        if self.data.ok:
+            lines.append(self.crypto.status_line(now))
+            if self.updown.on:
+                lines.append(self.updown.status_line(now))
         ts = int(num(self.db.get_meta("backtest_ts"), 0))
         lines.append(f"🧪 Backtest: {et(ts).strftime('%b %d') if ts else 'not run yet'}"
                      + (f" ({self.backtest_progress})" if self.backtest_task and not self.backtest_task.done() else ""))
         errs = [e for e in (self.alpaca.last_error, self.snap.last_error, self.broker.last_error, self.data.last_error,
-                            self.scanner.last_error, self.last_error, self.ai.last_error) if e]
+                            self.scanner.last_error, self.last_error, self.ai.last_error, self.crypto.last_error,
+                            self.updown.last_error)
+                if e]
         if errs:
             lines.append("Last errors: " + esc(" | ".join(errs)[:400]))
         return "\n".join(lines)
@@ -371,6 +396,16 @@ class App:
                 self.last_error = f"market: {type(exc).__name__}: {exc}"
                 traceback.print_exc()
             await asyncio.sleep(30)
+
+    async def crypto_loop(self) -> None:
+        while True:
+            for part in (self.updown, self.crypto):
+                try:
+                    await part.tick(time.time())
+                except Exception as exc:
+                    self.last_error = f"{type(part).__name__.lower()}: {type(exc).__name__}: {exc}"
+                    traceback.print_exc()
+            await asyncio.sleep(15)
 
     async def broker_tick(self, now: float) -> None:
         if not self.broker.ok:
@@ -471,7 +506,7 @@ class App:
             await self.notify(text, kind="START", silent=True)
 
     async def run(self) -> None:
-        tasks = [self.market_loop(), self.broker_loop(), self.telegram_loop(), self.startup_message()]
+        tasks = [self.market_loop(), self.broker_loop(), self.crypto_loop(), self.telegram_loop(), self.startup_message()]
         if self.cfg.dashboard_enabled:
             from .dashboard import serve
             tasks.append(serve(self, self.cfg.dashboard_port))
@@ -479,14 +514,14 @@ class App:
 
 
 WHATS_NEW = ("<b>🆕 New in this version</b>\n"
-             "🌎 <b>The whole market</b>: stocks in play and gappers now come from every liquid US stock (about 2,000), "
-             "like the research — not just 250 big names. Last week's in-play test picked steady names like GLD and "
-             "3M; that's fixed\n"
-             "💸 <b>Real trading costs</b> for each stock: SPY costs ~0.015% a trade, a small stock ~0.15% — the old "
-             "flat 0.05% made SPY setups look worse and small stocks look better than they are\n"
-             "🎯 Fairer buy-stop fills: a breakout that closes its minute above the stop isn't counted as stopped\n"
-             "🔄 End-of-day bounce at 3:30pm, 🔥 stocks in play at 9:35am, 📈 SPY / QQQ momentum\n"
-             "🧪 Everything is re-tested now — about 20 minutes; the result comes here")
+             "🪙 <b>Crypto trend plan</b> (/crypto, dashboard 🪙 Crypto tab): once a day it says which of the 10 "
+             "biggest Robinhood coins to hold and which to sell, in dollars. Tested on six years of real prices with "
+             "Robinhood's 1% cost: about 18% a year, worst drop −34% (Bitcoin alone: −77%). A pretend crypto "
+             "account follows it so you can watch before using real money\n"
+             "⏱ <b>BTC 15-minute Up or Down</b> (/btc15): the odds Bitcoin finishes this quarter hour up or down, "
+             "from how far it has moved and the time left, with its own track record. At the start of a window "
+             "it's a coin flip, and it says so\n"
+             "🧪 The crypto plan is being tested on Alpaca's prices now; the result comes here")
 
 
 def _ssl_context():

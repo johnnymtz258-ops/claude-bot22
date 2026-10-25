@@ -68,6 +68,16 @@ SETTINGS = {s.name: s for s in (
     Setting("PAPER_ACCOUNT", 25_000, "Size the setup gauge uses internally ($; results are measured in R, so it barely matters)", 1000, 10_000_000),
     Setting("SLIPPAGE_PCT", 0.01, "Extra cost per buy or sell (%) on top of each stock's spread — the spread is estimated from how much money trades in it (SPY ~0.005%, a small stock ~0.15%)", 0, 2),
     Setting("BACKTEST_DAYS", 120, "Trading days of history each setup is replayed over", 10, 250),
+    # --- crypto -------------------------------------------------------------------------------------------------
+    Setting("CRYPTO", 1, "Crypto trend plan: once a day it says which coins to hold (trending up) and which to sell, for the coins Robinhood sells, with its own pretend account (1 = on)", 0, 1, True),
+    Setting("CRYPTO_BUDGET", 100, "Money you'd put in crypto ($) — the plan says how many dollars of each coin to hold", 1, 10_000_000),
+    Setting("CRYPTO_COINS", 10, "How many of the biggest coins it trades (Bitcoin is always one)", 1, 20),
+    Setting("CRYPTO_TARGET_VOL", 50, "How much yearly swing it aims for in each coin's share (%). Higher = more money in coins when they trend and deeper drops. Tested: 25 → ~9%/yr, worst drop -18%; 50 → ~18%/yr, -34%; 100 → ~28%/yr, -58%", 5, 100),
+    Setting("CRYPTO_COST_PCT", 1.0, "Cost of each crypto buy or sell (%) — Robinhood's spread is about 1% each way", 0, 5),
+    Setting("CRYPTO_AUTOPILOT_START", 1000, "Crypto autopilot's pretend starting balance ($) — used when it starts or you /crypto reset", 10, 10_000_000),
+    Setting("CRYPTO_ALERTS", 1, "Message me when the crypto plan changes (at most once a day) (1 = on)", 0, 1, True),
+    Setting("BTC15", 1, "BTC 15-minute Up or Down: the odds Bitcoin finishes the current quarter hour up or down (/btc15, dashboard Crypto tab) (1 = on)", 0, 1, True),
+    Setting("BTC15_ALERTS", 0, "Send the BTC 15-minute call (silently) a minute into every window — 96 messages a day, so off by default (1 = on)", 0, 1, True),
     # --- your trades ---------------------------------------------------------------------------------------------
     Setting("CHECK_MY_TRADES", 1, "Check every trade you make the moment it fills (1 = on)", 0, 1, True),
     Setting("MONITOR_POSITIONS", 1, "Watch your open day trades: stop hit, target hit, VWAP lost, close coming (1 = on)", 0, 1, True),

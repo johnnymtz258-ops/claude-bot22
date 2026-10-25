@@ -55,6 +55,14 @@ def _in_play(app, day: str, now: float) -> list[dict]:
     return out
 
 
+def _safe(fn, default):
+    """A part that can't draw yet (no prices) must not take the whole page down."""
+    try:
+        return fn()
+    except Exception as exc:                # pragma: no cover - logged on the page instead
+        return {**default, "error": f"{type(exc).__name__}: {exc}"}
+
+
 def _market_text(app, now: float) -> str:
     day = day_of(now)
     session = app.market.session(now)
@@ -140,6 +148,8 @@ def state(app, now: float | None = None) -> dict:
                           **(loads(app.db.get_meta("backtest_summary"), {}) or {})},
         "in_play": _in_play(app, day, now),
         "gauge": app.paper.stats(), "journal": lk, "autopilot": auto,
+        "crypto": _safe(lambda: app.crypto.summary(now), {"on": app.crypto.on, "board": []}),
+        "updown": _safe(lambda: app.updown.summary(now), {"on": app.updown.on, "ready": False}),
         "feed": feed,
         "status": app.status_text(now), "backtest": app.backtest_progress,
         "settings": [{"name": n, "label": LABELS.get(n, n.replace("_", " ").capitalize()), "value": app.cfg.get(n),
@@ -164,6 +174,10 @@ LABELS = {
     "OPTIONS_MAX_PREMIUM_PCT": "Max option premium (% of account)", "ALLOW_0DTE": "Allow same-day options",
     "OPTION_MIN_DTE": "Min days to expiry", "OPTION_MAX_SPREAD_PCT": "Max option spread (%)",
     "OPTION_MIN_OI": "Min open interest",
+    "CRYPTO": "Crypto trend plan", "CRYPTO_BUDGET": "Crypto money ($)", "CRYPTO_COINS": "Coins it trades",
+    "CRYPTO_TARGET_VOL": "Risk level (% swing a year)", "CRYPTO_COST_PCT": "Cost per crypto buy or sell (%)",
+    "CRYPTO_AUTOPILOT_START": "Crypto autopilot start ($)", "CRYPTO_ALERTS": "Message me plan changes",
+    "BTC15": "BTC 15-minute call", "BTC15_ALERTS": "Send it every 15 minutes",
 }
 
 GROUPS = {
@@ -174,6 +188,8 @@ GROUPS = {
     "Autopilot": ("AUTOPILOT", "AUTOPILOT_START", "AUTOPILOT_MAX_OPEN", "AUTOPILOT_NOTIFY", "SLIPPAGE_PCT",
                   "PAPER_ACCOUNT", "BACKTEST_DAYS"),
     "Scanner": ("MIN_PRICE", "GAP_MIN_PCT", "MIN_AVG_VOLUME", "WATCH_MAX"),
+    "Crypto": ("CRYPTO", "CRYPTO_BUDGET", "CRYPTO_COINS", "CRYPTO_TARGET_VOL", "CRYPTO_COST_PCT",
+               "CRYPTO_AUTOPILOT_START", "CRYPTO_ALERTS", "BTC15", "BTC15_ALERTS"),
     "Options": ("OPTION_IDEAS", "OPTIONS_MAX_PREMIUM_PCT", "ALLOW_0DTE", "OPTION_MIN_DTE", "OPTION_MAX_SPREAD_PCT",
                 "OPTION_MIN_OI"),
 }
@@ -252,6 +268,27 @@ def make_app(app) -> web.Application:
             app.cfg.set("AUTOPILOT", v)
             app.db.set_meta("set:AUTOPILOT", v)
         return web.json_response({"ok": True, "on": app.autopilot.on, "start": app.autopilot.start()})
+
+    @routes.post("/api/crypto")
+    async def api_crypto(req):
+        body = await req.json()
+        action, now = str(body.get("action", "")), time.time()
+        res = {"ok": True}
+        if action in {"on", "off"}:
+            app.cfg.set("CRYPTO", "1" if action == "on" else "0")
+            app.db.set_meta("set:CRYPTO", app.cfg.get("CRYPTO"))
+        elif action == "reset":
+            try:
+                amount = float(str(body.get("amount") or 0).replace("$", "").replace(",", ""))
+            except ValueError:
+                amount = 0.0
+            res["start"] = app.crypto.reset(now, amount)
+        elif action == "backtest" and app.crypto.series:
+            out = await app.crypto.run_backtest(now, announce=False)
+            res["status"] = out.get("status") or out.get("error")
+        if action in {"on", "reset"}:
+            await app.crypto.tick(now)
+        return web.json_response(res)
 
     @routes.post("/api/backtest")
     async def api_backtest(_req):

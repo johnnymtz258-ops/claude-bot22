@@ -243,6 +243,40 @@ class Alpaca:
         """Name, exchange, fractionable… of one stock or ETF."""
         return await self._get(self.trading, f"/v2/assets/{symbol}") or {}
 
+    # ---- crypto (free data from Alpaca's own exchange; symbols like BTC/USD, returned here as BTC) ---------------
+    async def crypto_bars(self, coins: list[str], timeframe: str, start: float, end: float | None = None
+                          ) -> dict[str, list[tuple]]:
+        out: dict[str, list[tuple]] = {}
+        syms = ",".join(sorted({f"{c.upper()}/USD" for c in coins if c}))
+        if not syms:
+            return out
+        token = None
+        for _ in range(200):
+            data = await self._get(self.data_base, "/v1beta3/crypto/us/bars",
+                                   {"symbols": syms, "timeframe": timeframe, "start": iso(start),
+                                    "end": iso(end or time.time()), "limit": 10000, "sort": "asc", "page_token": token})
+            for sym, rows in ((data or {}).get("bars") or {}).items():
+                out.setdefault(sym.split("/")[0], []).extend(bar_tuple(b) for b in rows or [])
+            token = (data or {}).get("next_page_token")
+            if not token:
+                break
+        return out
+
+    async def crypto_snapshots(self, coins: list[str]) -> dict[str, dict]:
+        syms = ",".join(sorted({f"{c.upper()}/USD" for c in coins if c}))
+        data = await self._get(self.data_base, "/v1beta3/crypto/us/snapshots", {"symbols": syms}) if syms else {}
+        return {k.split("/")[0]: v for k, v in ((data or {}).get("snapshots") or {}).items() if isinstance(v, dict)}
+
+    async def crypto_assets(self) -> list[str]:
+        """Coins Alpaca has data for, traded against the dollar: ['BTC', 'ETH', …]."""
+        data = await self._get(self.trading, "/v2/assets", {"status": "active", "asset_class": "crypto"})
+        out = []
+        for a in data if isinstance(data, list) else []:
+            sym = str(a.get("symbol") or "")
+            if sym.endswith("/USD"):
+                out.append(sym.split("/")[0])
+        return sorted(set(out))
+
     async def assets(self) -> list[dict]:
         """Every active US stock and ETF Alpaca lists (about 11,000)."""
         data = await self._get(self.trading, "/v2/assets", {"status": "active", "asset_class": "us_equity"})

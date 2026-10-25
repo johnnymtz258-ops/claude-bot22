@@ -24,6 +24,10 @@ TABLES = {
     "watch": "select * from watch order by day, score desc",
     "events": "select * from events where ts>=? order by ts",
     "ai_log": "select ts, kind, input_tokens, output_tokens, ok, note from ai_log order by ts",
+    "crypto_trades": "select * from crypto_trades order by id",
+    "crypto_equity": "select * from crypto_equity order by day",
+    "crypto_pos": "select * from crypto_pos",
+    "updown": "select * from updown order by ts",
 }
 
 

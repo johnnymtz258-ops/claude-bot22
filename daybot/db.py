@@ -74,6 +74,16 @@ create table if not exists watch(day text, symbol text, source text, score real 
 create table if not exists price_alerts(id integer primary key, symbol text, price real, direction text, note text default '',
   created integer, triggered integer default 0);
 
+-- the crypto plan's pretend account (crypto.py): what it holds, every trade, its value each day
+create table if not exists crypto_pos(coin text primary key, qty real, updated integer);
+create table if not exists crypto_trades(id integer primary key, ts integer, day text, coin text, side text, qty real,
+  price real, value real, cost real, reason text default '', trend integer default 0);
+create table if not exists crypto_equity(day text primary key, ts integer, equity real, btc real);
+
+-- BTC 15-minute Up or Down (updown.py): the call made at each window's start and how it ended
+create table if not exists updown(ts integer primary key, open real, close real, lean integer default 0, p_lean real,
+  k real, sigma real, p5 real, p10 real, outcome integer);
+
 -- feed for the dashboard + one-off message dedupe
 create table if not exists events(id integer primary key, ts integer, kind text, symbol text default '', text text);
 create table if not exists sent(key text primary key, ts integer);
