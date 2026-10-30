@@ -312,9 +312,7 @@ def make_app(app) -> web.Application:
             res["label"] = app.invest.set_plan(str(body.get("plan", "")))
             res["ok"] = bool(res["label"])
         elif action == "refresh":
-            await app.invest.load(now)
-            app.invest._lab_key = None
-            await app.invest.refresh_lab(now)
+            await app.invest.rerun(now)
         return web.json_response(res)
 
     @routes.post("/api/backtest")

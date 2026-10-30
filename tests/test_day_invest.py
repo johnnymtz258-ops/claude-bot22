@@ -41,7 +41,7 @@ def test_indicators_match_the_textbook_formulas():
         ag = (ag + max(0, c[i] - c[i - 1])) / 2
         al = (al + max(0, c[i - 1] - c[i])) / 2
     assert abs(h.rsi("SPY", 2)[50] - (100 - 100 / (1 + ag / al))) < 1e-9
-    assert h.month_end(len(c) - 1) and sum(h.month_end(t) for t in range(len(c))) >= 18
+    assert sum(h.month_end(t) for t in range(len(c))) >= 17
 
 
 # ---- the simulator -----------------------------------------------------------------------------------------------
@@ -357,3 +357,110 @@ def test_the_growth_text_uses_the_lab_and_the_command_understands_amounts():
     short = asyncio.run(app.commands.text("/invest grow 50 30", now))[0]["text"]
     assert "for 5 years" in short                                          # an impossible length falls back to 5
     json.dumps(app.invest.summary(now), default=str)
+
+
+# ---- regressions from the code review ----------------------------------------------------------------------------
+def test_a_monthly_plan_does_not_change_on_a_mid_month_day():
+    last = dt.date(2021, 3, 15)                                    # a Monday in the middle of March
+    d, n = dt.date(2020, 1, 1), 0
+    while d <= last:
+        n += d.weekday() < 5
+        d += dt.timedelta(days=1)
+    series = {"SPY": [100 * 1.0005 ** i for i in range(n)], "BIL": [100.0] * n}
+    for k, sec in enumerate(iv.SECTORS[:9]):
+        series[sec] = [100 * (1 + 0.0004 * (9 - k)) ** i for i in range(n)]
+    base = list(series["XLB"])
+    series["XLB"] = base[:-1] + [base[-2] * 1.6]                   # on the last bar a laggard shoots to the top
+    h = iv.Hist({k: _bars(v) for k, v in series.items()})
+    assert h.dates[-1] == "2021-03-15" and not h.month_end(h.n - 1)
+    s = iv.Sector3()
+    assert "XLB" in s.target(h, h.n - 1, {})                       # decided today it WOULD be picked…
+    sim = iv.simulate(h, s, s.start(h), 0.0)
+    assert "XLB" not in sim["weights"]                             # …but the plan only re-decides at month-end
+    assert {"XLK", "XLF", "XLE"} <= set(sim["weights"]) or len(sim["weights"]) == 3
+
+
+def test_a_failed_etf_load_is_retried_and_the_marker_is_not_advanced():
+    app, now = _invest_app()
+    good = app.fake.bars
+    state = {"fail": True}
+
+    async def flaky(symbols, timeframe, start, end=None, feed=None, adjustment=None):
+        if state["fail"]:
+            raise RuntimeError("Alpaca 503")
+        return await good(symbols, timeframe, start, end, feed, adjustment)
+    app.fake.bars = flaky
+    asyncio.run(app.invest.tick(now))
+    assert not app.invest.bars and app.invest.last_error.startswith("ETF history")
+    state["fail"] = False
+    asyncio.run(app.invest.tick(now + 400))                      # the first-load retry comes after 5 minutes
+    assert app.invest.bars and app.invest.lab_now() and app.invest._marker is not None
+
+
+def test_a_plan_change_reaches_act_in_today_even_with_dollar_advice_off():
+    app, now = _invest_app("2026-10-21", manage=False)
+    app.db.set_meta("invest_plan", "trend_spy")
+    asyncio.run(app.invest.tick(now))
+    app.fake.daily_store = _crash_after(etf_world("2026-10-23"), "2026-10-21")
+    later = at("2026-10-23", "17:00")
+    app.fake.now = later
+    asyncio.run(app.invest.tick(later))
+    item = next(i for i in app.today(later)["items"] if i["sleeve"] == "invest")
+    assert item["status"] == "act" and "The plan changed on 2026-10-23" in " ".join(item["lines"])
+    assert app.today(later)["headline"].startswith("👉")
+    assert app.invest.summary(later)["changed"] == "2026-10-23"
+
+
+def test_today_text_keeps_every_invest_instruction_and_since_is_measured_from_the_real_curve():
+    from daybot import today
+    t = {"headline": "x", "score": [], "items": [{"sleeve": "invest", "icon": "🧺", "title": "Invest", "status": "act",
+                                                  "lines": [f"line {k}" for k in range(9)]}]}
+    assert "line 8" in today.text(t)
+    app, now = _invest_app("2026-10-21")
+    asyncio.run(app.invest.tick(now))
+    assert app.invest.summary(now)["since"] is None                  # nothing to measure on the first day
+    app.fake.daily_store = etf_world("2026-10-23")
+    later = at("2026-10-23", "17:00")
+    app.fake.now = later
+    asyncio.run(app.invest.tick(later))
+    s = app.invest.summary(later)["since"]
+    spy = etf_world("2026-10-23")["SPY"]
+    close = {dt.datetime.fromtimestamp(b[0] + 7200, dt.timezone.utc).strftime("%Y-%m-%d"): b[4] for b in spy}
+    assert s["since"] == "2026-10-21" and abs(s["spy"] - (close["2026-10-23"] / close["2026-10-21"] - 1)) < 0.02
+
+
+def test_grow_asks_for_no_more_years_than_the_history_can_show_and_today_uses_the_users_edge_threshold():
+    from daybot import today
+    app, now = _invest_app()
+    asyncio.run(app.invest.tick(now))
+    out = asyncio.run(app.commands.text("/invest grow 50 10", now))[0]["text"]
+    assert "the history only supports" in out and "typically" in out
+    assert app.invest.summary(now)["max_years"] >= 7
+    u = {"on": True, "ready": True, "p_up": 0.8, "beat": 80000, "price": 80100, "min_edge": 8, "paper": {},
+         "quotes": [{"venue": "kalshi", "name": "Kalshi", "up": 70, "down": 35, "side": "Up", "edge": 5.0}]}
+    assert "no real edge" in " ".join(today._btc_item(u)["lines"])
+    assert "cheap" in " ".join(today._btc_item({**u, "min_edge": 4})["lines"])
+
+
+def test_a_slow_market_venue_is_given_up_on_quickly_and_does_not_stall_the_others():
+    import daybot.updown as updown_mod
+    from tests.test_day_markets import _app_with_quotes
+    app, _ = _app_with_quotes()
+    updown_mod.QUOTE_TIMEOUT = 0.05
+
+    async def slow(session, arg):
+        await asyncio.sleep(5)
+    app.updown.fetchers["kalshi"] = slow
+    started = asyncio.get_event_loop_policy().new_event_loop()
+    try:
+        import time
+        t0 = time.time()
+        started.run_until_complete(app.updown.refresh_quotes(START_TS))
+        assert time.time() - t0 < 1.0
+    finally:
+        updown_mod.QUOTE_TIMEOUT = 5
+        started.close()
+    assert "polymarket" in app.updown.quotes and "kalshi" in app.updown.quote_errors
+
+
+START_TS = 1_790_000_000 // 900 * 900 + 100

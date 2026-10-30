@@ -665,7 +665,9 @@ function growJS(monthly, initial, add, years) {
 }
 function renderGrow() {
   const v = last && last.invest; if (!v || !v.ready) return;
-  const ini = +$('gw-start').value || 0, add = +$('gw-add').value || 0, yrs = Math.max(1, Math.min(10, Math.round(+$('gw-years').value || 5)));
+  const ini = +$('gw-start').value || 0, add = +$('gw-add').value || 0, maxY = Math.max(1, v.max_years || 5),
+    yrs = Math.max(1, Math.min(maxY, Math.round(+$('gw-years').value || 5)));
+  $('gw-years').max = maxY;
   store.set('daybot-grow', JSON.stringify({ini: $('gw-start').value, add: $('gw-add').value, yrs: $('gw-years').value}));
   const keys = [v.plan, 'bh_spy', 'mix6040'].filter((k, i, a) => a.indexOf(k) === i);
   const rows = keys.map(k => v.strategies.find(r => r.key === k)).filter(Boolean).map(r => ({r, g: growJS(r.monthly, ini, add, yrs)}));

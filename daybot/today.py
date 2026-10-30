@@ -10,6 +10,8 @@ test result next to what it would be worth in dollars on the money you actually 
 """
 from __future__ import annotations
 
+import datetime as dt
+
 from .clock import day_of
 from .invest import VERDICT_TEXT as INVEST_VERDICT
 from .util import esc, money, num, pct
@@ -34,9 +36,14 @@ def _invest_item(inv: dict) -> dict:
         lines.append("Place them in the app — fractional shares, no commission. Orders placed after the close fill at "
                      "tomorrow's open.")
     elif not inv.get("manage"):
-        status = "hold"
-        lines.append(f"The plan holds {inv['plan_now']}. Nothing for you to do unless you choose to follow it "
-                     "(/set INVEST_MANAGE 1 for exact dollars).")
+        recent = inv.get("changed") and (dt.date.fromisoformat(inv["end"]) - dt.date.fromisoformat(inv["changed"])).days <= 7
+        status = "act" if recent else "hold"
+        if recent:
+            lines.append(f"The plan changed on {inv['changed']}: it now holds {inv['plan_now']}. Follow it if you choose to "
+                         "(/set INVEST_MANAGE 1 for exact dollars).")
+        else:
+            lines.append(f"The plan holds {inv['plan_now']}. Nothing for you to do unless you choose to follow it "
+                         "(/set INVEST_MANAGE 1 for exact dollars).")
     elif inv.get("budget"):
         status = "hold"
         lines.append(f"You already hold the plan ({inv['plan_now']}). Nothing to do — keep adding money to it.")
@@ -109,7 +116,7 @@ def _btc_item(u: dict) -> dict:
         proven = paper.get("proven")
         lines.append(f"{q['name']}: Up {q['up']:.0f}¢ / Down {q['down']:.0f}¢ — "
                      + (f"{q['side']} is {q['edge']:.0f}¢ cheap" + ("" if proven else " (signal not proven yet — paper only)")
-                        if q["edge"] >= 4 else "no real edge"))
+                        if q["edge"] >= u.get("min_edge", 4) else "no real edge"))
     return {"sleeve": "btc15", "icon": "⏱", "title": "BTC 15-minute call", "status": "wait", "lines": lines,
             "trust": "benchmark"}
 
@@ -180,7 +187,7 @@ def text(t: dict) -> str:
     lines = ["<b>📋 What to do today</b>", esc(t["headline"]), ""]
     for i in t["items"]:
         lines.append(f"{mark.get(i['status'], '•')} <b>{i['icon']} {esc(i['title'])}</b> {TRUST.get(i.get('trust', ''), '')}")
-        lines += [f"   {esc(x)}" for x in i["lines"][:4]]
+        lines += [f"   {esc(x)}" for x in i["lines"][:12 if i["sleeve"] == "invest" else 5]]
     sc = [r for r in t["score"] if r.get("year") is not None and r.get("money")]
     if sc:
         lines.append("\n<b>What it's worth at your size</b> (from each test — not a promise)")

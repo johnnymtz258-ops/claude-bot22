@@ -16,6 +16,7 @@ differ by a few dollars — so when the price is right at the line, it really is
 """
 from __future__ import annotations
 
+import asyncio
 import math
 import time
 
@@ -25,6 +26,7 @@ from .stats import clustered_mean_ci
 from .util import dumps, esc, loads, num, price as fmt_price
 
 WINDOW = 900
+QUOTE_TIMEOUT = 5            # seconds a venue gets to answer before it counts as 'no quote'
 PROVEN_N = 40               # live paper trades before the edge signal may ping you
 CHECKS = (5, 10)            # minutes into the window the track record is scored at
 VOL_MINUTES = 120           # 1-minute moves used for volatility
@@ -304,13 +306,16 @@ class UpDown:
         if session is None:
             return
         start = window_start(now)
-        for venue in self.venues():
+
+        async def one(venue: str):
             arg = start if venue == "polymarket" else start + WINDOW
             try:
-                q = await self.fetchers[venue](session, arg)
+                return venue, await asyncio.wait_for(self.fetchers[venue](session, arg), QUOTE_TIMEOUT), None
             except Exception as exc:
-                self.quote_errors[venue] = f"{type(exc).__name__}: {str(exc)[:80]}"
-                q = None
+                return venue, None, f"{type(exc).__name__}: {str(exc)[:80]}"
+        for venue, q, err in await asyncio.gather(*(one(v) for v in self.venues())):
+            if err:
+                self.quote_errors[venue] = err
             if q:
                 q["window"], q["ts"] = start, now
                 self.quotes[venue] = q

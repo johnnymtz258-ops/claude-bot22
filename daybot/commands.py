@@ -571,9 +571,7 @@ class Commands:
             years = int(nums[1]) if len(nums) > 1 and 1 <= nums[1] <= 10 else 5
             return [reply(iv.grow_text(now, add, years))]
         if words and words[0] in {"test", "rerun", "refresh"}:
-            await iv.load(now)
-            iv._lab_key = None
-            await iv.refresh_lab(now)
+            await iv.rerun(now)
         elif iv.on and not iv.lab_now():
             await iv.tick(now)
         return [reply(iv.text(now))]

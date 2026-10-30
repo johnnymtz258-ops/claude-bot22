@@ -74,8 +74,8 @@ def build(cfg, db, data, edge, scanner, now: float, account: float = 0.0, positi
                                                   " — nothing here has a measurable edge, so sitting out is the plan"))
     else:
         lines.append("⚪ Backtest not run yet — /backtest (takes a few minutes)")
-    if losing:
-        longs = [r for r in losing if r["direction"] == "long"]
+    longs = [r for r in losing if r["direction"] == "long"]
+    if longs:
         lines.append("🔴 No edge in the test (paper only): " + ", ".join(esc(r["label"]) for r in longs))
     inplay = next((r for r in table if r["setup"] == "orb5" and r["direction"] == "long"), None)
     if inplay and inplay["status"] not in NO_EDGE and cfg.get("ORB5_TOP") > 0:

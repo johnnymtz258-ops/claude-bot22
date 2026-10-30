@@ -120,8 +120,11 @@ class Hist:
         return self._cache[key]
 
     def month_end(self, t: int) -> bool:
-        """Is day t the last trading day of its month (in this data)?"""
-        return t == self.n - 1 or self.dates[t][:7] != self.dates[t + 1][:7]
+        """Is day t the last trading day of its month? For the last bar of the data we can't see the next day, so a
+        mid-month bar must not count (a monthly plan only changes at month-end)."""
+        if t < self.n - 1:
+            return self.dates[t][:7] != self.dates[t + 1][:7]
+        return _last_weekday_of_month(self.dates[t])
 
 
 # ---- strategies ---------------------------------------------------------------------------------------------------
@@ -501,6 +504,11 @@ def grow(monthly: list[float], initial: float, add: float, years: int) -> dict |
             "best": finals[-1]}
 
 
+def max_years(monthly: list) -> int:
+    """The longest stretch (whole years) the history can say anything about."""
+    return max(0, (len(monthly) - 6) // 12)
+
+
 def recommend(lab: dict) -> str:
     """The plan worth following: the best Sharpe among those that beat or smooth holding SPY — or 'bh_spy'."""
     best, best_sharpe = "bh_spy", -9.0
@@ -633,14 +641,25 @@ class Invest:
             return True
         return day == today and self.market.is_trading_day(day) and now >= self.market.close_ts(day) + 1200
 
-    async def load(self, now: float) -> None:
+    async def load(self, now: float) -> bool:
         start = now - (YEARS * 365 + 30) * 86400
         try:
             got = await self.alpaca.bars(list(SYMBOLS), "1Day", start, now, feed="sip", adjustment="all")
         except Exception as exc:
             self.last_error = f"ETF history: {exc}"
-            return
-        self.bars = {sym: [b for b in rows if self._complete(b, now)] for sym, rows in got.items() if rows}
+            return False
+        bars = {sym: [b for b in rows if self._complete(b, now)] for sym, rows in got.items() if rows}
+        if not bars.get("SPY"):
+            self.last_error = "ETF history: no SPY prices came back"
+            return False
+        self.bars = bars
+        return True
+
+    async def rerun(self, now: float) -> None:
+        """Reload the prices and test every plan again."""
+        if await self.load(now):
+            self._lab_key = None
+            await self.refresh_lab(now)
 
     def lab_now(self) -> dict | None:
         return self.lab or loads(self.db.get_meta("invest_lab"), None)
@@ -670,11 +689,15 @@ class Invest:
             return None
         lab["recommended"] = recommend(lab)
         lab["ts"] = int(now)
-        self.lab, self._lab_key = compact(lab), key
-        self.db.set_meta("invest_lab", dumps(self.lab))
         if not self.db.get_meta("invest_since"):
             self.db.set_meta("invest_since", lab["end"])
-        return lab
+        since = self.db.get_meta("invest_since")
+        idx = next((i for i, d in enumerate(lab["dates"]) if d >= since), len(lab["dates"]))
+        lab["since"] = {"date": since, "ret": {r["key"]: r["curve"][-1] / r["curve"][idx] - 1
+                                               for r in lab["strategies"] if idx < len(r["curve"]) - 1}}
+        self.lab, self._lab_key = compact(lab), key
+        self.db.set_meta("invest_lab", dumps(self.lab))
+        return self.lab
 
     def result(self, key: str | None = None) -> dict | None:
         lab = self.lab_now()
@@ -706,12 +729,11 @@ class Invest:
         day = day_of(now)
         marker = (day, self.market.is_trading_day(day) and now >= self.market.close_ts(day) + 1200)
         if not self.bars:
-            if self.every("invest_first", 300, now):
-                await self.load(now)
+            if self.every("invest_first", 300, now) and await self.load(now):
                 self._marker = marker
         elif marker != self._marker and self.every("invest_load", 900, now):
-            await self.load(now)                                # once a day, and again when the closing bar is in
-            self._marker = marker
+            if await self.load(now):                            # once a day, and again when the closing bar is in
+                self._marker = marker                           # (a failed load is simply tried again in 15 minutes)
         if self.bars:
             before, old = self.targets_now(), self.lab
             lab = await self.refresh_lab(now)
@@ -728,6 +750,10 @@ class Invest:
         plan = self.plan_key()
         changed = [k for k in after if k in before and before[k]["weights"] != after[k]["weights"]]
         self.db.set_meta("invest_targets", dumps(after))
+        if changed:
+            when = loads(self.db.get_meta("invest_changed"), {}) or {}
+            when.update({k: lab["end"] for k in changed})
+            self.db.set_meta("invest_changed", dumps(when))
         if first or not self.cfg.flag("INVEST_ALERTS"):
             return
         month = lab["end"][:7]
@@ -791,16 +817,15 @@ class Invest:
 
     # ---- views -----------------------------------------------------------------------------------------------------
     def since(self, plan: str, lab: dict) -> dict | None:
-        start = self.db.get_meta("invest_since")
-        res = next((x for x in lab["strategies"] if x["key"] == plan), None)
-        bench = next((x for x in lab["strategies"] if x["key"] == "bh_spy"), None)
-        if not (start and res and bench and res.get("curve") and isinstance(res["curve"][0], list)):
+        """The plan's return and SPY's since you started following (from the full daily curve, at the last test)."""
+        info = lab.get("since") or {}
+        ret = info.get("ret") or {}
+        if plan not in ret:
             return None
+        return {"since": info.get("date"), "plan": ret[plan], "spy": ret.get("bh_spy")}
 
-        def at(curve):
-            pts = [p for p in curve if p[0] >= start]
-            return (curve[-1][1] / pts[0][1] - 1) if pts and pts[0][1] else None
-        return {"since": start, "plan": at(res["curve"]), "spy": at(bench["curve"])}
+    def changed_on(self, plan: str) -> str | None:
+        return (loads(self.db.get_meta("invest_changed"), {}) or {}).get(plan)
 
     def summary(self, now: float) -> dict:
         lab = self.lab_now()
@@ -812,6 +837,7 @@ class Invest:
         acts, budget, tickers, other = self.actions(res["weights"])
         held, _, _ = self.holdings()
         return {**base, "ready": True, "start": lab["start"], "end": lab["end"], "days": lab["days"],
+                "changed": self.changed_on(plan), "max_years": max_years(res.get("monthly") or []),
                 "cost_pct": lab["cost_pct"], "plan": plan, "recommended": lab.get("recommended") or recommend(lab),
                 "strategies": [{**r, "verdict_text": VERDICT_TEXT.get(r["verdict"], "")} for r in lab["strategies"]],
                 "actions": acts, "budget": budget, "manage": self.manage, "held": {BUCKET_NAME.get(b, b): round(v, 2) for b, v in held.items()},
@@ -862,20 +888,24 @@ class Invest:
         if initial is None:
             held, _, _ = self.holdings()
             initial = self.budget(held) or 0.0
+        longest = min((max_years(r.get("monthly") or []) for r in lab["strategies"]), default=0)
+        note = ""
+        if years > longest > 0:
+            note, years = f" (the history only supports {longest} years, so that's what this shows)", longest
         rows = [(r["label"], grow(r.get("monthly") or [], initial, add, years)) for r in lab["strategies"]
                 if r["key"] in (self.plan_key(), "bh_spy", "mix6040")]
         rows = [x for x in dict(rows).items() if x[1]]
         if not rows:
             return f"🧺 Not enough history to say what {years} years looks like (need about {years + 1} years of prices)."
         n = rows[0][1]["windows"]
-        lines = [f"<b>💰 Starting with {money(initial)} and adding {money(add)} a month for {years} years</b>",
+        lines = [f"<b>💰 Starting with {money(initial)} and adding {money(add)} a month for {years} years</b>{note}",
                  f"You'd put in {money(rows[0][1]['put_in'])}. What that became, over every {years}-year stretch of the "
                  f"last {lab['days'] / TRADING_DAYS:.0f} years:"]
         for label, g in rows:
             lines.append(f"• {esc(label)}: typically <b>{money(g['median'])}</b> (worst {money(g['worst'])}, best "
                          f"{money(g['best'])})")
         lines.append(f"<i>{n} overlapping stretches including the 2018 and 2022 drops — the future can be worse. The money "
-                     "you add matters more than which plan: try /invest grow 100 or /invest grow 50 10.</i>")
+                     "you add matters more than which plan: try /invest grow 100 or /invest grow 50 3.</i>")
         return "\n".join(lines)
 
     def week_line(self, now: float) -> str:

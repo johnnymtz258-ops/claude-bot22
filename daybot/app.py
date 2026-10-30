@@ -200,7 +200,8 @@ class App:
         return {"invest": _safe(lambda: self.invest.summary(now), {"on": self.invest.on, "ready": False}),
                 "crypto": _safe(lambda: self.crypto.summary(now), {"on": self.crypto.on, "board": []}),
                 "updown": _safe(lambda: self.updown.summary(now), {"on": self.updown.on, "ready": False}),
-                "autopilot": self.autopilot.summary(now, light=True), "in_play": _in_play(self, day_of(now), now)}
+                "autopilot": _safe(lambda: self.autopilot.summary(now, light=True), {"on": False, "n": 0}),
+                "in_play": _safe(lambda: _in_play(self, day_of(now), now), [])}
 
     def today(self, now: float) -> dict:
         return today_mod.build(self, now, self.today_parts(now))
