@@ -470,11 +470,16 @@ class Commands:
             line = f"{status} <b>{esc(r['label'])}</b>" + (" (paper only)" if r["direction"] == "short" and not shorts else "")
             if bt and bt["n"]:
                 line += (f"\n   backtest {int(bt['n'])} trades · {num(bt['avg_r']):+.2f}R avg · {num(bt['won']) * 100:.0f}% won · "
-                         f"halves {num(bt['half1']):+.2f}/{num(bt['half2']):+.2f}R")
+                         f"halves {num(bt['half1']):+.2f}/{num(bt['half2']):+.2f}R"
+                         + (f" · {num(bt['p_pos']) * 100:.0f}% sure it's real" if bt.get("p_pos") not in (None, 0.5) else "")
+                         + (f"\n   {num(bt['avg_pct']):+.2f}% of the money a trade (typical {num(bt['med_pct']):+.2f}%)"
+                            if bt.get("avg_pct") else ""))
             if pp["n"]:
                 line += f"\n   paper {pp['n']} trades · {pp['avg_r']:+.2f}R avg"
             lines.append(line)
-        lines.append("\nProven = made money after costs in both halves of the test, without its 3 best trades, 40+ trades.")
+        lines.append("\nProven = made money after costs in both halves, without its 3 best trades, 40+ trades, and clearly above "
+                     "luck when whole days are resampled. Probably real = a positive average that's 85%+ likely not luck. "
+                     "No measurable edge / loses = paper only.")
         return [reply("\n".join(lines))]
 
     async def cmd_backtest(self, rest: str, now: float) -> list[dict]:

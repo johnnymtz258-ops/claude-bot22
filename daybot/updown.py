@@ -530,5 +530,12 @@ class UpDown:
         m = self.model()
         t = m.get("test") or {}
         f10 = (t.get("favorite") or {}).get("10", {}).get("hit")
+        live = self.live_quotes(now)
+        if live:
+            mk = " · market prices: " + " + ".join(markets.VENUE_NAME[v] for v in live)
+        elif self.quote_errors:
+            mk = " · ⚠️ market prices: " + "; ".join(f"{markets.VENUE_NAME[v]} {e}" for v, e in self.quote_errors.items())
+        else:
+            mk = " · market prices: not read yet"
         return ("✅ BTC 15-min call: " + ("ready" if self.bars else "loading")
-                + (f" · favorite at 10 min won {f10 * 100:.0f}% (30-day test)" if f10 else ""))
+                + (f" · favorite at 10 min won {f10 * 100:.0f}% (30-day test)" if f10 else "") + mk)

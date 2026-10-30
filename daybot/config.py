@@ -63,7 +63,7 @@ SETTINGS = {s.name: s for s in (
     # --- paper + backtest ----------------------------------------------------------------------------------------
     Setting("AUTOPILOT", 1, "Autopilot: a pretend account takes every trade the bot alerts you on, by itself, so you can see in dollars whether following DayBot makes money (1 = on)", 0, 1, True),
     Setting("AUTOPILOT_START", 1000, "Autopilot's pretend starting balance ($) — used when it starts or you /autopilot reset", 100, 10_000_000),
-    Setting("AUTOPILOT_MAX_OPEN", 3, "Most autopilot trades open at once", 1, 20),
+    Setting("AUTOPILOT_MAX_OPEN", 8, "Most autopilot trades open at once. The in-play breakout wins about 1 trade in 5 and the winners are big, so spreading over more of them (8) measures it far better than 3 would", 1, 20),
     Setting("AUTOPILOT_NOTIFY", 1, "Tell me (silently) each time the autopilot buys and sells (1 = on)", 0, 1, True),
     Setting("PAPER_ACCOUNT", 25_000, "Size the setup gauge uses internally ($; results are measured in R, so it barely matters)", 1000, 10_000_000),
     Setting("SLIPPAGE_PCT", 0.01, "Extra cost per buy or sell (%) on top of each stock's spread — the spread is estimated from how much money trades in it (SPY ~0.005%, a small stock ~0.15%)", 0, 2),

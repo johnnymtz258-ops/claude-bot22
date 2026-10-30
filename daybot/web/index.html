@@ -336,9 +336,10 @@ dialog::backdrop{background:rgba(0,0,0,.55)}dialog img{width:100%;border-radius:
     <div class="banner" id="data-says"></div>
     <div class="card">
       <div class="card-head"><h2>Setups — what each one has earned</h2></div>
-      <p class="hint">A setup is <b>proven</b> when it made money after costs in both halves of the test period, still does without
-        its 3 best trades, and has 40+ trades — or when it does the same live on paper. Proven setups ping you; the rest arrive
-        silently, labelled 🧪, while paper keeps measuring them.</p>
+      <p class="hint">A setup is <b>proven</b> when it made money after costs in both halves of the test, still does without its
+        3 best trades, has 40+ trades and its average is clearly above zero even when whole days are resampled — or when it does the
+        same live on paper. <b>Probably real</b> = a positive average that's 85%+ likely not to be luck. Everything else — including
+        setups that are barely above zero — stays on paper. <i>Sure it's real</i> is how often the average stayed positive when the test days were resampled.</p>
       <div class="table-wrap"><table id="setups"></table></div>
       <div class="row" style="margin-top:12px"><button class="btn sec" id="bt" type="button">Run the backtest again</button>
         <span class="muted" id="bt-note"></span></div>
@@ -491,17 +492,19 @@ function render(s) {
      <td>${a.checks ? '<span class="badge good">day trading</span>' : '<span class="badge">investing</span>'}</td></tr>`,
     'No accounts linked yet — send /connect to DayBot in Telegram.');
 
-  const st = {proven: ['good', '✅ proven'], promising: ['mid', '🟡 promising'], thin: ['', '⚪ too few trades'],
-    negative: ['bad', '🔴 loses'], benched: ['bad', '⏸ benched'], untested: ['', '⚪ not tested yet']};
+  const st = {proven: ['good', '✅ proven'], promising: ['mid', '🟡 probably real'], thin: ['', '⚪ too few trades'],
+    flat: ['', '⚪ no measurable edge'], negative: ['bad', '🔴 loses'], benched: ['bad', '⏸ benched'], untested: ['', '⚪ not tested yet']};
   const shorts = (s.settings.find(x => x.name === 'SHORT_ALERTS') || {}).value >= 0.5;
-  table('setups', ['Setup', 'Status', '#Backtest trades', '#Avg R', '#Won', '#Live paper', 'Backtest, trade by trade'], s.setups, x => {
+  table('setups', ['Setup', 'Status', '#Backtest trades', '#Avg R', '#Sure it\'s real', '#Won', '#A trade, % of money', '#Live paper', 'Backtest, trade by trade'], s.setups, x => {
     const [c, txt] = x.live ? ['good', '✅ proven live'] : (st[x.status] || ['', x.status]);
     const paperOnly = x.direction === 'short' && !shorts;
     return `<tr${paperOnly ? ' style="opacity:.6"' : ''}><td class="wrap" style="min-width:240px"><b>${esc(x.label)}</b>${paperOnly ? ' <span class="muted">· paper only</span>' : ''}
        ${x.direction === 'long' ? `<div class="muted" style="font-size:12px">${esc(x.about)}</div>` : ''}</td>
      <td><span class="badge ${c}">${txt}</span></td>
-     <td class="num">${x.bt ? x.bt.n : '—'}</td><td class="num ${x.bt ? cls(x.bt.avg_r) : ''}">${x.bt ? rr(x.bt.avg_r) : '—'}</td>
+     <td class="num">${x.bt ? x.bt.n : '—'}</td><td class="num ${x.bt ? cls(x.bt.avg_r) : ''}" title="${x.bt && x.bt.ci_lo != null ? '80% range ' + rr(x.bt.ci_lo) + ' to ' + rr(x.bt.ci_hi) : ''}">${x.bt ? rr(x.bt.avg_r) : '—'}</td>
+     <td class="num">${x.bt && x.bt.n >= 15 && x.bt.p_pos != null ? Math.round(x.bt.p_pos * 100) + '%' : '—'}</td>
      <td class="num">${x.bt ? Math.round(x.bt.won * 100) + '%' : '—'}</td>
+     <td class="num ${x.bt ? cls(x.bt.avg_pct) : ''}" title="typical trade ${x.bt ? pc(x.bt.med_pct, 2) : ''}">${x.bt && x.bt.n >= 15 ? pc(x.bt.avg_pct, 2) : '—'}</td>
      <td class="num ${cls(x.paper.avg_r)}">${x.paper.n ? x.paper.n + ' · ' + rr(x.paper.avg_r) : '—'}</td>
      <td>${spark(x.curve)}</td></tr>`; });
   renderDataSays(s, shorts);
@@ -524,15 +527,15 @@ function spark(points, unit = 'R') {
 function renderDataSays(s, shorts) {
   const bi = s.backtest_info || {}, usable = s.setups.filter(x => x.direction === 'long' || shorts);
   const good = usable.filter(x => x.status === 'proven'), close = usable.filter(x => x.status === 'promising');
-  const losing = s.setups.filter(x => x.status === 'negative' || x.status === 'benched');
-  const fmt = x => `<b>${esc(x.label)}</b> (${x.bt ? x.bt.n + ' trades, ' + rr(x.bt.avg_r) + ' avg' : 'live paper ' + x.paper.n + ' trades, ' + rr(x.paper.avg_r)})`;
+  const noedge = s.setups.filter(x => ['negative', 'flat', 'benched'].includes(x.status));
+  const fmt = x => `<b>${esc(x.label)}</b> (${x.bt ? x.bt.n + ' trades, ' + rr(x.bt.avg_r) + ' avg' + (x.bt.p_pos != null ? ', ' + Math.round(x.bt.p_pos * 100) + '% sure it\'s real' : '') : 'live paper ' + x.paper.n + ' trades, ' + rr(x.paper.avg_r)})`;
   let head, kind;
   if (!bi.ts) { head = 'Not tested yet — the backtest runs by itself after the 4pm close (keep DayBot running).'; kind = ''; }
   else if (good.length) { head = `✅ Worth following: ${good.map(fmt).join(', ')}. These ping your phone.`; kind = 'good'; }
-  else if (close.length) { head = `🟡 Nothing is proven yet. Closest: ${close.map(fmt).join(', ')} — made money overall but not steadily enough to trust. Follow them small, or on the autopilot only.`; kind = 'mid'; }
-  else { head = '🔴 Nothing has made money after costs in the test yet. Keep your money out of these setups; the autopilot and paper keep measuring, and setups that start winning live get promoted by themselves.'; kind = 'bad'; }
+  else if (close.length) { head = `🟡 Nothing is proven. A small edge that is probably real: ${close.map(fmt).join(', ')}. Most of its trades lose a little and a few win big — follow it small, or on the autopilot only.`; kind = 'mid'; }
+  else { head = '🔴 Nothing here has a measurable edge after costs. Day-trading these setups isn\'t worth real money right now. The autopilot and paper keep measuring, and a setup that starts winning live gets promoted by itself. The 🧺 Invest and 🪙 Crypto plans are where the evidence is.'; kind = 'bad'; }
   const when = bi.ts ? new Date(bi.ts * 1000).toLocaleDateString([], {month: 'short', day: 'numeric'}) : '';
-  const meta = bi.ts ? `<div class="muted" style="margin-top:6px;font-size:13px">Last test: ${when} · ${bi.days || '?'} trading days · ${(bi.trades || 0).toLocaleString()} trades, costs included${bi.scanned ? ` · searched ${(+bi.scanned).toLocaleString()} stocks` : ''}${losing.length ? ` · ${losing.length} setup${losing.length === 1 ? '' : 's'} lose money and stay on paper` : ''}</div>` : '';
+  const meta = bi.ts ? `<div class="muted" style="margin-top:6px;font-size:13px">Last test: ${when} · ${bi.days || '?'} trading days · ${(bi.trades || 0).toLocaleString()} trades, costs included${bi.scanned ? ` · searched ${(+bi.scanned).toLocaleString()} stocks` : ''}${noedge.length ? ` · ${noedge.length} setup${noedge.length === 1 ? '' : 's'} with no measurable edge stay on paper` : ''}</div>` : '';
   $('data-says').className = 'banner ' + kind;
   $('data-says').innerHTML = `<b>What the data says</b><div style="margin-top:4px">${head}</div>${meta}`;
 }

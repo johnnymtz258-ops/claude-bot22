@@ -17,10 +17,11 @@ from .accounts import fmt_qty, size_shares
 from .bars import C, T
 from .clock import at, clock_text, day_of, et
 from .setups import label
+from .stats import clustered_mean_ci
 from .util import esc, money, num, pct, price as fmt_price, rmult
 
 LATE = 30 * 60
-JUDGE_AFTER = 20            # trades before the verdict means anything
+JUDGE_AFTER = 60            # trades before the verdict means anything (these setups lose small most of the time)
 
 REASON = {"target": "half at the first target, the rest at the second", "stop": "stopped out",
           "breakeven": "half at the first target, the rest back at breakeven", "time": "closed before the bell",
@@ -281,8 +282,9 @@ class Autopilot:
             return ("No trades yet. It takes the next setup the bot alerts on, during market hours (9:30am–4pm ET), "
                     "and tells you here when it buys and sells.")
         if n < JUDGE_AFTER:
-            return (f"Too early to judge: {n} trade{'s' if n != 1 else ''}. Give it {JUDGE_AFTER}+ trades (a couple of "
-                    "weeks) before trusting the result either way — a few trades are mostly luck.")
+            return (f"Too early to judge: {n} trade{'s' if n != 1 else ''}. These setups lose a little most of the time "
+                    f"and win big now and then, so give it {JUDGE_AFTER}+ trades (a few weeks) before trusting the "
+                    "result either way — a handful of trades is mostly luck.")
         spy = sm.get("spy_pct")
         vs = f" Holding SPY did {pct(spy)} over the same time." if spy is not None else ""
         good = [g for g in sm.get("by_setup", []) if g["n"] >= 8 and g["avg_r"] >= 0.1]
@@ -291,16 +293,18 @@ class Autopilot:
                                                     for g in good[:3]) + ".") if good else ""
         skip = (" Losing: " + ", ".join(f"{g['name']} ({money(g['pnl'], signed=True)})" for g in bad[:3])
                 + " — skip those.") if bad else ""
-        if sm["pnl"] > 0 and sm["avg_r"] >= 0.1 and sm["pf"] >= 1.2:
-            head = (f"✅ Following DayBot's alerts made money: {money(sm['pnl'], signed=True)} "
+        ci = clustered_mean_ci([(day_of(t["closed_ts"]), num(t["r_mult"])) for t in self.closed()])
+        sure = f" Its average is {rmult(ci['mean'])} a trade (80% range {rmult(ci['lo'])} to {rmult(ci['hi'])})."
+        if sm["pnl"] > 0 and ci["lo"] > 0:
+            head = (f"✅ Following DayBot's alerts made money, and more than luck explains: {money(sm['pnl'], signed=True)} "
                     f"({pct(sm['return_pct'])}) over {n} trades.")
-        elif sm["pnl"] > 0:
-            head = (f"🟡 Slightly ahead ({money(sm['pnl'], signed=True)} over {n} trades) — not clearly better than "
-                    "luck yet.")
+        elif ci["hi"] < 0:
+            head = (f"🔴 Following every alert lost {money(-sm['pnl'])} over {n} trades, and that's more than bad luck. "
+                    "Don't follow them blindly with real money — only the setups that work below, if any.")
         else:
-            head = (f"🔴 Following every alert lost {money(-sm['pnl'])} over {n} trades. Don't follow them blindly "
-                    "with real money — only the setups that work below, if any.")
-        return head + vs + follow + skip
+            head = (f"🟡 {money(sm['pnl'], signed=True)} over {n} trades — can't be told apart from luck yet; the range "
+                    "includes both a real edge and none.")
+        return head + sure + vs + follow + skip
 
     def text(self, now: float) -> str:
         sm = self.summary(now)

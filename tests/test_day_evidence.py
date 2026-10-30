@@ -65,3 +65,36 @@ def test_sharpe_ci_brackets_the_estimate():
     xs = [rnd.gauss(0.001, 0.01) for _ in range(750)]
     s = sharpe_ci(xs)
     assert s["lo"] < s["sharpe"] < s["hi"]
+
+
+def _auto_rows(app, rs, start_day="2026-10-01"):
+    import datetime as dt
+    from daybot.clock import at
+    app.autopilot._begin(at(start_day, "09:00"))
+    for i, r in enumerate(rs):
+        day = (dt.date.fromisoformat(start_day) + dt.timedelta(days=i // 3)).isoformat()
+        ts = at(day, "10:00") + i
+        app.db.run("""insert into paper(day, symbol, setup, direction, opened_ts, entry, stop, t1, t2, qty, status, auto,
+                      closed_ts, exit_price, r_mult, pnl, reason, plan, entry_type, risk, stop_now)
+                      values(?,?,?,?,?,?,?,?,?,?,'closed',1,?,?,?,?,'time','close','stop',1,100)""",
+                   (day, f"S{i}", "orb5", "long", ts, 100, 99, 101, 102, 1, ts + 3600, 100 + r, r, r))
+
+
+def test_the_autopilot_verdict_waits_for_enough_trades_and_then_separates_skill_from_luck():
+    from tests.day_helpers import make_app
+    from daybot.clock import at
+    now = at("2026-11-20", "16:00")
+    rnd = random.Random(8)
+    app = make_app(now=now)
+    _auto_rows(app, [rnd.gauss(0.5, 1) for _ in range(20)])
+    assert "Too early to judge: 20 trades" in app.autopilot.summary(now)["verdict"]
+    strong = make_app(now=now)
+    _auto_rows(strong, [rnd.gauss(0.6, 1.0) for _ in range(90)])
+    v = strong.autopilot.summary(now)["verdict"]
+    assert v.startswith("✅") and "80% range" in v
+    losing = make_app(now=now)
+    _auto_rows(losing, [rnd.gauss(-0.6, 1.0) for _ in range(90)])
+    assert losing.autopilot.summary(now)["verdict"].startswith("🔴") and "more than bad luck" in losing.autopilot.summary(now)["verdict"]
+    noisy = make_app(now=now)
+    _auto_rows(noisy, [rnd.gauss(0.02, 1.5) for _ in range(70)])
+    assert noisy.autopilot.summary(now)["verdict"].startswith("🟡") and "luck" in noisy.autopilot.summary(now)["verdict"]
