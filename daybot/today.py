@@ -24,7 +24,7 @@ def _invest_item(inv: dict) -> dict:
     if not inv.get("on"):
         return {"sleeve": "invest", "icon": "🧺", "title": "Invest plan", "status": "off", "lines": ["Off (/set INVEST 1)."]}
     if not inv.get("ready"):
-        return {"sleeve": "invest", "icon": "🧺", "title": "Invest plan", "status": "wait",
+        return {"sleeve": "invest", "icon": "🧺", "title": "Invest plan", "status": "wait", "loading": True,
                 "lines": ["Loading 10 years of ETF prices from Alpaca…" + (f" {inv['error']}" if inv.get("error") else "")]}
     plan = next(r for r in inv["strategies"] if r["key"] == inv["plan"])
     acts = inv.get("actions") or []
@@ -59,7 +59,7 @@ def _crypto_item(c: dict) -> dict:
         return {"sleeve": "crypto", "icon": "🪙", "title": "Crypto trend plan", "status": "off", "lines": ["Off (/crypto on)."]}
     board = c.get("board") or []
     if not board or not c.get("backtest"):
-        return {"sleeve": "crypto", "icon": "🪙", "title": "Crypto trend plan", "status": "wait",
+        return {"sleeve": "crypto", "icon": "🪙", "title": "Crypto trend plan", "status": "wait", "loading": True,
                 "lines": ["Loading crypto prices…" + (f" {c['error']}" if c.get("error") else "")]}
     budget = c.get("budget") or 0
     held = [r for r in board if r.get("target_w", 0) > 0]
@@ -111,7 +111,7 @@ def _btc_item(u: dict) -> dict:
     if not u.get("on"):
         return {"sleeve": "btc15", "icon": "⏱", "title": "BTC 15-minute call", "status": "off", "lines": ["Off."]}
     if not u.get("ready"):
-        return {"sleeve": "btc15", "icon": "⏱", "title": "BTC 15-minute call", "status": "wait",
+        return {"sleeve": "btc15", "icon": "⏱", "title": "BTC 15-minute call", "status": "wait", "loading": True,
                 "lines": ["Loading Bitcoin's minute prices…"]}
     up = u["p_up"] >= 0.5
     lines = [f"This window: {'UP' if up else 'DOWN'} {max(u['p_up'], 1 - u['p_up']) * 100:.0f}% "
@@ -180,8 +180,14 @@ def build(app, now: float, parts: dict) -> dict:
              _day_item(table, parts.get("in_play") or [], session, (parts.get("autopilot") or {}).get("following")),
              _btc_item(parts["updown"])]
     acting = [i for i in items if i["status"] == "act"]
-    headline = ("👉 " + "; ".join(f"{i['icon']} {i['title']}" for i in acting)) if acting else \
-        "Nothing needs doing right now — the plans are in place. Quiet is the system working."
+    loading = [i for i in items if i.get("loading")]
+    if acting:
+        headline = "👉 " + "; ".join(f"{i['icon']} {i['title']}" for i in acting)
+    elif loading:
+        headline = (f"⏳ Still loading prices for {', '.join(i['title'].lower() for i in loading)} — give it a minute; if "
+                    "this stays, /status says what's wrong.")
+    else:
+        headline = "Nothing needs doing right now — the plans are in place. Quiet is the system working."
     return {"headline": headline, "items": items, "score": _score(parts["invest"], parts["crypto"], parts["updown"], table,
                                                                   parts["autopilot"]),
             "day": day_of(now)}
@@ -206,6 +212,8 @@ def text(t: dict) -> str:
 def short(t: dict) -> str:
     """Two lines for the top of the morning plan."""
     acting = [i for i in t["items"] if i["status"] == "act"]
+    if not acting and any(i.get("loading") for i in t["items"]):
+        return "📋 Today: still loading prices — /today in a minute."
     if not acting:
         return "📋 Today: nothing needs doing — the plans are in place. (/today for each one)"
     return "📋 Today: " + " · ".join(f"{i['icon']} {i['title']}: " + i["lines"][1 if len(i["lines"]) > 1 else 0]

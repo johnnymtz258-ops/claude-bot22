@@ -5,6 +5,7 @@ end a message with "?" to ask the assistant.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 
@@ -105,9 +106,20 @@ def parse_check_args(text: str, today) -> dict | None:
     return {"symbol": sym, "kind": "stock", "contract": "", "direction": direction, "qty": qty, "price": px}
 
 
+LOAD_WAIT = 12            # seconds a command waits for fresh data before answering with what it has
+
+
 class Commands:
     def __init__(self, app):
         self.app = app
+
+    async def _wait(self, *coros) -> None:
+        """Run data loads side by side, but never keep you waiting more than LOAD_WAIT seconds (Alpaca being slow or
+        down must not freeze a reply)."""
+        try:
+            await asyncio.wait_for(asyncio.gather(*coros, return_exceptions=True), LOAD_WAIT)
+        except asyncio.TimeoutError:
+            pass
 
     # ---- entry points ----------------------------------------------------------------------------------------
     async def text(self, text: str, now: float | None = None) -> list[dict]:
@@ -525,18 +537,18 @@ class Commands:
             db.set_meta("set:CRYPTO", cfg.get("CRYPTO"))
             if verb == "off":
                 return [reply("🪙 Crypto plan off. /crypto on turns it back on (the pretend account is kept).")]
-            await cr.tick(now)
+            await self._wait(cr.tick(now))
         elif verb in {"reset", "restart", "start"}:
             amount = num(words[1].replace("$", "").replace(",", "")) if len(words) > 1 else 0.0
             amount = cr.reset(now, amount)
-            await cr.tick(now)
+            await self._wait(cr.tick(now))
             return [reply(f"🪙 The crypto autopilot starts over with a pretend {money(amount)} and buys into whatever is "
                           "trending now.\n\n" + cr.autopilot_line())]
         elif verb in {"test", "backtest", "bt"}:
             if not cr.on:
                 return [reply("🪙 The crypto plan is off. /crypto on first.")]
             if not cr.series:
-                await cr.tick(now)
+                await self._wait(cr.tick(now))
             if not cr.series:
                 return [reply(cr.text(now))]
             res = await cr.run_backtest(now, announce=False)
@@ -544,14 +556,14 @@ class Commands:
                 return [reply(f"🪙 Couldn't test: {esc(res['error'])}")]
             return [reply(cr.backtest_text(res))]
         elif cr.on and not cr.series:
-            await cr.tick(now)
+            await self._wait(cr.tick(now))
         return [reply(cr.text(now))]
 
     async def cmd_today(self, rest: str, now: float) -> list[dict]:
         app = self.app
-        for part in (app.invest, app.crypto, app.updown):
-            if part.on and getattr(app.alpaca, "ok", False) and not (getattr(part, "bars", None) or getattr(part, "series", None)):
-                await part.tick(now)
+        await self._wait(*[part.tick(now) for part in (app.invest, app.crypto, app.updown)
+                           if part.on and getattr(app.alpaca, "ok", False)
+                           and not (getattr(part, "bars", None) or getattr(part, "series", None))])
         return [reply(today_mod.text(app.today(now)))]
 
     async def cmd_invest(self, rest: str, now: float) -> list[dict]:
@@ -571,19 +583,18 @@ class Commands:
             years = int(nums[1]) if len(nums) > 1 and 1 <= nums[1] <= 10 else 5
             return [reply(iv.grow_text(now, add, years))]
         if words and words[0] in {"test", "rerun", "refresh"}:
-            await iv.rerun(now)
+            await self._wait(iv.rerun(now))
         elif iv.on and not iv.lab_now():
-            await iv.tick(now)
+            await self._wait(iv.tick(now))
         return [reply(iv.text(now))]
 
     async def cmd_btc15(self, rest: str, now: float) -> list[dict]:
         ud = self.app.updown
         if ud.on and getattr(self.app.alpaca, "ok", False):
             if not ud.bars:
-                await ud.tick(now)
+                await self._wait(ud.tick(now))
             else:
-                await ud.load(now)
-                await ud.refresh_price(now)
+                await self._wait(ud.load(now), ud.refresh_price(now))
         return [reply(ud.text(now, rest))]
 
     # ---- the assistant ----------------------------------------------------------------------------------------

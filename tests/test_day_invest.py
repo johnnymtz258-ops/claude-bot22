@@ -306,7 +306,10 @@ def test_what_to_do_today_pulls_every_part_into_actions_or_an_honest_nothing():
                "values('a','VOO','VOO','VOO','stock',1,250,300,1,0)")
     t2 = app.today(now)
     assert next(i for i in t2["items"] if i["sleeve"] == "invest")["status"] == "hold"
-    assert "Nothing needs doing" in t2["headline"] and "nothing needs doing" in today.short(t2)
+    assert not t2["headline"].startswith("👉") and "Today:" in today.short(t2)
+    quiet = {**t2, "items": [{**i, "loading": False} for i in t2["items"]]}            # with everything loaded
+    app.today = lambda n: quiet
+    assert "nothing needs doing" in today.short(quiet)
     assert "What to do today" in asyncio.run(app.commands.text("/today", now))[0]["text"]
     assert "Today:" in asyncio.run(app.morning_plan(now, send=False)) or "nothing needs doing" in asyncio.run(
         app.morning_plan(now, send=False))
@@ -464,3 +467,33 @@ def test_a_slow_market_venue_is_given_up_on_quickly_and_does_not_stall_the_other
 
 
 START_TS = 1_790_000_000 // 900 * 900 + 100
+
+
+def test_a_slow_or_down_data_source_never_freezes_a_command():
+    import time
+    import daybot.commands as cm
+    app, now = _invest_app()
+
+    async def hang(symbols, timeframe, start, end=None, feed=None, adjustment=None):
+        await asyncio.sleep(30)
+    app.fake.bars = hang
+    app.fake.crypto_bars = lambda *a, **k: hang(*a)
+    cm.LOAD_WAIT = 0.3
+    try:
+        t0 = time.time()
+        out = asyncio.run(app.commands.text("/today", now))[0]["text"]
+        assert time.time() - t0 < 3 and "What to do today" in out
+        assert "Loading" in out
+        t0 = time.time()
+        assert "Loading ETF history" in asyncio.run(app.commands.text("/invest", now))[0]["text"] and time.time() - t0 < 3
+    finally:
+        cm.LOAD_WAIT = 12
+
+
+def test_today_says_it_is_still_loading_rather_than_claiming_everything_is_fine():
+    from daybot import today
+    app, now = _invest_app()
+    app.fake.crypto_daily = {}
+    t = app.today(now)                                  # nothing has been loaded yet
+    assert t["headline"].startswith("⏳ Still loading") and "quiet is the system" not in t["headline"].lower()
+    assert "still loading" in today.short(t)
