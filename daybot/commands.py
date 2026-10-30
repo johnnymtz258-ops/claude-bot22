@@ -15,6 +15,7 @@ from .clock import at, clock_text, day_of, et
 from .coach import format_leaks, leaks, week_report
 from .config import SETTINGS, parse_watchlist
 from .options import parse_contract_text
+from . import today as today_mod
 from .setups import label
 from .util import big, dumps, esc, loads, money, num, pct, price as fmt_price, rmult
 
@@ -38,6 +39,10 @@ HELP = f"""<b>📈 DayBot {VERSION}</b> — your day-trading assistant. It reads
 • /autopilot the pretend account that follows every alert — is the bot making money?
 • /setups what each setup has earned · /backtest re-test them
 
+<b>Right now</b>
+• /today what to do today across everything, and what each part is worth at your size
+<b>Invest (slow, tested)</b>
+• /invest the ETF plans tested on 10 years of prices, which one to follow and what to buy or sell
 <b>Crypto</b>
 • /crypto the daily trend plan for Bitcoin and the big coins, its pretend account and its backtest
 • /btc15 which way Bitcoin most likely finishes this 15 minutes (Up or Down markets) · /btc15 62 vs a 62¢ price
@@ -536,6 +541,32 @@ class Commands:
             await cr.tick(now)
         return [reply(cr.text(now))]
 
+    async def cmd_today(self, rest: str, now: float) -> list[dict]:
+        app = self.app
+        for part in (app.invest, app.crypto, app.updown):
+            if part.on and getattr(app.alpaca, "ok", False) and not (getattr(part, "bars", None) or getattr(part, "series", None)):
+                await part.tick(now)
+        return [reply(today_mod.text(app.today(now)))]
+
+    async def cmd_invest(self, rest: str, now: float) -> list[dict]:
+        iv, words = self.app.invest, rest.strip().lower().split()
+        if words and words[0] == "plan":
+            if len(words) < 2:
+                lab = iv.lab_now() or {}
+                keys = ", ".join(f"<code>{r['key']}</code>" for r in lab.get("strategies", []))
+                return [reply(f"Which plan? /invest plan trend_spy — choices: {keys or 'loading…'}")]
+            label = iv.set_plan(words[1])
+            if not label:
+                return [reply(f"No plan called {esc(words[1])}. /invest lists them.")]
+            return [reply(f"🧺 You're following <b>{esc(label)}</b>.\n\n" + iv.text(now))]
+        if words and words[0] in {"test", "rerun", "refresh"}:
+            await iv.load(now)
+            iv._lab_key = None
+            await iv.refresh_lab(now)
+        elif iv.on and not iv.lab_now():
+            await iv.tick(now)
+        return [reply(iv.text(now))]
+
     async def cmd_btc15(self, rest: str, now: float) -> list[dict]:
         ud = self.app.updown
         if ud.on and getattr(self.app.alpaca, "ok", False):
@@ -606,9 +637,10 @@ class Commands:
 
 ALIASES = {"c": "check", "edge": "setups", "gap": "gappers", "g": "gappers", "j": "journal", "leaks": "journal",
            "p": "plan", "report": "day", "pos": "positions", "acct": "accounts", "account": "accounts",
-           "settings": "rules", "health": "status", "q": "ask", "w": "watch", "today": "trades",
+           "settings": "rules", "health": "status", "q": "ask", "w": "watch", "mytrades": "trades",
            "paper": "autopilot", "auto": "autopilot", "ap": "autopilot", "bot": "autopilot",
-           "coin": "crypto", "coins": "crypto", "cr": "crypto", "trend": "crypto",
+           "coin": "crypto", "coins": "crypto", "cr": "crypto", "trend": "crypto", "inv": "invest", "etf": "invest",
+           "etfs": "invest", "tactical": "invest", "now": "today", "todo": "today",
            "btc": "btc15", "bitcoin": "btc15", "updown": "btc15", "15m": "btc15", "btc15m": "btc15", "ud": "btc15"}
 
 NO_DATA = ("Market data isn't connected. DayBot needs a free Alpaca account for prices: sign up at alpaca.markets, "

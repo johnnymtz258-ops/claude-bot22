@@ -78,6 +78,10 @@ SETTINGS = {s.name: s for s in (
     Setting("CRYPTO_ALERTS", 1, "Message me when the crypto plan changes (at most once a day) (1 = on)", 0, 1, True),
     Setting("BTC15", 1, "BTC 15-minute Up or Down: the odds Bitcoin finishes the current quarter hour up or down (/btc15, dashboard Crypto tab) (1 = on)", 0, 1, True),
     Setting("BTC15_ALERTS", 0, "Send the BTC 15-minute call (silently) a minute into every window — 96 messages a day, so off by default (1 = on)", 0, 1, True),
+    Setting("INVEST", 1, "Invest lab: tests slow ETF strategies on 10 years of prices and tells you what to hold and when it changes (1 = on)", 0, 1, True),
+    Setting("INVEST_BUDGET", 0, "Money the invest plan manages ($). 0 = what you hold in ETFs now", 0, 100_000_000),
+    Setting("INVEST_COST_PCT", 0.03, "Cost of each ETF buy or sell (%) in the lab — ETF spreads are about 0.01-0.05%", 0, 1),
+    Setting("INVEST_ALERTS", 1, "Message me when the invest plan changes, plus a quiet monthly check (1 = on)", 0, 1, True),
     # --- your trades ---------------------------------------------------------------------------------------------
     Setting("CHECK_MY_TRADES", 1, "Check every trade you make the moment it fills (1 = on)", 0, 1, True),
     Setting("MONITOR_POSITIONS", 1, "Watch your open day trades: stop hit, target hit, VWAP lost, close coming (1 = on)", 0, 1, True),

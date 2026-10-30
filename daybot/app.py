@@ -6,8 +6,8 @@ Loops
            week report, Saturday's backtest
   broker   every 20s while the market is active (5 min otherwise): your fills -> checks and recaps
   telegram commands, chart screenshots, buttons (only from your own chat)
-  crypto   every 15s, around the clock: crypto prices, the daily trend re-plan, the crypto autopilot and the BTC
-           15-minute Up or Down call
+  crypto   every 15s, around the clock: crypto prices, the daily trend re-plan, the crypto autopilot, the BTC
+           15-minute Up or Down call and the Invest lab (ETF strategies, re-checked after each close)
   web      the dashboard at http://localhost:8788
 """
 from __future__ import annotations
@@ -31,6 +31,7 @@ from .coach import day_report as coach_day_report, leaks, week_report
 from .commands import Commands
 from .config import Config, load
 from .crypto import Crypto
+from .invest import Invest
 from .updown import UpDown
 from .data import MarketData
 from .db import Database
@@ -43,6 +44,7 @@ from .plan import build as build_plan
 from .scanner import Scanner
 from .setups import SETUP_NAMES, label
 from .snaptrade import SnapTrade
+from . import today as today_mod
 from .tg import Notifier, Telegram
 from .util import dumps, esc, loads, num
 
@@ -80,6 +82,7 @@ class App:
         self.monitor = Monitor(cfg, self.db, self.data, self.market, self.notify)
         self.crypto = Crypto(cfg, self.db, self.alpaca, self.notify)
         self.updown = UpDown(cfg, self.db, self.alpaca, self.notify)
+        self.invest = Invest(cfg, self.db, self.alpaca, self.market, self.notify)
         self.snap = snap or SnapTrade(session, cfg.snaptrade_client_id, cfg.snaptrade_consumer_key,
                                       cfg.snaptrade_user_id, cfg.snaptrade_user_secret)
         self.broker = BrokerSync(cfg, self.db, self.snap, self.ledger, self.checker, self.notify, self.market, self.data)
@@ -171,7 +174,8 @@ class App:
             if et(now).weekday() == 4 and now >= self.market.close_ts(day) + 1200 \
                     and self.db.once(f"week:{day}", int(now)):
                 week = week_report(self.db, 7, now)
-                extra = [x for x in (self.autopilot.week_line(now), self.crypto.week_line(now)) if x]
+                extra = [x for x in (self.autopilot.week_line(now), self.crypto.week_line(now),
+                                     self.invest.week_line(now)) if x]
                 await self.notify(week + ("\n\n" + "\n".join(extra) if extra else ""), kind="REPORT")
         quiet = session in {"closed", "post"} or (session == "pre" and now < at(day, "07:00"))
         if quiet:
@@ -191,6 +195,16 @@ class App:
         else:
             self._first_backtest(now)
 
+    def today_parts(self, now: float) -> dict:
+        from .dashboard import _in_play, _safe
+        return {"invest": _safe(lambda: self.invest.summary(now), {"on": self.invest.on, "ready": False}),
+                "crypto": _safe(lambda: self.crypto.summary(now), {"on": self.crypto.on, "board": []}),
+                "updown": _safe(lambda: self.updown.summary(now), {"on": self.updown.on, "ready": False}),
+                "autopilot": self.autopilot.summary(now, light=True), "in_play": _in_play(self, day_of(now), now)}
+
+    def today(self, now: float) -> dict:
+        return today_mod.build(self, now, self.today_parts(now))
+
     async def morning_plan(self, now: float, send: bool = True) -> str:
         await self.data.load_daily(["SPY", "QQQ"], now)
         await self.data.refresh(["SPY", "QQQ"], now)
@@ -202,6 +216,10 @@ class App:
                 if e and e["days"] <= 1:
                     emap[sym] = e["text"]
         text = build_plan(self.cfg, self.db, self.data, self.edge, self.scanner, now, self.account_size(), positions, emap)
+        try:
+            text = today_mod.short(self.today(now)) + "\n\n" + text
+        except Exception as exc:                                  # the plan must still go out
+            self.last_error = f"today: {type(exc).__name__}: {exc}"
         if send:
             photo = None
             gs = self.scanner.gappers(day_of(now))
@@ -386,12 +404,13 @@ class App:
             lines.append(self.crypto.status_line(now))
             if self.updown.on:
                 lines.append(self.updown.status_line(now))
+            lines.append(self.invest.status_line(now))
         ts = int(num(self.db.get_meta("backtest_ts"), 0))
         lines.append(f"🧪 Backtest: {et(ts).strftime('%b %d') if ts else 'not run yet'}"
                      + (f" ({self.backtest_progress})" if self.backtest_task and not self.backtest_task.done() else ""))
         errs = [e for e in (self.alpaca.last_error, self.snap.last_error, self.broker.last_error, self.data.last_error,
                             self.scanner.last_error, self.last_error, self.ai.last_error, self.crypto.last_error,
-                            self.updown.last_error)
+                            self.updown.last_error, self.invest.last_error)
                 if e]
         if errs:
             lines.append("Last errors: " + esc(" | ".join(errs)[:400]))
@@ -409,7 +428,7 @@ class App:
 
     async def crypto_loop(self) -> None:
         while True:
-            for part in (self.updown, self.crypto):
+            for part in (self.updown, self.crypto, self.invest):
                 try:
                     await part.tick(time.time())
                 except Exception as exc:

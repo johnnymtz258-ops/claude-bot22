@@ -125,11 +125,12 @@ class Alpaca:
 
     # ---- stocks ------------------------------------------------------------------------------------------------
     async def bars(self, symbols: list[str], timeframe: str, start: float, end: float | None = None,
-                   feed: str | None = None) -> dict[str, list[tuple]]:
+                   feed: str | None = None, adjustment: str = "split") -> dict[str, list[tuple]]:
         """Bars for many symbols: {symbol: [(ts, o, h, l, c, v), ...]} oldest first. timeframe: 1Min, 5Min, 1Day…
 
         feed='sip' on the free plan reads the full market up to 16 minutes ago (more accurate volume and premarket);
-        the default feed is real-time."""
+        the default feed is real-time. adjustment: 'split' (default), or 'all' for prices that include dividends —
+        what a long-term holder actually earned."""
         feed = feed or self.feed
         end = end or time.time()
         if feed == "sip" and not self.realtime_sip:
@@ -143,7 +144,8 @@ class Alpaca:
             token = None
             for _ in range(200):
                 params = {"symbols": ",".join(chunk), "timeframe": timeframe, "start": iso(start), "end": iso(end),
-                          "limit": 10000, "adjustment": "split", "feed": feed, "sort": "asc", "page_token": token}
+                          "limit": 10000, "adjustment": adjustment, "feed": feed, "sort": "asc",
+                          "page_token": token}
                 try:
                     data = await self._get(self.data_base, "/v2/stocks/bars", params)
                 except AlpacaError as exc:

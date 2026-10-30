@@ -113,6 +113,7 @@ dialog::backdrop{background:rgba(0,0,0,.55)}dialog img{width:100%;border-radius:
   <nav class="tabs" id="tabs">
     <button data-tab="today" class="on">Today</button>
     <button data-tab="autopilot">🤖 Autopilot</button>
+    <button data-tab="invest">🧺 Invest</button>
     <button data-tab="crypto">🪙 Crypto</button>
     <button data-tab="market">Market</button>
     <button data-tab="journal">My trades</button>
@@ -122,6 +123,15 @@ dialog::backdrop{background:rgba(0,0,0,.55)}dialog img{width:100%;border-radius:
 </header>
 <main>
   <section id="tab-today" class="tab on">
+    <div class="card" id="todo-card">
+      <div class="card-head"><h2>📋 What to do today</h2><span class="muted" id="todo-day"></span></div>
+      <div class="banner" id="todo-head" style="margin-bottom:10px"></div>
+      <div id="todo-items"></div>
+      <div class="card-head" style="margin-top:14px"><h2>What each part is worth at your size</h2>
+        <span class="muted">from its own test — a guide, not a promise</span></div>
+      <div class="table-wrap"><table id="score"></table></div>
+      <div class="hint" id="score-note" style="margin:10px 0 0"></div>
+    </div>
     <div class="tiles" id="today-tiles"></div>
     <div class="grid2">
       <div class="card">
@@ -195,6 +205,38 @@ dialog::backdrop{background:rgba(0,0,0,.55)}dialog img{width:100%;border-radius:
           <button class="btn sec" id="auto-reset" type="button">Start over…</button>
         </div>
       </div>
+    </div>
+  </section>
+
+  <section id="tab-invest" class="tab">
+    <div class="banner" id="iv-verdict"></div>
+    <div class="card">
+      <div class="card-head"><h2>Your plan</h2><span class="muted" id="iv-asof"></span></div>
+      <div class="row" style="margin-bottom:10px"><label class="muted" for="iv-plan">Following</label>
+        <select id="iv-plan"></select><span class="muted" id="iv-planabout" style="font-size:13px"></span></div>
+      <div id="iv-now" style="margin-bottom:8px"></div>
+      <div class="table-wrap"><table id="iv-actions"></table></div>
+      <div class="muted" id="iv-since" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Every plan, tested</h2><span class="muted" id="iv-testnote"></span></div>
+      <div class="table-wrap"><table id="iv-board"></table></div>
+    </div>
+    <div class="grid2">
+      <div class="card"><div class="card-head"><h2>Growth of $100</h2><span class="muted">log scale · costs included</span></div>
+        <div id="iv-curve" class="lines"></div></div>
+      <div class="card"><div class="card-head"><h2>Each year</h2></div><div class="table-wrap"><table id="iv-years"></table></div></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>How the Invest lab works</h2></div>
+      <ul class="list muted" style="font-size:13px">
+        <li>Slow, well-studied ETF strategies, tested on all the free daily history Alpaca has (about 10 years, including the 2018 drop, the 2020 crash and the 2022 bear market), dividends included.</li>
+        <li>Each day's decision uses only that day's close and is traded at the <i>next</i> open, paying a cost on every dollar traded. The numbers are the textbook ones (200-day average, 12-month momentum…) — nothing was tuned on this data.</li>
+        <li>Most plans earn a bit <i>less</i> than holding SPY in a rising market. They exist to sidestep the big drops. If none beat holding, the honest plan is "keep buying a broad index fund" — and that's what it says.</li>
+        <li>It messages you only when your plan changes, and once a month. It never places a trade; you do it in the app, with fractional shares and no commission.</li>
+      </ul>
+      <div class="row" style="margin-top:12px"><button class="btn sec" id="iv-refresh" type="button">Re-run the test</button>
+        <span class="muted" id="iv-note"></span></div>
     </div>
   </section>
 
@@ -402,6 +444,8 @@ function render(s) {
     `<li><span class="when">${esc(e.time)}</span>${esc(strip(e.text))}</li>`).join('') : '<li class="muted">Quiet so far.</li>';
 
   renderAutopilot(ap);
+  renderTodo(s.todo || {}, s);
+  renderInvest(s.invest || {});
   renderCrypto(s.crypto || {});
   renderUpDown(s.updown || {});
 
@@ -456,7 +500,7 @@ function render(s) {
   if ($('tab-settings').classList.contains('on')) renderSettings(s, false);
 }
 
-function spark(points) {
+function spark(points, unit = 'R') {
   if (!points || points.length < 2) return '<span class="muted">—</span>';
   const W = 140, H = 30, lo = Math.min(0, ...points), hi = Math.max(0, ...points), span = (hi - lo) || 1;
   const x = i => (i * (W - 2) / (points.length - 1) + 1).toFixed(1), y = v => (H - 2 - (v - lo) * (H - 4) / span).toFixed(1);
@@ -464,7 +508,7 @@ function spark(points) {
   return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="running total ${end.toFixed(1)}R">
     <line x1="1" x2="${W - 1}" y1="${y(0)}" y2="${y(0)}" stroke="var(--line)" stroke-width="1"/>
     <polyline points="${points.map((v, i) => x(i) + ',' + y(v)).join(' ')}" fill="none" stroke="${color}" stroke-width="1.6"/></svg>
-    <span class="${cls(end)}" style="font-size:12px">${end > 0 ? '+' : ''}${end.toFixed(0)}R</span>`;
+    <span class="${cls(end)}" style="font-size:12px">${end > 0 ? '+' : ''}${end.toFixed(0)}${unit}</span>`;
 }
 
 function renderDataSays(s, shorts) {
@@ -528,6 +572,82 @@ function drawCurve(points, start) {
     <polyline points="${line}" fill="none" stroke="${color}" stroke-width="2.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>${dots}</svg>`;
   $('curve-note').textContent = `dashed line = where it started (${usd(start)})`;
 }
+
+// ---- what to do today ----
+const TRUST = {proven: '✅', beat: '✅', smoother: '🟢', promising: '🟡', aggressive: '🟠', flat: '⚪', no_better: '⚪', thin: '⚪', untested: '⚪', negative: '🔴', benchmark: '▫️', benched: '⏸'};
+const TRUST_WORD = {proven: 'proven', beat: 'beat holding SPY', smoother: 'smoother ride', promising: 'probably real', aggressive: 'high risk', flat: 'no measurable edge', no_better: 'no better than holding', thin: 'too little data', untested: 'not tested', negative: 'loses money', benchmark: 'measuring', benched: 'benched'};
+const STATUS_ICON = {act: '👉', hold: '✅', wait: '⏳', skip: '🚫', off: '⚪'};
+function renderTodo(t, s) {
+  if (!t.items) return;
+  $('todo-day').textContent = t.day || '';
+  const acting = t.items.some(i => i.status === 'act');
+  $('todo-head').className = 'banner ' + (acting ? 'mid' : 'good');
+  $('todo-head').innerHTML = `<b>${esc(t.headline)}</b>`;
+  $('todo-items').innerHTML = t.items.map(i => `<div style="display:grid;grid-template-columns:28px 1fr;gap:2px 8px;padding:9px 0;border-bottom:1px solid var(--line)">
+      <div style="font-size:18px">${STATUS_ICON[i.status] || '•'}</div>
+      <div><b>${i.icon} ${esc(i.title)}</b> ${i.trust ? `<span class="badge ${['proven','beat','smoother','promising'].includes(i.trust) ? 'good' : ['negative','benched'].includes(i.trust) ? 'bad' : ''}" style="margin-left:6px">${TRUST[i.trust] || ''} ${esc(TRUST_WORD[i.trust] || i.trust)}</span>` : ''}
+        ${i.lines.map(l => `<div class="muted" style="font-size:13px">${esc(l)}</div>`).join('')}</div></div>`).join('');
+  table('score', ['Part', 'Trust', 'What its test says', '#Your money', '#Worth about a year', '#Worst drop', 'Live so far'], t.score || [], r =>
+    `<tr><td><b>${esc(r.name)}</b></td><td>${TRUST[r.trust] || ''} <span class="muted" style="font-size:12px">${esc(TRUST_WORD[r.trust] || '')}</span></td>
+     <td class="wrap muted" style="font-size:13px">${esc(r.test || '')}</td>
+     <td class="num">${r.money ? usd(r.money) : '—'}</td>
+     <td class="num ${cls(r.year)}">${r.year == null ? '—' : usd(r.year, true)}</td><td class="num down">${r.drop == null ? '—' : usd(r.drop)}</td>
+     <td class="wrap muted" style="font-size:13px">${esc(r.live || '—')}</td></tr>`, 'Loading…');
+  const inv = s.invest || {}, b = inv.budget || 0;
+  $('score-note').innerHTML = b && b < 5000 ? `On ${usd(b)}, even a good plan earns tens of dollars a year. <b>Adding money does more:</b> ${usd(50)} a month adds ${usd(600)} a year, before any return.` : '';
+}
+
+// ---- invest ----
+const IV_VERDICT = {beat: 'good', smoother: 'good', aggressive: 'mid', no_better: '', negative: 'bad', thin: ''};
+const dayT = d => Date.parse(d + 'T12:00:00Z') / 1000;
+function renderInvest(v) {
+  if (!v.on) { $('iv-verdict').className = 'banner'; $('iv-verdict').innerHTML = '<b>🧺 The Invest lab is off.</b> <span class="muted">Settings → Invest.</span>'; return; }
+  if (!v.ready) { $('iv-verdict').className = 'banner'; $('iv-verdict').innerHTML = `<b>🧺 Loading ETF history…</b> <span class="muted">${esc(v.error || 'about 10 years of daily prices from Alpaca, then every plan is tested')}</span>`; return; }
+  const rec = v.strategies.find(r => r.key === v.recommended), plan = v.strategies.find(r => r.key === v.plan), spy = v.strategies.find(r => r.key === 'bh_spy');
+  const none = v.recommended === 'bh_spy';
+  $('iv-verdict').className = 'banner ' + (none ? 'mid' : 'good');
+  $('iv-verdict').innerHTML = `<b>What the test says</b><div style="margin-top:4px">${none
+    ? 'Nothing here beat simply <b>holding SPY</b> after costs — the plan is to keep buying a broad index fund (VOO / VTI) and not trade it.'
+    : `The plan worth following is <b>${esc(rec.label)}</b>: ${esc(rec.verdict_text)}. Holding SPY did ${pc(spy.perf.cagr * 100)} a year with a worst drop of ${pc(spy.perf.max_dd * 100, 0)}; this did ${pc(rec.perf.cagr * 100)} with ${pc(rec.perf.max_dd * 100, 0)}.`}</div>
+    <div class="muted" style="margin-top:6px;font-size:13px">${esc(v.start)} → ${esc(v.end)} · ${(v.days / 252).toFixed(1)} years · ${v.cost_pct}% cost per trade included</div>`;
+  $('iv-asof').textContent = `prices to ${v.end}`;
+  const sel = $('iv-plan');
+  if (document.activeElement !== sel) {
+    sel.innerHTML = v.strategies.map(r => `<option value="${esc(r.key)}"${r.key === v.plan ? ' selected' : ''}>${esc(r.label)}${r.key === v.recommended ? ' ★ recommended' : ''}</option>`).join('');
+  }
+  $('iv-planabout').textContent = plan.about || '';
+  $('iv-now').innerHTML = `<b>${esc(plan.explain || '')}</b> → plan holds <b>${esc(v.plan_now)}</b>`;
+  table('iv-actions', ['Do this', 'Fund', '#Now', '#Plan wants'], v.actions, a =>
+    `<tr><td><b class="${a.side === 'buy' ? 'up' : 'down'}">${a.side === 'buy' ? 'Buy' : 'Sell'} ${usd(a.dollars)}</b></td><td>${esc(a.ticker)} <span class="muted">${esc(a.name)}</span></td>
+     <td class="num">${usd(a.have)}</td><td class="num">${usd(a.want)}</td></tr>`,
+    v.budget ? `You already hold the plan (${usd(v.budget)}). Nothing to do.` : 'Set the money this plan manages in Settings → Invest (or hold ETFs in a linked account).');
+  $('iv-since').innerHTML = v.since && v.since.plan != null ? `Since ${esc(v.since.since)}: plan <b class="${cls(v.since.plan)}">${pc(v.since.plan * 100)}</b> vs SPY ${pc((v.since.spy || 0) * 100)}.${v.other ? ` Holdings outside the plan (single stocks…): ${usd(v.other)}.` : ''}` : (v.other ? `Holdings outside the plan (single stocks…): ${usd(v.other)}.` : '');
+  $('iv-testnote').textContent = 'compared with holding SPY over the same days';
+  const rows = [...v.strategies].sort((a, b) => b.perf.sharpe - a.perf.sharpe);
+  table('iv-board', ['Plan', 'Verdict', '#A year', '#Worst drop', '#Sharpe', '#Trades a year', '#In stocks', 'Growth'], rows, r => {
+    const kind = {beat: 'good', smoother: 'good', aggressive: 'mid', negative: 'bad'}[r.verdict] || '';
+    const label = r.verdict === 'benchmark' ? 'benchmark' : (TRUST[r.verdict] || '') + ' ' + (TRUST_WORD[r.verdict] || r.verdict);
+    return `<tr${r.key === v.plan ? ' style="background:var(--panel2)"' : ''}><td class="wrap" style="min-width:230px"><b>${esc(r.label)}</b>${r.key === v.recommended ? ' ★' : ''}<div class="muted" style="font-size:12px">${esc(r.about || '')}</div></td>
+      <td><span class="badge ${kind}">${esc(label)}</span></td><td class="num ${cls(r.perf.cagr)}">${pc(r.perf.cagr * 100)}</td><td class="num down">${pc(r.perf.max_dd * 100, 0)}</td>
+      <td class="num" title="80% range ${r.sharpe_ci.lo.toFixed(2)} to ${r.sharpe_ci.hi.toFixed(2)}">${r.perf.sharpe.toFixed(2)}</td><td class="num">${r.trades_per_year.toFixed(1)}</td>
+      <td class="num">${Math.round(r.exposure * 100)}%</td><td>${spark((r.curve || []).map(p => p[1] - 100), '%')}</td></tr>`; });
+  const pick = [plan, v.strategies.find(r => r.key === v.recommended), spy, v.strategies.find(r => r.key === 'mix6040')].filter((r, i, a) => r && a.indexOf(r) === i);
+  const colors = ['var(--accent)', 'var(--up)', 'var(--warn)', 'var(--muted)'];
+  lineChart('iv-curve', pick.map((r, i) => ({points: (r.curve || []).map(p => [dayT(p[0]), p[1]]), color: colors[i], label: r.label, width: i === 0 ? 2.6 : 1.8})),
+    {log: true, base: 100, empty: 'No data yet.', label: 'Growth of $100'});
+  const yrs = [...new Set(v.strategies.flatMap(r => Object.keys(r.years || {})))].sort();
+  const cols = pick.slice(0, 3);
+  table('iv-years', ['Year', ...cols.map(r => '#' + r.label)], yrs, y =>
+    `<tr><td>${esc(y)}</td>${cols.map(r => `<td class="num ${cls((r.years || {})[y])}">${(r.years || {})[y] == null ? '—' : pc(r.years[y] * 100, 0)}</td>`).join('')}</tr>`, 'No data yet.');
+}
+$('iv-plan').addEventListener('change', async e => {
+  await fetch('/api/invest', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({action: 'plan', plan: e.target.value})}); load();
+});
+$('iv-refresh').addEventListener('click', async () => {
+  $('iv-note').textContent = 'Testing… (about a minute)';
+  await fetch('/api/invest', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({action: 'refresh'})});
+  $('iv-note').textContent = 'Done.'; load();
+});
 
 // ---- crypto ----
 const CR_REASON = {'trend on': 'trend started', 'trend off': 'trend broke', bigger: 'added', smaller: 'trimmed'};
@@ -655,7 +775,7 @@ function renderSettings(s, force) {
   if (document.activeElement && document.activeElement.closest && document.activeElement.closest('#settings')) return;
   const groups = {};
   s.settings.forEach(x => (groups[x.group] = groups[x.group] || []).push(x));
-  const order = ['Your rules', 'Alerts', 'Autopilot', 'Crypto', 'Scanner', 'Options', 'Other'];
+  const order = ['Your rules', 'Alerts', 'Autopilot', 'Invest', 'Crypto', 'Scanner', 'Options', 'Other'];
   $('settings').innerHTML = order.filter(g => groups[g]).map(g => `<div class="card"><div class="card-head"><h2>${esc(g)}</h2></div>` +
     groups[g].map(x => `<div class="set"><div class="n" title="${esc(x.name)}">${esc(x.label || x.name)}</div>
       <div>${x.bool ? `<label class="switch"><input type="checkbox" data-n="${esc(x.name)}" ${x.value >= 0.5 ? 'checked' : ''}><span></span></label>`

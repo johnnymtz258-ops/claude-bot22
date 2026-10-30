@@ -8,6 +8,7 @@ from pathlib import Path
 from aiohttp import web
 
 from . import VERSION
+from . import today as today_mod
 from .clock import clock_text, day_of, et
 from .util import loads, num
 from .coach import leaks
@@ -131,6 +132,10 @@ def state(app, now: float | None = None) -> dict:
     feed = [{**e, "time": clock_text(e["ts"]) if e.get("ts") else ""} for e in feed]
     accounts = app.db.rows("select id, name, institution, number, total, cash, buying_power, margin, "
                            "coalesce(checks, 1) as checks from accounts order by total desc")
+    in_play_s = _in_play(app, day, now)
+    crypto_s = _safe(lambda: app.crypto.summary(now), {"on": app.crypto.on, "board": []})
+    updown_s = _safe(lambda: app.updown.summary(now), {"on": app.updown.on, "ready": False})
+    invest_s = _safe(lambda: app.invest.summary(now), {"on": app.invest.on, "ready": False})
     return {
         "version": VERSION, "now": int(now), "session": app.market.session(now), "market": _market_text(app, now),
         "account": account, "cash": spendable(app.db), "holdings": holdings, "accounts": accounts,
@@ -146,10 +151,12 @@ def state(app, now: float | None = None) -> dict:
                     "paper": r["paper"]} for r in table],
         "backtest_info": {"ts": int(num(app.db.get_meta("backtest_ts"), 0)),
                           **(loads(app.db.get_meta("backtest_summary"), {}) or {})},
-        "in_play": _in_play(app, day, now),
+        "in_play": in_play_s,
         "gauge": app.paper.stats(), "journal": lk, "autopilot": auto,
-        "crypto": _safe(lambda: app.crypto.summary(now), {"on": app.crypto.on, "board": []}),
-        "updown": _safe(lambda: app.updown.summary(now), {"on": app.updown.on, "ready": False}),
+        "crypto": crypto_s, "updown": updown_s, "invest": invest_s,
+        "todo": _safe(lambda: today_mod.build(app, now, {"invest": invest_s, "crypto": crypto_s, "updown": updown_s,
+                                                          "autopilot": auto, "in_play": in_play_s}),
+                       {"headline": "", "items": [], "score": []}),
         "feed": feed,
         "status": app.status_text(now), "backtest": app.backtest_progress,
         "settings": [{"name": n, "label": LABELS.get(n, n.replace("_", " ").capitalize()), "value": app.cfg.get(n),
@@ -178,6 +185,8 @@ LABELS = {
     "CRYPTO_TARGET_VOL": "Risk level (% swing a year)", "CRYPTO_COST_PCT": "Cost per crypto buy or sell (%)",
     "CRYPTO_AUTOPILOT_START": "Crypto autopilot start ($)", "CRYPTO_ALERTS": "Message me plan changes",
     "BTC15": "BTC 15-minute call", "BTC15_ALERTS": "Send it every 15 minutes",
+    "INVEST": "Invest lab (ETF plans)", "INVEST_BUDGET": "Money the plan manages ($)",
+    "INVEST_COST_PCT": "Cost per ETF trade (%)", "INVEST_ALERTS": "Message me plan changes",
 }
 
 GROUPS = {
@@ -190,6 +199,7 @@ GROUPS = {
     "Scanner": ("MIN_PRICE", "GAP_MIN_PCT", "MIN_AVG_VOLUME", "WATCH_MAX"),
     "Crypto": ("CRYPTO", "CRYPTO_BUDGET", "CRYPTO_COINS", "CRYPTO_TARGET_VOL", "CRYPTO_COST_PCT",
                "CRYPTO_AUTOPILOT_START", "CRYPTO_ALERTS", "BTC15", "BTC15_ALERTS"),
+    "Invest": ("INVEST", "INVEST_BUDGET", "INVEST_COST_PCT", "INVEST_ALERTS"),
     "Options": ("OPTION_IDEAS", "OPTIONS_MAX_PREMIUM_PCT", "ALLOW_0DTE", "OPTION_MIN_DTE", "OPTION_MAX_SPREAD_PCT",
                 "OPTION_MIN_OI"),
 }
@@ -288,6 +298,20 @@ def make_app(app) -> web.Application:
             res["status"] = out.get("status") or out.get("error")
         if action in {"on", "reset"}:
             await app.crypto.tick(now)
+        return web.json_response(res)
+
+    @routes.post("/api/invest")
+    async def api_invest(req):
+        body = await req.json()
+        action, now = str(body.get("action", "")), time.time()
+        res = {"ok": True}
+        if action == "plan":
+            res["label"] = app.invest.set_plan(str(body.get("plan", "")))
+            res["ok"] = bool(res["label"])
+        elif action == "refresh":
+            await app.invest.load(now)
+            app.invest._lab_key = None
+            await app.invest.refresh_lab(now)
         return web.json_response(res)
 
     @routes.post("/api/backtest")

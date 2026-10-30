@@ -165,7 +165,7 @@ class FakeAlpaca:
     def ok(self) -> bool:
         return True
 
-    async def bars(self, symbols, timeframe, start, end=None, feed=None):
+    async def bars(self, symbols, timeframe, start, end=None, feed=None, adjustment=None):
         end = min(end or self.now, self.now)
         self.calls.append(("bars", tuple(symbols), timeframe, feed))
         out = {}
@@ -289,6 +289,57 @@ def btc_minutes(start_ts: int, minutes: int, start: float = 70_000.0, seed: int 
         o = c
         c = c * math.exp(rnd.gauss(momentum * last_dir * vol, vol))
         out.append((t, o, max(o, c), min(o, c), c, 1.0))
+    return out
+
+
+def etf_world(end_day: str = "2026-10-23", years: float = 10.8, seed: int = 3) -> dict[str, list[tuple]]:
+    """Daily bars for the Invest lab's ETFs: a market with bull runs, a crash and a bear market; bonds and gold that
+    behave differently, T-bills that creep up, and 3× Nasdaq that compounds the daily moves."""
+    import datetime as dt
+    import math
+    rnd = random.Random(seed)
+    end = dt.date.fromisoformat(end_day)
+    days, d = [], end - dt.timedelta(days=int(years * 365.25))
+    while d <= end:
+        if d.weekday() < 5:
+            days.append(d.isoformat())
+        d += dt.timedelta(days=1)
+    n = len(days)
+
+    def regime(i):
+        f = i / n
+        if f < 0.22:
+            return 0.0006, 0.007                         # bull
+        if f < 0.27:
+            return -0.006, 0.02                          # crash
+        if f < 0.55:
+            return 0.0008, 0.008                         # bull
+        if f < 0.68:
+            return -0.0012, 0.012                        # bear
+        return 0.0007, 0.0075                            # bull
+    mkt = []
+    for i in range(n):
+        mu, sd = regime(i)
+        mkt.append(rnd.gauss(mu, sd))
+    spec = {"SPY": (1.0, 0.0, 0.002), "QQQ": (1.25, 0.0001, 0.004), "IWM": (1.1, 0.0, 0.006), "EFA": (0.85, -0.0001, 0.005),
+            "EEM": (0.9, -0.0002, 0.007), "VNQ": (0.8, 0.0, 0.006), "AGG": (-0.05, 0.0002, 0.002),
+            "TLT": (-0.15, 0.0002, 0.006), "GLD": (0.05, 0.0002, 0.008)}
+    for sec, beta in zip(("XLK", "XLF", "XLE", "XLV", "XLY", "XLP", "XLI", "XLU", "XLB"),
+                         (1.2, 1.1, 1.0, 0.7, 1.05, 0.5, 1.0, 0.45, 0.95)):
+        spec[sec] = (beta, rnd.uniform(-0.0001, 0.0002), 0.005)
+    rets: dict[str, list[float]] = {}
+    for sym, (beta, drift, idio) in spec.items():
+        rets[sym] = [beta * mkt[i] + drift + rnd.gauss(0, idio) for i in range(n)]
+    rets["TQQQ"] = [max(-0.9, 3 * r) - 0.00008 for r in rets["QQQ"]]
+    rets["BIL"] = [0.00008 for _ in range(n)]
+    out = {}
+    for sym, rs in rets.items():
+        px, rows = 100.0, []
+        for i, day in enumerate(days):
+            o = px * (1 + rnd.gauss(0, 0.001))
+            px = px * math.exp(rs[i]) if sym != "BIL" else px * (1 + rs[i])
+            rows.append((at(day, "00:00"), o, max(o, px) * 1.001, min(o, px) * 0.999, px, 1e6))
+        out[sym] = rows
     return out
 
 
