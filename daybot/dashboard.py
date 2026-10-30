@@ -29,7 +29,7 @@ def _curve(bt: dict | None, points: int = 60) -> list[float]:
         trades = (loads(bt.get("detail"), {}) or {}).get("trades") or []
         cum, series = 0.0, []
         for row in trades:
-            cum += num(row[-1])
+            cum += num(row[2])
             series.append(round(cum, 2))
         step = max(1, -(-len(series) // points))
         if len(_CURVES) > 64:

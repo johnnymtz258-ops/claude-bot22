@@ -15,7 +15,10 @@ every fill, flat by 3:55pm, stop assumed first when a bar touches both).
     since yesterday's close, held to the close.
 
 A setup is PROVEN only when it made money after costs in BOTH halves of the period, still does without its 3
-best trades, and has 40+ trades. Proven setups ping you; the rest are paper-traded (silently) until they are.
+best trades, has 40+ trades and its average is clearly above zero even when whole days are resampled (so a lucky
+week can't carry it). PROMISING means a positive average that is probably real (85% sure it isn't luck); FLAT means
+no measurable edge either way. Only proven and promising setups reach you and the autopilot; the rest are
+paper-traded (silently) and can earn their way in.
 """
 from __future__ import annotations
 
@@ -27,6 +30,7 @@ from .clock import Market, at, day_of
 from .universe import LEVERED, all_stocks, cost_pct, dollar_volume, liquid
 from .setups import (BAND_EXIT_LAST, BAND_STEP, EOD_START, SETUP_NAMES, Day, detect, eod_rank, eod_signal,
                      label, simulate)
+from .stats import clustered_mean_ci, series_stats
 from .util import dumps, num
 
 CORE = ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "TSLA", "AMD", "META", "AMZN", "GOOGL", "NFLX", "AVGO", "PLTR",
@@ -49,11 +53,15 @@ BAND_SYMBOLS = ("SPY", "QQQ")
 INPLAY_LOOKBACK = 14            # days of first-5-minute volume an in-play stock is compared with
 INPLAY_MIN_RVOL = 1.0           # at least its usual first 5 minutes
 INPLAY_MIN_ATR = 0.50           # $ — a daily range big enough to trade
-SETUPS_VERSION = "4"            # bump when setups change: the backtest runs again on its own (4: whole market, real costs)
+SETUPS_VERSION = "5"            # bump when setups change: the backtest runs again on its own (4: whole market, real costs)
 
 MIN_TRADES_PROVEN = 40
 STATUS_TEXT = {"proven": "✅ proven", "promising": "🟡 promising", "thin": "⚪ not enough trades",
-               "negative": "🔴 loses money", "benched": "⏸ benched (losing in paper)", "untested": "⚪ untested"}
+               "flat": "⚪ no measurable edge", "negative": "🔴 loses money",
+               "benched": "⏸ benched (losing in paper)", "untested": "⚪ untested"}
+NO_EDGE = frozenset({"negative", "flat", "benched"})     # paper only: never alerted, never followed by the autopilot
+MIN_AVG_PROMISING = 0.05                                  # R a trade, after costs
+SURE_PROMISING = 0.85                                     # how often resampled days must still be positive
 
 
 def make_day(symbol: str, day: str, bars5: list, daily_prior: list, market: Market, in_play: int = 0,
@@ -95,8 +103,13 @@ def replay_day(symbol: str, day: str, bars5: list, daily_prior: list, market: Ma
             if res and res["status"] == "closed":
                 trades.append({"setup": sig.setup, "direction": sig.direction, "symbol": symbol, "day": day,
                                "ts": sig.ts, "r": res["r"], "reason": res["reason"], "entry": res["entry"],
-                               "exit": res["exit"], "entry_ts": res["entry_ts"]})
+                               "exit": res["exit"], "entry_ts": res["entry_ts"], "pct": _pct(res)})
     return trades
+
+
+def _pct(res: dict) -> float:
+    """What the trade made, in % of the money put in (after costs): R × the stop distance as a share of the price."""
+    return round(res["r"] * res["risk"] / res["entry"] * 100, 4) if res.get("entry") else 0.0
 
 
 def band_moves(bars5: list, day: str, market: Market) -> dict[int, float]:
@@ -179,23 +192,32 @@ def _stats(trades: list[dict]) -> dict:
         cum += r
         peak = max(peak, cum)
         dd = min(dd, cum - peak)
+    ci = clustered_mean_ci([(t["day"], t["r"]) for t in trades])
+    pcts = [num(t.get("pct")) for t in trades]
+    pci = clustered_mean_ci([(t["day"], num(t.get("pct"))) for t in trades], seed=12)
+    ps = series_stats(pcts)
     return {"n": n, "won": len(wins) / n, "avg_r": sum(rs) / n, "total_r": sum(rs),
-            "list": [[t["day"], t.get("symbol", ""), round(t["r"], 3)] for t in trades],
+            "list": [[t["day"], t.get("symbol", ""), round(t["r"], 3), round(num(t.get("pct")), 3)] for t in trades],
             "pf": (sum(wins) / abs(sum(losses))) if losses and sum(losses) else (99.0 if wins else 0.0),
             "half1": sum(first) / len(first), "half2": sum(second) / len(second),
             "no_best": (sum(rest) / len(rest)) if rest else 0.0, "max_dd": dd,
-            "days": len({t["day"] for t in trades})}
+            "days": len({t["day"] for t in trades}), "ci_lo": ci["lo"], "ci_hi": ci["hi"], "p_pos": ci["p_pos"],
+            "avg_pct": ps["mean"], "med_pct": ps["median"], "pct_lo": pci["lo"], "pct_hi": pci["hi"]}
 
 
 def grade(st: dict) -> str:
+    """thin < 15 trades · negative (average at or below zero) · proven · promising (a positive average that's
+    probably real) · flat (positive but indistinguishable from zero)."""
     if not st.get("n") or st["n"] < 15:
         return "thin"
     if st["avg_r"] <= 0:
         return "negative"
     if (st["n"] >= MIN_TRADES_PROVEN and st["half1"] >= 0.05 and st["half2"] >= 0.05 and st["no_best"] > 0
-            and st["avg_r"] >= 0.08):
+            and st["avg_r"] >= 0.08 and num(st.get("ci_lo")) > 0):
         return "proven"
-    return "promising"
+    if st["avg_r"] >= MIN_AVG_PROMISING and num(st.get("p_pos")) >= SURE_PROMISING:
+        return "promising"
+    return "flat"
 
 
 def summarize(trades: list[dict]) -> dict[str, dict]:
@@ -313,7 +335,7 @@ async def run(alpaca, market: Market, cfg, today: str, days: int | None = None, 
                 if res and res["status"] == "closed":
                     trades.append({"setup": "eod", "direction": direction, "symbol": x, "day": day, "ts": t0,
                                    "r": res["r"], "reason": res["reason"], "entry": res["entry"], "exit": res["exit"],
-                                   "entry_ts": res["entry_ts"]})
+                                   "entry_ts": res["entry_ts"], "pct": _pct(res)})
         if progress and n % 20 == 0:
             await progress(f"end-of-day test {n + 1}/{len(day_list)}")
 
@@ -342,10 +364,13 @@ def save(db, result: dict, now: int) -> None:
     for key, st in result["stats"].items():
         setup, direction = key.split("_", 1)
         db.insert("""insert into backtests(ts, setup, direction, n, won, avg_r, total_r, pf, half1, half2, no_best,
-                     max_dd, status, days, detail) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                     max_dd, status, days, detail, ci_lo, ci_hi, p_pos, avg_pct, med_pct, pct_lo, pct_hi)
+                     values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                   (now, setup, direction, st["n"], st["won"], st["avg_r"], st["total_r"], st["pf"], st["half1"],
                    st["half2"], st["no_best"], st["max_dd"], st["status"], days,
-                   dumps({"days": st.get("days"), "trades": st.get("list") or []})))
+                   dumps({"days": st.get("days"), "trades": st.get("list") or []}), st.get("ci_lo", 0.0),
+                   st.get("ci_hi", 0.0), st.get("p_pos", 0.5), st.get("avg_pct", 0.0), st.get("med_pct", 0.0),
+                   st.get("pct_lo", 0.0), st.get("pct_hi", 0.0)))
     db.run("delete from backtests where ts<?", (now - 120 * 86400,))         # keep a few months of history
     db.set_meta("backtest_ts", now)
     db.set_meta("backtest_setups", f"{SETUPS_VERSION}:{','.join(SETUP_NAMES)}")
@@ -415,7 +440,8 @@ def describe(edge_status: dict) -> str:
     parts = ["✅ proven live" if edge_status.get("live") else
              STATUS_TEXT.get(edge_status.get("status"), edge_status.get("status", ""))]
     if bt and bt.get("n"):
-        parts.append(f"backtest {int(bt['n'])} trades, {num(bt['avg_r']):+.2f}R avg, {num(bt['won']) * 100:.0f}% won")
+        parts.append(f"backtest {int(bt['n'])} trades, {num(bt['avg_r']):+.2f}R avg, {num(bt['won']) * 100:.0f}% won"
+                     + (f", {num(bt['p_pos']) * 100:.0f}% sure it's real" if bt.get("p_pos") not in (None, 0.5) else ""))
     if paper.get("n"):
         parts.append(f"paper {paper['n']} trades {paper['avg_r']:+.2f}R")
     return " · ".join(parts)

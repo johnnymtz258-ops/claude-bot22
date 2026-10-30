@@ -64,7 +64,9 @@ create table if not exists paper(
 -- backtest results per setup (latest run kept with history)
 create table if not exists backtests(
   id integer primary key, ts integer, setup text, direction text, n integer, won real, avg_r real, total_r real,
-  pf real, half1 real, half2 real, no_best real, max_dd real, status text, days integer, detail text default '');
+  pf real, half1 real, half2 real, no_best real, max_dd real, status text, days integer, detail text default '',
+  ci_lo real default 0, ci_hi real default 0, p_pos real default 0.5, avg_pct real default 0, med_pct real default 0,
+  pct_lo real default 0, pct_hi real default 0);
 
 -- today's watchlist and levels
 create table if not exists watch(day text, symbol text, source text, score real default 0, data text default '{}',

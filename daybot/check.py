@@ -17,7 +17,7 @@ import time
 
 from .accounts import account_size, fmt_qty, size_shares, spendable
 from .alpaca import snap_price, snap_spread_pct
-from .backtest import describe
+from .backtest import NO_EDGE, describe
 from .bars import H, L, T, nearest_levels, resample, split_day
 from .clock import clock_text, day_of, et
 from .news import catalysts, warning
@@ -179,7 +179,7 @@ class TradeCheck:
         alert = self.matching_alert(sym, direction, int(now))
         if alert:
             st = self.edge.status(alert["setup"], alert["direction"])
-            add(items, YELLOW if st["status"] in {"negative", "benched"} else GREEN,
+            add(items, YELLOW if st["status"] in NO_EDGE else GREEN,
                        f"Matches the bot's {label(alert['setup'], alert['direction'])} alert from "
                        f"{clock_text(alert['ts'])} ({describe(st)})")
             info["alert"] = alert

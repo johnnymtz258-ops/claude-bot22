@@ -243,11 +243,13 @@ def day_report(db, ledger, edge, day: str, account: float = 0.0, cfg=None) -> st
         rs = [num(p["r_mult"]) for p in paper]
         by = {}
         for p in paper:
-            by.setdefault(label(p["setup"], p["direction"]), []).append(num(p["r_mult"]))
+            by.setdefault((p["setup"], p["direction"]), []).append(num(p["r_mult"]))
         lines.append(f"\n📊 Market gauge — the bot's setups on paper today: {len(rs)} trades, {sum(rs):+.1f}R, "
-                     f"{sum(1 for r in rs if r > 0)} won")
-        for name, v in sorted(by.items(), key=lambda kv: -sum(kv[1]))[:5]:
-            lines.append(f"   {esc(name)}: {len(v)} · {sum(v):+.1f}R")
+                     f"{sum(1 for r in rs if r > 0)} won (one day is noise — the verdict is the 120-day test)")
+        icon = {"proven": "✅", "promising": "🟡", "flat": "⚪", "negative": "🔴", "benched": "⏸"}
+        for (setup, direction), v in sorted(by.items(), key=lambda kv: -sum(kv[1]))[:5]:
+            verdict = edge.status(setup, direction)["status"] if edge else "untested"
+            lines.append(f"   {icon.get(verdict, '⚪')} {esc(label(setup, direction))}: {len(v)} · {sum(v):+.1f}R")
     lk = leaks(db, 30, start + 86400)
     if lk["leaks"]:
         lines.append(f"\n🎯 Tomorrow's focus (your 30-day leak): {esc(lk['leaks'][0]['name'].lower())} "

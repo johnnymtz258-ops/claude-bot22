@@ -18,7 +18,8 @@ import statistics
 
 from .accounts import account_size, fmt_qty, size_shares, spendable
 from .alpaca import AlpacaError, parse_ts, snap_price
-from .backtest import BAND_SYMBOLS, INPLAY_LOOKBACK, UNIVERSE, Edge, band_moves, band_table, describe, rank_in_play
+from .backtest import (BAND_SYMBOLS, INPLAY_LOOKBACK, NO_EDGE, UNIVERSE, Edge, band_moves, band_table, describe,
+                       rank_in_play)
 from .universe import LEVERED, LEVERED_NAME, all_stocks, liquid
 from .bars import C, H, L, O, T, V, atr, rvol
 from .clock import Market, at, clock_text, day_of, et
@@ -407,7 +408,7 @@ class Scanner:
         longs = [g for g in sigs if g.direction == "long"]
         st = self.edge.status("eod", "long")
         proven = st["status"] == "proven"
-        if longs and self.cfg.flag("ALERTS_ENABLED") and st["status"] not in {"negative", "benched"} \
+        if longs and self.cfg.flag("ALERTS_ENABLED") and st["status"] not in NO_EDGE \
                 and (proven or self.cfg.flag("ALERT_UNPROVEN")):
             text = format_eod(longs[:8], st, account_size(self.db, self.cfg), self.cfg, now, cash=spendable(self.db))
             await self.notify(text, silent=not proven, kind="SETUP", symbol=longs[0].symbol,
@@ -423,7 +424,7 @@ class Scanner:
         shorts = [g for g in sigs if g.direction == "short"] if self.cfg.flag("SHORT_ALERTS") else []
         st = self.edge.status("orb5", "long")
         proven = st["status"] == "proven"
-        if not self.cfg.flag("ALERTS_ENABLED") or not (longs or shorts) or st["status"] in {"negative", "benched"}:
+        if not self.cfg.flag("ALERTS_ENABLED") or not (longs or shorts) or st["status"] in NO_EDGE:
             return
         if not proven and not self.cfg.flag("ALERT_UNPROVEN"):
             return
@@ -466,7 +467,7 @@ class Scanner:
         proven = st["status"] == "proven"
         silent = not proven
         send = self.cfg.flag("ALERTS_ENABLED") and (proven or self.cfg.flag("ALERT_UNPROVEN"))
-        if st["status"] in {"negative", "benched"}:
+        if st["status"] in NO_EDGE:
             send = False                                # known losers: paper only
         if sig.direction == "short" and not self.cfg.flag("SHORT_ALERTS"):
             send = False                                # your broker can't short: paper only unless you turn it on
@@ -481,7 +482,7 @@ class Scanner:
                                   (int(now), day_of(now), sig.symbol, sig.setup, sig.direction, sig.entry, sig.stop,
                                    sig.t1, sig.t2, int(proven), int(silent or not send), sig.reason, dumps(sig.context),
                                    dumps(idea) if idea else ""))
-        follows = ((proven or self.cfg.flag("ALERT_UNPROVEN")) and st["status"] not in {"negative", "benched"}
+        follows = ((proven or self.cfg.flag("ALERT_UNPROVEN")) and st["status"] not in NO_EDGE
                    and (sig.direction == "long" or self.cfg.flag("SHORT_ALERTS")))
         self.paper.open(sig, alert_id, day_of(now), auto=follows)       # the autopilot follows what you'd be sent
         for other in also or []:
@@ -511,7 +512,7 @@ class Scanner:
         return alert_id
 
 
-RANK = {"proven": 0, "promising": 1, "untested": 2, "thin": 3, "negative": 4, "benched": 5}
+RANK = {"proven": 0, "promising": 1, "untested": 2, "thin": 3, "flat": 4, "negative": 5, "benched": 6}
 
 
 def format_alert(sig: Signal, st: dict, idea: dict | None, account: float, cfg, now: float,

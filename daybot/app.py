@@ -220,7 +220,12 @@ class App:
             text += "\n" + auto
         if self.ai.ok and self.cfg.flag("AI"):
             lk = leaks(self.db, 30)
-            notes = await self.ai.coach(f"{text}\n\n30-day groups: {dumps(lk['leaks'][:5] + lk['edges'][:3])}")
+            verdicts = {r["label"]: {"verdict": r["status"],
+                                     "backtest_avg_R": round(num((r["backtest"] or {}).get("avg_r")), 3),
+                                     "sure_it_is_real": round(num((r["backtest"] or {}).get("p_pos"), 0.5), 2)}
+                        for r in self.edge.table() if r["direction"] == "long"}
+            notes = await self.ai.coach(f"{text}\n\n30-day groups: {dumps(lk['leaks'][:5] + lk['edges'][:3])}"
+                                        f"\n\nverdicts (120-day backtest): {dumps(verdicts)}")
             if notes:
                 text += "\n\n<b>Coach's notes</b>\n" + esc(notes)
         if send:
@@ -271,16 +276,21 @@ class App:
         if proven:
             lines.append("✅ <b>Worth following:</b> " + ", ".join(name(k) for k in proven) + " — these ping you now")
         elif close:
-            lines.append("🟡 Nothing proven yet. Closest: " + ", ".join(name(k) for k in close)
-                         + " — made money overall, not steadily enough to trust. Small, or autopilot only.")
+            lines.append("🟡 Nothing is proven. Probably-real but small edge: " + ", ".join(name(k) for k in close)
+                         + ". The autopilot follows these; the rest stay on paper.")
         else:
-            lines.append("🔴 Nothing made money after costs. Keep real money out of these setups for now; paper and the "
-                         "autopilot keep measuring, and a setup that starts winning live gets promoted by itself.")
+            lines.append("🔴 Nothing here has a measurable edge after costs. Day-trading these setups isn't worth "
+                         "real money right now — paper and the autopilot keep measuring, and a setup that starts "
+                         "winning live gets promoted by itself. The 🧺 Invest and 🪙 Crypto plans are where the "
+                         "evidence is.")
         lines.append("")
         for key, st in sorted(res["stats"].items(), key=lambda kv: -kv[1].get("avg_r", 0)):
             setup, direction = key.split("_", 1)
-            lines.append(f"{STATUS_TEXT.get(st['status'], st['status'])} {esc(label(setup, direction))}: {st['n']} trades, "
-                         f"{st['avg_r']:+.2f}R avg, {st['won'] * 100:.0f}% won"
+            sure = f", {st['p_pos'] * 100:.0f}% sure it's real" if st.get("p_pos") is not None and st["n"] >= 15 else ""
+            per = (f" · {st['avg_pct']:+.2f}% of the money a trade (typical trade {st['med_pct']:+.2f}%)"
+                   if st.get("avg_pct") is not None and st["n"] >= 15 else "")
+            lines.append(f"{STATUS_TEXT.get(st['status'], st['status'])} {esc(label(setup, direction))}: {st['n']} "
+                         f"trades, {st['avg_r']:+.2f}R avg{sure}, {st['won'] * 100:.0f}% won{per}"
                          + (" (paper only)" if direction == "short" and not shorts else ""))
         lines.append("\nDetails and charts: the dashboard's Setups tab.")
         return "\n".join(lines)

@@ -5,6 +5,7 @@ your overnight positions, and your rules for the day in dollars.
 """
 from __future__ import annotations
 
+from .backtest import NO_EDGE
 from .bars import C, sma
 from .clock import day_of, et
 from .util import big, esc, money, num, pct, price as fmt_price
@@ -62,17 +63,22 @@ def build(cfg, db, data, edge, scanner, now: float, account: float = 0.0, positi
         lines.append(f"Trend: SPY in a {tone['trend']}")
     table = edge.table()
     proven = [r for r in table if r["status"] == "proven"]
-    losing = [r for r in table if r["status"] in {"negative", "benched"}]
+    losing = [r for r in table if r["status"] in NO_EDGE]
     if proven:
         lines.append("✅ Setups the data backs: " + ", ".join(esc(r["label"]) for r in proven))
     elif any(r["backtest"] for r in table):
-        lines.append("⚪ No setup is proven yet — alerts come silently and labelled; trade them small or not at all")
+        promising = [r for r in table if r["status"] == "promising" and r["direction"] == "long"]
+        lines.append("⚪ No setup is proven yet" + (": the only ones with a probable edge are "
+                                                  + ", ".join(esc(r["label"]) for r in promising)
+                                                  + " — small, or paper first" if promising else
+                                                  " — nothing here has a measurable edge, so sitting out is the plan"))
     else:
         lines.append("⚪ Backtest not run yet — /backtest (takes a few minutes)")
     if losing:
-        lines.append("🔴 Skip these, they lose money here: " + ", ".join(esc(r["label"]) for r in losing))
+        longs = [r for r in losing if r["direction"] == "long"]
+        lines.append("🔴 No edge in the test (paper only): " + ", ".join(esc(r["label"]) for r in longs))
     inplay = next((r for r in table if r["setup"] == "orb5" and r["direction"] == "long"), None)
-    if inplay and inplay["status"] not in {"negative", "benched"} and cfg.get("ORB5_TOP") > 0:
+    if inplay and inplay["status"] not in NO_EDGE and cfg.get("ORB5_TOP") > 0:
         lines.append("🔥 Today's stocks in play come at 9:35am, each with a buy-stop and a stop")
     gappers = scanner.gappers(day)
     if gappers:

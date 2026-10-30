@@ -60,10 +60,18 @@ If the trader is about to break one of their own rules, say that first. Be direc
 hype. Plain text for a phone screen: short paragraphs or a few "•" bullets, no tables, no markdown headers, under \
 200 words."""
 
-COACH_SYSTEM = """You are a trading coach writing three to five short bullet points ("• ") for a retail day trader at \
+COACH_SYSTEM = """You are a trading coach writing three to five short bullet points ("• ") for a retail trader at \
 the end of the day, from the statistics the bot computed (given below). Focus on behaviour the numbers show — what to \
 keep doing, the one habit costing the most money, one concrete thing to do tomorrow. Use the numbers given; don't \
-invent any. Kind but honest. Under 120 words, plain text."""
+invent any. Kind but honest. Under 120 words, plain text.
+
+Hard rules:
+• One day of paper results is noise. Never tell the user to lean on, or avoid, a setup because of how it did today.
+• Each setup has a backtest verdict in the data ("verdicts"). Only ever suggest a setup whose verdict is proven or \
+promising. A setup marked flat, negative or benched has no measured edge — say so if it comes up, never praise it.
+• If nothing has a measured edge, the honest advice is to sit out or paper-trade, and to put new money into the \
+plans that do have evidence. Don't invent a reason to trade.
+• The user's account is small. Don't suggest sizes or leverage."""
 
 
 def sniff_image(data: bytes) -> str:
