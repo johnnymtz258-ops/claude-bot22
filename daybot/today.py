@@ -80,16 +80,21 @@ def _crypto_item(c: dict) -> dict:
             "trust": c["backtest"].get("status", "untested")}
 
 
-def _day_item(table: list[dict], in_play: list[dict], session: str) -> dict:
+def _day_item(table: list[dict], in_play: list[dict], session: str, following: list[dict] | None = None) -> dict:
     longs = [r for r in table if r["direction"] == "long"]
     good = [r for r in longs if r["status"] in ("proven", "promising")]
     if not any(r.get("backtest") for r in longs):
         return {"sleeve": "day", "icon": "⚡", "title": "Day-trade setups", "status": "wait",
                 "lines": ["Not tested yet — the first backtest runs by itself after the close."]}
     if not good:
-        return {"sleeve": "day", "icon": "⚡", "title": "Day-trade setups", "status": "skip",
-                "lines": ["Nothing has a measurable edge after costs, so there's nothing to take today. "
-                          "The bot keeps paper-testing them and tells you the day one earns it."],
+        cand = [f for f in (following or []) if f["kind"] == "candidate"]
+        lines = ["Nothing has a measurable edge after costs, so there's nothing to take today. "
+                 "The bot keeps paper-testing them and tells you the day one earns it."]
+        if cand:
+            lines.append("The autopilot is paper-trading the best candidate so the evidence keeps building: "
+                         + ", ".join(f"{f['label']} ({f['avg_r']:+.2f}R, {f['sure'] * 100:.0f}% sure it's real)" for f in cand)
+                         + ". Not a recommendation — most of its trades lose a little.")
+        return {"sleeve": "day", "icon": "⚡", "title": "Day-trade setups", "status": "skip", "lines": lines,
                 "trust": "flat"}
     names = ", ".join(r["label"] for r in good)
     lines = [f"Only {names} has a probable edge — and it's small: most trades lose a little, a few win big."]
@@ -172,7 +177,8 @@ def build(app, now: float, parts: dict) -> dict:
     table = app.edge.table()
     session = app.market.session(now)
     items = [_invest_item(parts["invest"]), _crypto_item(parts["crypto"]),
-             _day_item(table, parts.get("in_play") or [], session), _btc_item(parts["updown"])]
+             _day_item(table, parts.get("in_play") or [], session, (parts.get("autopilot") or {}).get("following")),
+             _btc_item(parts["updown"])]
     acting = [i for i in items if i["status"] == "act"]
     headline = ("👉 " + "; ".join(f"{i['icon']} {i['title']}" for i in acting)) if acting else \
         "Nothing needs doing right now — the plans are in place. Quiet is the system working."

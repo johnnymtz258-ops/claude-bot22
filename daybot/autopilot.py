@@ -46,6 +46,26 @@ class Autopilot:
     def on(self) -> bool:
         return self.cfg.flag("AUTOPILOT")
 
+    def following(self) -> list[dict]:
+        """The setups it takes right now: the ones that alert you, and silent 'candidates' (a probable but unproven
+        edge) so evidence keeps building."""
+        edge = getattr(self, "edge", None)
+        if not edge:
+            return []
+        out = []
+        for r in edge.table():
+            if r["direction"] == "short" and not self.cfg.flag("SHORT_ALERTS"):
+                continue
+            bt = r.get("backtest") or {}
+            if r["status"] in ("proven", "promising"):
+                kind = r["status"]
+            elif edge.is_candidate(r["setup"], r["direction"]):
+                kind = "candidate"
+            else:
+                continue
+            out.append({"label": r["label"], "kind": kind, "avg_r": num(bt.get("avg_r")), "sure": num(bt.get("p_pos"), 0.5)})
+        return out
+
     # ---- the account --------------------------------------------------------------------------------------------
     def since(self) -> int:
         return int(num(self.db.get_meta("auto_since", "0")))
@@ -239,7 +259,7 @@ class Autopilot:
                     "setup": t["setup"]} for t in self.open_rows() if t["status"] == "pending" and t["entry_type"] == "stop"]
         equity = bal + sum(o["unrealized"] for o in opens)
         wins, losses = sum(p for p in pnls if p > 0), -sum(p for p in pnls if p < 0)
-        out = {"on": self.on, "start": start, "since": self.since(), "balance": bal, "equity": equity,
+        out = {"on": self.on, "following": self.following(), "start": start, "since": self.since(), "balance": bal, "equity": equity,
                "return_pct": (equity / start - 1) * 100 if start else 0.0, "n": len(pnls),
                "won": sum(1 for p in pnls if p > 0) / len(pnls) if pnls else 0.0, "pnl": sum(pnls),
                "avg_r": sum(rs) / len(rs) if rs else 0.0, "pf": wins / losses if losses else (99.0 if wins else 0.0),
@@ -309,8 +329,12 @@ class Autopilot:
     def text(self, now: float) -> str:
         sm = self.summary(now)
         since = et(sm["since"]).strftime("%b %-d") if sm["since"] else "today"
+        fol = sm.get("following") or []
         lines = [f"<b>🤖 Autopilot</b> — pretend {money(sm['start'])} account that follows every DayBot alert "
                  f"(since {since})",
+                 ("Following: " + ", ".join(f"{esc(f['label'])}" + (f" (candidate: {f['avg_r']:+.2f}R, {f['sure'] * 100:.0f}% sure it's real — paper only)"
+                                                                  if f["kind"] == "candidate" else "") for f in fol))
+                 if fol else "Following: nothing — no setup has even a probable edge right now, so it waits.",
                  f"Balance {money(sm['equity'])} ({pct(sm['return_pct'])})"
                  + (f" · SPY {pct(sm['spy_pct'])} same time" if sm.get("spy_pct") is not None else "")]
         if sm["n"]:

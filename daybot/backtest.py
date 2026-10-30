@@ -31,7 +31,7 @@ from .universe import LEVERED, all_stocks, cost_pct, dollar_volume, liquid
 from .setups import (BAND_EXIT_LAST, BAND_STEP, EOD_START, SETUP_NAMES, Day, detect, eod_rank, eod_signal,
                      label, simulate)
 from .stats import clustered_mean_ci, series_stats
-from .util import dumps, num
+from .util import dumps, loads, num
 
 CORE = ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "NVDA", "TSLA", "AMD", "META", "AMZN", "GOOGL", "NFLX", "AVGO", "PLTR",
         "COIN", "MSTR", "SMCI", "MU", "BA", "JPM", "UBER", "SHOP", "SOFI", "HOOD", "ARM", "INTC", "CRWD", "SNOW",
@@ -386,11 +386,30 @@ class Edge:
 
     def __init__(self, db):
         self.db = db
+        self._cache: tuple | None = None
+
+    @staticmethod
+    def regrade(row: dict) -> dict:
+        """A backtest saved before the confidence numbers existed: work them out from its stored trades and grade it by
+        today's rules, so an old, looser verdict can't linger until the next test finishes."""
+        if num(row.get("p_pos"), 0.5) != 0.5 or num(row.get("ci_lo")) != 0 or num(row.get("n")) < 15:
+            return row
+        trades = (loads(row.get("detail"), {}) or {}).get("trades") or []
+        if len(trades) < 15:
+            return row
+        ci = clustered_mean_ci([(t[0], num(t[2])) for t in trades])
+        out = {**row, "ci_lo": ci["lo"], "ci_hi": ci["hi"], "p_pos": ci["p_pos"]}
+        out["status"] = grade(out)
+        return out
 
     def backtest(self) -> dict[str, dict]:
         ts = int(num(self.db.get_meta("backtest_ts"), 0))
+        if self._cache and self._cache[0] == ts:
+            return self._cache[1]
         rows = self.db.rows("select * from backtests where ts=?", (ts,)) if ts else []
-        return {f"{r['setup']}_{r['direction']}": r for r in rows}
+        out = {f"{r['setup']}_{r['direction']}": self.regrade(r) for r in rows}
+        self._cache = (ts, out)
+        return out
 
     def paper(self, setup: str, direction: str, since: int = 0) -> dict:
         rows = self.db.rows("""select r_mult from paper where setup=? and direction=? and status='closed'
@@ -413,6 +432,17 @@ class Edge:
         elif st != "proven" and self.proven_live(paper):
             st, live = "proven", True              # it earned it live, the same bar the backtest has to clear
         return {"status": st, "proven": st == "proven", "backtest": bt, "paper": paper, "live": live}
+
+    CANDIDATE_AVG = 0.05          # R a trade: a positive average that isn't yet 85% likely to be real
+    CANDIDATE_SURE = 0.70
+
+    def is_candidate(self, setup: str, direction: str) -> bool:
+        """A setup with no measurable edge YET but a positive average that's at least 70% likely to be real. It never
+        alerts you; the autopilot paper-trades it so live evidence keeps building (and it can be promoted)."""
+        st = self.status(setup, direction)
+        bt = st["backtest"]
+        return bool(bt and st["status"] == "flat" and num(bt["avg_r"]) >= self.CANDIDATE_AVG
+                    and num(bt.get("p_pos"), 0.5) >= self.CANDIDATE_SURE)
 
     LIVE_N = 30
     LIVE_R = 0.12

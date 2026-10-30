@@ -74,6 +74,7 @@ class App:
         self.paper = Paper(cfg, self.db, self.data, self.market)
         self.autopilot = Autopilot(cfg, self.db, self.data, self.market, self.notify)
         self.paper.auto = self.autopilot
+        self.autopilot.edge = self.edge
         if charts is False:
             self.charts = None
         else:
@@ -553,7 +554,8 @@ WHATS_NEW = ("<b>🆕 New in this version</b>\n"
              "the cheap-side signal pays after fees — it only pings you once that record is positive\n"
              "🔬 <b>Stricter evidence</b>: a setup must beat luck (the test resamples whole days) to be promising or "
              "proven. The opening-range breakout (+0.02R) is now \"no measurable edge\", so the autopilot stops "
-             "following it, and the coach no longer draws conclusions from one day of paper results\n"
+             "following it (it keeps paper-trading the best candidate, the in-play breakout, silently), and the coach "
+             "no longer draws conclusions from one day of paper results\n"
              "🪙 Crypto: dropped the 5- and 10-day trend models — 60% fewer trades and a higher return in both tests; "
              "it still trails Bitcoin in bull runs and falls far less in crashes\n"
              "🧪 Everything is re-tested now — about 20 minutes; the result comes here")

@@ -98,3 +98,65 @@ def test_the_autopilot_verdict_waits_for_enough_trades_and_then_separates_skill_
     noisy = make_app(now=now)
     _auto_rows(noisy, [rnd.gauss(0.02, 1.5) for _ in range(70)])
     assert noisy.autopilot.summary(now)["verdict"].startswith("🟡") and "luck" in noisy.autopilot.summary(now)["verdict"]
+
+
+def test_an_old_backtest_is_regraded_by_todays_rules_the_moment_it_is_read():
+    import random as _r
+    from daybot.backtest import Edge
+    from daybot.db import Database
+    from daybot.util import dumps
+    db = Database(":memory:")
+    rnd = _r.Random(2)
+    trades = [[f"2026-06-{1 + i % 28:02d}", "X", round(rnd.gauss(0.019, 1.0), 3)] for i in range(1400)]     # +0.02R: noise
+    rs = [t[2] for t in trades]
+    # saved by the old code: no confidence numbers, graded 'promising' because the average was positive
+    db.insert("""insert into backtests(ts, setup, direction, n, won, avg_r, total_r, pf, half1, half2, no_best, max_dd,
+                 status, days, detail) values(100,'orb','long',1400,0.5,?,?,1.0,0.03,0.0,0.0,-5,'promising',120,?)""",
+              (sum(rs) / len(rs), sum(rs), dumps({"days": 28, "trades": trades})))
+    db.set_meta("backtest_ts", 100)
+    edge = Edge(db)
+    st = edge.status("orb", "long")
+    assert st["status"] == "flat" and st["backtest"]["p_pos"] != 0.5            # no longer 'promising'
+    assert edge.backtest() is edge.backtest()                                    # cached: the stored trades are read once
+    real = [[f"2026-06-{1 + i % 28:02d}", "Y", round(rnd.gauss(0.5, 1.0), 3)] for i in range(600)]
+    db.insert("""insert into backtests(ts, setup, direction, n, won, avg_r, total_r, pf, half1, half2, no_best, max_dd,
+                 status, days, detail) values(100,'vwap','long',600,0.6,0.5,300,2.0,0.5,0.5,0.4,-5,'promising',120,?)""",
+              (dumps({"days": 28, "trades": real}),))
+    edge._cache = None
+    assert edge.status("vwap", "long")["status"] == "proven"                      # a real edge keeps its verdict
+
+
+def _save_stats(app, setup, direction, **st):
+    from daybot.util import dumps
+    row = {"n": 900, "won": 0.14, "avg_r": 0.138, "total_r": 124.0, "pf": 1.1, "half1": 0.1, "half2": 0.17, "no_best": -0.05,
+           "max_dd": -20, "status": "flat", "days": 120, "ci_lo": -0.09, "ci_hi": 0.37, "p_pos": 0.78, **st}
+    app.db.insert("""insert into backtests(ts, setup, direction, n, won, avg_r, total_r, pf, half1, half2, no_best, max_dd,
+                     status, days, detail, ci_lo, ci_hi, p_pos) values(500,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  (setup, direction, row["n"], row["won"], row["avg_r"], row["total_r"], row["pf"], row["half1"], row["half2"],
+                   row["no_best"], row["max_dd"], row["status"], row["days"], dumps({"days": 120, "trades": []}),
+                   row["ci_lo"], row["ci_hi"], row["p_pos"]))
+    app.db.set_meta("backtest_ts", 500)
+
+
+def test_a_probable_but_unproven_setup_is_paper_traded_by_the_autopilot_and_never_alerted():
+    import asyncio
+    from daybot.clock import at
+    from daybot.setups import Signal
+    from tests.day_helpers import DAY, make_app
+    app = make_app(now=at(DAY, "10:30"))
+    _save_stats(app, "orb5", "long")                                   # +0.14R, 78% sure: flat, but a candidate
+    _save_stats(app, "orb", "long", avg_r=0.019, p_pos=0.61, n=1400)   # +0.02R: just flat
+    _save_stats(app, "vwap", "long", avg_r=-0.1, p_pos=0.0, status="negative")
+    assert app.edge.is_candidate("orb5", "long") and not app.edge.is_candidate("orb", "long")
+    assert not app.edge.is_candidate("vwap", "long")
+    now = at(DAY, "10:30")
+    for setup, sym in (("orb5", "AAA"), ("orb", "BBB"), ("vwap", "CCC")):
+        asyncio.run(app.scanner.alert(Signal(setup, "long", sym, int(now), 100.0, 99.0, 101.0, 102.0, "x"), now))
+    rows = {r["symbol"]: r for r in app.db.rows("select * from paper")}
+    assert rows["AAA"]["auto"] == 1 and rows["BBB"]["auto"] == 0 and rows["CCC"]["auto"] == 0
+    assert not [m for m in app.notes.sent if m["kind"] == "SETUP"]       # a candidate never pings you
+    sm = app.autopilot.summary(now)
+    assert [(f["kind"], f["label"]) for f in sm["following"]] == [("candidate", "In-play 5-min breakout")]
+    assert "candidate: +0.14R, 78% sure it's real — paper only" in app.autopilot.text(now)
+    item = next(i for i in app.today(now)["items"] if i["sleeve"] == "day")
+    assert item["status"] == "skip" and "paper-trading the best candidate" in " ".join(item["lines"])
