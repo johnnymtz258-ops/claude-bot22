@@ -212,6 +212,7 @@ def test_live_end_of_day_bounce_message_and_autopilot():
         daily[sym] = daily_history(PREV, 100.0, 2.0)
     app = make_app(minute, daily, now=at(DAY, "15:00"))
     app.cfg.set("ORB5_TOP", "0")
+    app.cfg.set("AUTOPILOT_MAX_OPEN", "3")                                      # the limit under test
 
     async def walk():
         t = at(DAY, "15:20")
