@@ -326,3 +326,34 @@ def test_it_never_tells_you_to_restructure_your_accounts_unless_you_ask():
     assert item["status"] == "hold" and "INVEST_MANAGE" in " ".join(item["lines"])
     app.cfg.set("INVEST_MANAGE", 1)
     assert any(a["side"] == "sell" for a in app.invest.summary(now)["actions"])
+
+
+def test_monthly_returns_leave_out_partial_months_and_the_growth_calculator_uses_history_honestly():
+    d, dates = dt.date(2026, 1, 1), []
+    while d < dt.date(2026, 5, 8):
+        if d.weekday() < 5:
+            dates.append(d.isoformat())
+        d += dt.timedelta(days=1)
+    curve = [1.001 ** i for i in range(len(dates))]
+    m = iv.monthly_returns(dates, curve)
+    assert len(m) == 3 and all(0.015 < x < 0.025 for x in m)          # Feb, Mar, Apr: the first and last months are partial
+    assert iv.monthly_returns(["2026-01-30", "2026-02-02", "2026-02-27", "2026-03-02"], [1, 1, 1.1, 1.1]) == []
+    g = iv.grow([0.01] * 40, 100, 10, 2)
+    assert g["put_in"] == 340 and g["windows"] == 17 and abs(g["median"] - g["worst"]) < 1e-9
+    flat = iv.grow([0.0] * 40, 100, 10, 2)
+    assert abs(flat["median"] - 340) < 1e-9                               # no return: you get back what you put in
+    mixed = iv.grow([0.02, -0.03] * 30, 0, 100, 3)
+    assert mixed["worst"] <= mixed["p10"] <= mixed["median"] <= mixed["p90"] <= mixed["best"]
+    assert iv.grow([0.01] * 20, 100, 10, 5) is None                       # 20 months can't say what 5 years looks like
+
+
+def test_the_growth_text_uses_the_lab_and_the_command_understands_amounts():
+    app, now = _invest_app()
+    asyncio.run(app.invest.tick(now))
+    lab = app.invest.lab_now()
+    assert all(r.get("monthly") and len(r["monthly"]) > 80 for r in lab["strategies"])
+    out = asyncio.run(app.commands.text("/invest grow 100 5", now))[0]["text"]
+    assert "adding $100.00 a month for 5 years" in out and "Hold SPY" in out and "typically" in out and "overlapping" in out
+    short = asyncio.run(app.commands.text("/invest grow 50 30", now))[0]["text"]
+    assert "for 5 years" in short                                          # an impossible length falls back to 5
+    json.dumps(app.invest.summary(now), default=str)

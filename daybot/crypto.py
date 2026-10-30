@@ -6,11 +6,12 @@ Why trends and not crypto day trades: studies of intraday crypto rules find an e
 a day, gone after costs — and Robinhood's spread is about 1% each way. A trend plan trades a few times a month.
 
 The rules, for each coin, once a day after the daily candle closes:
-  Signal  nine Donchian-channel models with lookbacks of 5, 10, 20, 30, 60, 90, 150, 250 and 360 days. Each one buys
+  Signal  seven Donchian-channel models with lookbacks of 20, 30, 60, 90, 150, 250 and 360 days (the paper also uses
+          5 and 10; at Robinhood's 1% spread those only add trades). Each one buys
           when the close is above every close of its lookback, and sells when the close falls under its trailing stop:
           the middle of the lookback's highest and lowest close, which only ever moves up. The coin's trend score is
-          how many of the nine are in (0-9).
-  Size    each coin gets an equal slice of the money. Inside its slice it holds score/9 × (target volatility ÷ the
+          how many of the seven are in (0-7).
+  Size    each coin gets an equal slice of the money. Inside its slice it holds score/7 × (target volatility ÷ the
           coin's 90-day volatility), at most 2× the slice (the paper's cap) and never more than 100% overall (no
           leverage). A calm coin in a strong trend gets more, a wild one less; no trends anywhere = all cash.
   Trade   at the next price after the candle closes; a coin already held is only re-sized when it's 50%+ off its
@@ -32,14 +33,15 @@ from .bars import C, O, T
 from .clock import clock_text, et
 from .util import dumps, esc, loads, money, num, pct, price as fmt_price
 
-LOOKBACKS = (5, 10, 20, 30, 60, 90, 150, 250, 360)
+LOOKBACKS = (20, 30, 60, 90, 150, 250, 360)      # the paper's 5- and 10-day models are left out: at Robinhood's 1% spread they
+                                                    # only add trades (tested: 60% fewer trades, higher return, same worst drop)
 VOL_DAYS = 90               # realized volatility window (daily returns)
 SLEEVE_CAP = 2.0            # a coin may hold at most 2× its equal slice (the paper's 200% cap)
 DRIFT = 0.5                 # re-size a held coin only when it's 50%+ away from its target (tested best at 1% costs)
 MIN_TRADE = 0.001           # ignore re-sizes smaller than 0.1% of the account
 DAY = 86400
 HISTORY_START = "2020-01-01"
-BT_VERSION = "1"
+BT_VERSION = "2"
 
 # Biggest coins first (rough market size), only ones Robinhood sells in the US. The live list is this, cut to the
 # coins Alpaca has prices for. Stablecoins and gold tokens are never traded.
@@ -122,14 +124,15 @@ def realized_vol(closes: list[float], days: int = VOL_DAYS) -> list[float | None
     return out
 
 
-def coin_series(bars: list[tuple]) -> dict:
+def coin_series(bars: list[tuple], lookbacks: tuple = None) -> dict:
     """Everything the plan needs for one coin, day by day (completed daily bars only)."""
+    lookbacks = lookbacks or LOOKBACKS
     closes = [num(b[C]) for b in bars]
-    flags = {n: trend_flags(closes, n) for n in LOOKBACKS}
-    on = [sum(1 for n in LOOKBACKS if flags[n][i]) for i in range(len(closes))]
+    flags = {n: trend_flags(closes, n) for n in lookbacks}
+    on = [sum(1 for n in lookbacks if flags[n][i]) for i in range(len(closes))]
     return {"ts": [int(b[T]) for b in bars], "open": [num(b[O]) or num(b[C]) for b in bars], "close": closes,
-            "on": on, "score": [k / len(LOOKBACKS) for k in on], "vol": realized_vol(closes),
-            "flags": {n: flags[n][-1] if flags[n] else False for n in LOOKBACKS}}
+            "on": on, "score": [k / len(lookbacks) for k in on], "vol": realized_vol(closes), "models": len(lookbacks),
+            "flags": {n: flags[n][-1] if flags[n] else False for n in lookbacks}}
 
 
 def weight(score: float, vol: float | None, n_coins: int, target_vol_pct: float) -> float:
@@ -146,7 +149,7 @@ def cap_gross(weights: dict) -> dict:
 
 # ---- trading ------------------------------------------------------------------------------------------------------
 def plan_trades(qty: dict, prices: dict, equity: float, targets: dict, drift: float = DRIFT,
-                min_trade: float = MIN_TRADE) -> list[dict]:
+                min_trade: float = MIN_TRADE, ignore: float = 0.0) -> list[dict]:
     """What to buy and sell to move from the coins held to the targets. Sells first, so their cash pays the buys."""
     sells, buys = [], []
     for coin in sorted(set(qty) | set(targets)):
@@ -160,7 +163,7 @@ def plan_trades(qty: dict, prices: dict, equity: float, targets: dict, drift: fl
                 sells.append({"coin": coin, "side": "sell", "value": cur, "all": True, "reason": "trend off"})
         elif cur <= 0:
             buys.append({"coin": coin, "side": "buy", "value": tgt, "all": False, "reason": "trend on"})
-        elif abs(tgt - cur) > drift * max(tgt, cur) and abs(tgt - cur) >= min_trade * equity:
+        elif abs(tgt - cur) > drift * max(tgt, cur) and abs(tgt - cur) >= max(min_trade, ignore) * equity:
             side = "buy" if tgt > cur else "sell"
             row = {"coin": coin, "side": side, "value": abs(tgt - cur), "all": False,
                    "reason": "bigger" if side == "buy" else "smaller"}
@@ -273,14 +276,15 @@ def verdict(res: dict) -> str:
 
 
 def backtest(bars_by_coin: dict, coins: list[str], target_vol: float, cost_pct: float, drift: float = DRIFT,
-             min_trade: float = MIN_TRADE, start: int = 0, resize_days: int = 1, universe=None) -> dict:
+             min_trade: float = MIN_TRADE, start: int = 0, resize_days: int = 1, universe=None,
+             lookbacks: tuple = None, ignore: float = 0.0) -> dict:
     """Replay the plan day by day over all the history there is: decide after each daily close, trade at the next
     day's open, pay cost_pct on every buy and sell. Compared with simply holding Bitcoin over the same days.
     universe: optional ts -> set of coins tradable that day (research: each month's real top coins)."""
     coins = [c for c in coins if len(bars_by_coin.get(c) or []) > 40]
     if "BTC" not in coins:
         return {"error": "no Bitcoin history"}
-    series = {c: coin_series(bars_by_coin[c]) for c in coins}
+    series = {c: coin_series(bars_by_coin[c], lookbacks) for c in coins}
     index = {c: {ts: i for i, ts in enumerate(series[c]["ts"])} for c in coins}
     btc = series["BTC"]
     warm = 360 if len(btc["ts"]) >= 360 + 365 else VOL_DAYS
@@ -298,7 +302,7 @@ def backtest(bars_by_coin: dict, coins: list[str], target_vol: float, cost_pct: 
         if pending is not None:                                   # yesterday's decision, filled at today's open
             opens = {c: series[c]["open"][index[c][ts]] for c in set(pending) | set(book["qty"]) if ts in index[c]}
             marks = {**last_px, **opens}
-            trades = [t for t in plan_trades(book["qty"], marks, equity_of(book, marks), pending, drift, min_trade)
+            trades = [t for t in plan_trades(book["qty"], marks, equity_of(book, marks), pending, drift, min_trade, ignore)
                       if t["coin"] in opens and (k % resize_days == 0 or t["reason"] in ("trend on", "trend off"))]
             for f in execute(book, trades, opens, cost_pct):
                 fills_n += 1
@@ -561,6 +565,7 @@ class Crypto:
         return fills
 
     def update_text(self, fills: list[dict], before: float, now: float, first: bool = False) -> str:
+        N = len(LOOKBACKS)
         budget = self.cfg.get("CRYPTO_BUDGET")
         scale = budget / before if before > 0 else 0
         lines = [f"<b>🪙 Crypto plan</b> · {et(now).strftime('%a %b %-d')}, {clock_text(now)}"]
@@ -575,13 +580,13 @@ class Crypto:
                 small += 1
                 continue
             if f["reason"] == "trend on":
-                lines.append(f"🟢 <b>Buy {f['coin']}</b> — trending up ({on}/9) · {money(usd)}")
+                lines.append(f"🟢 <b>Buy {f['coin']}</b> — trending up ({on}/{N}) · {money(usd)}")
             elif f["reason"] == "trend off":
                 lines.append(f"🔴 <b>Sell all {f['coin']}</b> — the trend broke · about {money(usd)}")
             elif f["reason"] == "bigger":
-                lines.append(f"↗️ Add {money(usd)} of {f['coin']} — stronger trend or calmer price ({on}/9)")
+                lines.append(f"↗️ Add {money(usd)} of {f['coin']} — stronger trend or calmer price ({on}/{N})")
             else:
-                lines.append(f"↘️ Sell {money(usd)} of {f['coin']} — weaker trend or wilder price ({on}/9)")
+                lines.append(f"↘️ Sell {money(usd)} of {f['coin']} — weaker trend or wilder price ({on}/{N})")
         if small:
             lines.append(f"<i>{small} small re-size{'s' if small > 1 else ''} under $1 skipped — not worth it.</i>")
         if not fills and first:
@@ -669,7 +674,7 @@ class Crypto:
             px = prices.get(c) or self.price(c)
             held = num(book["qty"].get(c)) * px
             rows.append({"coin": c, "price": px, "change": self.change(c), "on": sr["on"][-1] if sr else None,
-                         "lookbacks": [n for n in LOOKBACKS if sr and sr["flags"].get(n)],
+                         "models": len(LOOKBACKS), "lookbacks": [n for n in LOOKBACKS if sr and sr["flags"].get(n)],
                          "vol": (sr["vol"][-1] or 0) * 100 if sr else None, "target_w": tg.get(c, 0.0),
                          "plan_usd": tg.get(c, 0.0) * budget, "held": held, "held_w": held / eq if eq > 0 else 0.0,
                          "history": len(sr["ts"]) if sr else 0})
@@ -720,13 +725,13 @@ class Crypto:
         res = self.bt()
         if res and not res.get("error"):
             lines.append(VERDICT.get(res.get("status", ""), ""))
-        lines.append(f"\n<b>The plan for {money(budget)}</b> (trend score out of 9)")
+        lines.append(f"\n<b>The plan for {money(budget)}</b> (trend score out of {len(LOOKBACKS)})")
         for r in rows:
             if r["on"] is None:
                 lines.append(f"⚪ {r['coin']} — not enough price history yet")
                 continue
             icon = "🟢" if r["target_w"] > 0 and r["on"] >= 5 else "🟡" if r["target_w"] > 0 else "⚪"
-            lines.append(f"{icon} {r['coin']} {r['on']}/9 · " + (f"<b>{money(r['plan_usd'])}</b>" if r["target_w"] > 0
+            lines.append(f"{icon} {r['coin']} {r['on']}/{len(LOOKBACKS)} · " + (f"<b>{money(r['plan_usd'])}</b>" if r["target_w"] > 0
                                                                else "none"))
         cash_w = max(0.0, 1 - sum(r["target_w"] for r in rows))
         lines.append(f"💵 Cash {money(cash_w * budget)} ({cash_w * 100:.0f}%) — waiting in cash is how it sidesteps "

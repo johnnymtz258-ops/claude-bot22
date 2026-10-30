@@ -26,6 +26,7 @@ Benchmarks: hold SPY, and 60% SPY / 40% bonds.
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import math
 
 from .bars import C, O, T
@@ -455,12 +456,49 @@ def run_lab(h: Hist, cost_pct: float, since: str | None = None) -> dict:
             "sharpe_ci": sharpe_ci(excess), "years": by_year(h.dates[start:], curve), "trades": sim["trades"],
             "trades_per_year": sim["trades"] / max(0.1, (len(curve) - 1) / TRADING_DAYS),
             "exposure": sim["exposure"], "weights": sim["weights"], "log": sim["log"], "curve": curve,
+            "monthly": [round(x, 5) for x in monthly_returns(h.dates[start:], curve)],
             "explain": s.explain(h, h.n - 1)}
     bench = results["bh_spy"]
     for r in results.values():
         r["verdict"] = verdict(r, bench, r["risk"]) if r["key"] != "bh_spy" else "benchmark"
     return {"start": h.dates[start], "end": h.dates[-1], "days": h.n - start, "cost_pct": cost_pct,
             "strategies": [r for r in results.values()], "dates": h.dates[start:]}
+
+
+def _last_weekday_of_month(day: str) -> bool:
+    d = dt.date.fromisoformat(day)
+    nxt = d + dt.timedelta(days=1)
+    while nxt.weekday() >= 5:
+        nxt += dt.timedelta(days=1)
+    return nxt.month != d.month
+
+
+def monthly_returns(dates: list[str], curve: list[float]) -> list[float]:
+    """Return of each complete calendar month in the curve. The partial first month is only a starting point, and a
+    last bar that doesn't end its month is left out."""
+    ends = [i for i in range(1, len(curve) - 1) if dates[i][:7] != dates[i + 1][:7]]
+    if len(curve) > 1 and _last_weekday_of_month(dates[-1]):
+        ends.append(len(curve) - 1)
+    return [curve[b] / curve[a] - 1 for a, b in zip(ends, ends[1:]) if curve[a] > 0]
+
+
+def grow(monthly: list[float], initial: float, add: float, years: int) -> dict | None:
+    """What `initial` dollars plus `add` a month would have become over every `years`-year stretch of this history
+    (stepping one month at a time; the windows overlap). None when the history is too short to say."""
+    m = 12 * int(years)
+    if m <= 0 or len(monthly) < m + 6:
+        return None
+    finals = []
+    for st in range(0, len(monthly) - m + 1):
+        v = initial
+        for r in monthly[st:st + m]:
+            v = (v + add) * (1 + r)
+        finals.append(v)
+    finals.sort()
+    n = len(finals)
+    return {"years": int(years), "put_in": initial + add * m, "windows": n, "worst": finals[0],
+            "p10": finals[int(0.1 * n)], "median": finals[n // 2], "p90": finals[min(n - 1, int(0.9 * n))],
+            "best": finals[-1]}
 
 
 def recommend(lab: dict) -> str:
@@ -549,7 +587,7 @@ def prefer_names(weights: dict, tickers: dict) -> str:
 
 # ---- live ---------------------------------------------------------------------------------------------------------
 KEEP_CURVE = ("key", "label", "about", "risk", "verdict", "perf", "half1", "half2", "sharpe_ci", "years",
-              "trades_per_year", "exposure", "weights", "explain", "log")
+              "trades_per_year", "exposure", "weights", "explain", "log", "monthly")
 
 
 def compact(lab: dict) -> dict:
@@ -815,6 +853,29 @@ class Invest:
         lines.append(f"\nMost of these don't beat holding SPY in a rising market (it did {bench['perf']['cagr'] * 100:+.1f}% "
                      f"a year here) — they're built to dodge crashes. /invest plan trend_spy to follow another · "
                      f"/invest test to re-run.")
+        return "\n".join(lines)
+
+    def grow_text(self, now: float, add: float = 50.0, years: int = 5, initial: float | None = None) -> str:
+        lab = self.lab_now()
+        if not lab:
+            return "🧺 Loading ETF history… try again in a minute."
+        if initial is None:
+            held, _, _ = self.holdings()
+            initial = self.budget(held) or 0.0
+        rows = [(r["label"], grow(r.get("monthly") or [], initial, add, years)) for r in lab["strategies"]
+                if r["key"] in (self.plan_key(), "bh_spy", "mix6040")]
+        rows = [x for x in dict(rows).items() if x[1]]
+        if not rows:
+            return f"🧺 Not enough history to say what {years} years looks like (need about {years + 1} years of prices)."
+        n = rows[0][1]["windows"]
+        lines = [f"<b>💰 Starting with {money(initial)} and adding {money(add)} a month for {years} years</b>",
+                 f"You'd put in {money(rows[0][1]['put_in'])}. What that became, over every {years}-year stretch of the "
+                 f"last {lab['days'] / TRADING_DAYS:.0f} years:"]
+        for label, g in rows:
+            lines.append(f"• {esc(label)}: typically <b>{money(g['median'])}</b> (worst {money(g['worst'])}, best "
+                         f"{money(g['best'])})")
+        lines.append(f"<i>{n} overlapping stretches including the 2018 and 2022 drops — the future can be worse. The money "
+                     "you add matters more than which plan: try /invest grow 100 or /invest grow 50 10.</i>")
         return "\n".join(lines)
 
     def week_line(self, now: float) -> str:

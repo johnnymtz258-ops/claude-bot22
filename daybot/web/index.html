@@ -228,6 +228,16 @@ dialog::backdrop{background:rgba(0,0,0,.55)}dialog img{width:100%;border-radius:
       <div class="card"><div class="card-head"><h2>Each year</h2></div><div class="table-wrap"><table id="iv-years"></table></div></div>
     </div>
     <div class="card">
+      <div class="card-head"><h2>💰 What would my money become?</h2><span class="muted" id="iv-grow-span"></span></div>
+      <div class="row" style="margin-bottom:10px">
+        <label class="muted" for="gw-start">Start with $</label><input id="gw-start" type="number" min="0" step="50" style="width:100px">
+        <label class="muted" for="gw-add">add $</label><input id="gw-add" type="number" min="0" step="10" style="width:90px">
+        <label class="muted" for="gw-years">a month for</label><input id="gw-years" type="number" min="1" max="10" step="1" style="width:70px">
+        <span class="muted">years</span></div>
+      <div class="table-wrap"><table id="iv-grow"></table></div>
+      <div class="hint" id="iv-grow-note" style="margin:10px 0 0"></div>
+    </div>
+    <div class="card">
       <div class="card-head"><h2>How the Invest lab works</h2></div>
       <ul class="list muted" style="font-size:13px">
         <li>Slow, well-studied ETF strategies, tested on all the free daily history Alpaca has (about 10 years, including the 2018 drop, the 2020 crash and the 2022 bear market), dividends included.</li>
@@ -281,7 +291,7 @@ dialog::backdrop{background:rgba(0,0,0,.55)}dialog img{width:100%;border-radius:
     <div class="card">
       <div class="card-head"><h2>How the crypto plan works</h2></div>
       <ul class="list muted" style="font-size:13px">
-        <li>Trend-following from <i>Catching Crypto Trends</i> (Zarattini, Pagani &amp; Barbon, 2025): nine trend models per coin, looking back 5 to 360 days. The score (0–9) is how many say "trending up".</li>
+        <li>Trend-following from <i>Catching Crypto Trends</i> (Zarattini, Pagani &amp; Barbon, 2025): seven trend models per coin, looking back 20 to 360 days. The score (0–7) is how many say "trending up".</li>
         <li>Each coin gets an equal slice of your crypto money; it holds more of a coin the stronger and calmer its trend, and sells when the trend breaks. No trends = all cash — that's how it sidestepped most of 2022's crash.</li>
         <li>It re-plans once a day when the daily candle closes and messages you only when something changes. It lags Bitcoin in big bull runs; it's built to keep you out of the crashes.</li>
         <li>Costs: Robinhood charges about 1% each way through its spread — included in every number here.</li>
@@ -636,11 +646,36 @@ function renderInvest(v) {
   const colors = ['var(--accent)', 'var(--up)', 'var(--warn)', 'var(--muted)'];
   lineChart('iv-curve', pick.map((r, i) => ({points: (r.curve || []).map(p => [dayT(p[0]), p[1]]), color: colors[i], label: r.label, width: i === 0 ? 2.6 : 1.8})),
     {log: true, base: 100, empty: 'No data yet.', label: 'Growth of $100'});
+  if (!$('gw-start').value && $('gw-start') !== document.activeElement) $('gw-start').value = Math.round(v.budget || 500);
+  renderGrow();
   const yrs = [...new Set(v.strategies.flatMap(r => Object.keys(r.years || {})))].sort();
   const cols = pick.slice(0, 3);
   table('iv-years', ['Year', ...cols.map(r => '#' + r.label)], yrs, y =>
     `<tr><td>${esc(y)}</td>${cols.map(r => `<td class="num ${cls((r.years || {})[y])}">${(r.years || {})[y] == null ? '—' : pc(r.years[y] * 100, 0)}</td>`).join('')}</tr>`, 'No data yet.');
 }
+function growJS(monthly, initial, add, years) {
+  const m = 12 * years; if (!monthly || m <= 0 || monthly.length < m + 6) return null;
+  const finals = [];
+  for (let st = 0; st + m <= monthly.length; st++) { let v = initial; for (let k = st; k < st + m; k++) v = (v + add) * (1 + monthly[k]); finals.push(v); }
+  finals.sort((a, b) => a - b); const n = finals.length;
+  return {put: initial + add * m, n, worst: finals[0], med: finals[Math.floor(n / 2)], best: finals[n - 1]};
+}
+function renderGrow() {
+  const v = last && last.invest; if (!v || !v.ready) return;
+  const ini = +$('gw-start').value || 0, add = +$('gw-add').value || 0, yrs = Math.max(1, Math.min(10, Math.round(+$('gw-years').value || 5)));
+  store.set('daybot-grow', JSON.stringify({ini: $('gw-start').value, add: $('gw-add').value, yrs: $('gw-years').value}));
+  const keys = [v.plan, 'bh_spy', 'mix6040'].filter((k, i, a) => a.indexOf(k) === i);
+  const rows = keys.map(k => v.strategies.find(r => r.key === k)).filter(Boolean).map(r => ({r, g: growJS(r.monthly, ini, add, yrs)}));
+  $('iv-grow-span').textContent = `every ${yrs}-year stretch of the last ${(v.days / 252).toFixed(0)} years`;
+  table('iv-grow', ['Plan', '#You put in', '#Worst stretch', '#Typical', '#Best stretch', '#Typical gain'], rows.filter(x => x.g), ({r, g}) =>
+    `<tr><td><b>${esc(r.label)}</b>${r.key === v.plan ? ' <span class="muted">your plan</span>' : ''}</td><td class="num">${usd(g.put)}</td><td class="num">${usd(g.worst)}</td>
+     <td class="num"><b>${usd(g.med)}</b></td><td class="num">${usd(g.best)}</td><td class="num ${cls(g.med - g.put)}">${usd(g.med - g.put, true)}</td></tr>`,
+    `Not enough history for ${yrs} years — try a shorter stretch.`);
+  const g0 = rows[0] && rows[0].g;
+  $('iv-grow-note').innerHTML = g0 ? `${g0.n} overlapping stretches, including the 2018 and 2022 drops — the future can be worse. Compare the <b>You put in</b> column with the gains: at this size, the money you add does most of the work.` : '';
+}
+['gw-start', 'gw-add', 'gw-years'].forEach(id => $(id).addEventListener('input', renderGrow));
+try { const g = JSON.parse(store.get('daybot-grow') || 'null'); $('gw-start').value = g ? g.ini : ''; $('gw-add').value = g ? g.add : 50; $('gw-years').value = g ? g.yrs : 5; } catch (e) { $('gw-add').value = 50; $('gw-years').value = 5; }
 $('iv-plan').addEventListener('change', async e => {
   await fetch('/api/invest', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({action: 'plan', plan: e.target.value})}); load();
 });
@@ -652,8 +687,8 @@ $('iv-refresh').addEventListener('click', async () => {
 
 // ---- crypto ----
 const CR_REASON = {'trend on': 'trend started', 'trend off': 'trend broke', bigger: 'added', smaller: 'trimmed'};
-function dots(on) { if (on == null) return '<span class="muted">new coin</span>';
-  return `<span class="dots" title="${on} of 9 trend models say up">${'<span class="on">●</span>'.repeat(on)}${'<span class="off">●</span>'.repeat(9 - on)}</span> <b>${on}</b>/9`; }
+function dots(on, n = 7) { if (on == null) return '<span class="muted">new coin</span>';
+  return `<span class="dots" title="${on} of ${n} trend models say up">${'<span class="on">●</span>'.repeat(on)}${'<span class="off">●</span>'.repeat(Math.max(0, n - on))}</span> <b>${on}</b>/${n}`; }
 function lineChart(id, series, opts) {
   const pts = series.flatMap(x => x.points.filter(p => p[1] != null && p[1] > 0));
   if (pts.length < 4) { $(id).innerHTML = `<div class="empty">${esc(opts.empty || 'Not enough data yet.')}</div>`; return; }
@@ -686,7 +721,7 @@ function renderCrypto(c) {
   $('cr-plan-note').textContent = c.budget ? `dollar amounts for ${usd(c.budget)} of crypto money (Settings → Crypto)` : '';
   table('cr-board', ['Coin', '#Price', '#Today', 'Trend', '#Swing a year', '#Plan', '#Autopilot holds'], board, r =>
     `<tr><td><b>${esc(r.coin)}</b></td><td class="num">${px(r.price)}</td><td class="num ${cls(r.change)}">${pc(r.change)}</td>
-     <td title="${r.lookbacks && r.lookbacks.length ? 'up on the ' + r.lookbacks.join(', ') + '-day models' : 'no model says up'}">${dots(r.on)}</td>
+     <td title="${r.lookbacks && r.lookbacks.length ? 'up on the ' + r.lookbacks.join(', ') + '-day models' : 'no model says up'}">${dots(r.on, r.models || 7)}</td>
      <td class="num muted">${r.vol == null ? '—' : Math.round(r.vol) + '%'}</td>
      <td class="num">${r.target_w > 0 ? `<b>${usd(r.plan_usd)}</b> <span class="muted">${(r.target_w * 100).toFixed(1)}%</span>` : '<span class="muted">none</span>'}</td>
      <td class="num">${r.held > 0.005 ? usd(r.held) : '<span class="muted">—</span>'}</td></tr>`,
@@ -705,7 +740,7 @@ function renderCrypto(c) {
   table('cr-trades', ['When', 'Coin', 'Side', '#Amount', '#Price', 'Why'], (ap.recent || []).slice(0, 12), t =>
     `<tr><td class="muted">${new Date(t.ts * 1000).toLocaleDateString([], {month: 'numeric', day: 'numeric'})}</td><td><b>${esc(t.coin)}</b></td>
      <td class="${t.side === 'buy' ? 'up' : 'down'}">${esc(t.side)}</td><td class="num">${usd(t.value)}</td><td class="num">${px(t.price)}</td>
-     <td class="muted">${esc(CR_REASON[t.reason] || t.reason)}${t.trend ? ` · ${t.trend}/9` : ''}</td></tr>`, 'No trades yet.');
+     <td class="muted">${esc(CR_REASON[t.reason] || t.reason)}${t.trend ? ` · ${t.trend}/7` : ''}</td></tr>`, 'No trades yet.');
   $('cr-toggle').textContent = c.on ? 'Turn off' : 'Turn on';
 }
 

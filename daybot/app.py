@@ -543,14 +543,19 @@ class App:
 
 
 WHATS_NEW = ("<b>🆕 New in this version</b>\n"
-             "🪙 <b>Crypto trend plan</b> (/crypto, dashboard 🪙 Crypto tab): once a day it says which of the 10 "
-             "biggest Robinhood coins to hold and which to sell, in dollars. Tested on six years of real prices with "
-             "Robinhood's 1% cost: about 18% a year, worst drop −34% (Bitcoin alone: −77%). A pretend crypto "
-             "account follows it so you can watch before using real money\n"
-             "⏱ <b>BTC 15-minute Up or Down</b> (/btc15): the odds Bitcoin finishes this quarter hour up or down, "
-             "from how far it has moved and the time left, with its own track record. At the start of a window "
-             "it's a coin flip, and it says so\n"
-             "🧪 The crypto plan is being tested on Alpaca's prices now; the result comes here")
+             "📋 <b>/today</b>: what to do today across everything — or honestly that there's nothing to do — with what "
+             "each part is worth in dollars on the money you actually put in it\n"
+             "🧺 <b>Invest lab</b> (/invest): slow ETF plans tested on 10 years against simply holding SPY. It tells you "
+             "when your plan changes, and /invest grow 50 5 shows what $50 a month became. Most plans earn a bit less "
+             "than holding in a bull market and fall far less in a crash; if none beat holding it says so\n"
+             "⏱ <b>BTC 15-minute</b> now reads the real Polymarket / Kalshi prices and keeps a paper record of whether "
+             "the cheap-side signal pays after fees — it only pings you once that record is positive\n"
+             "🔬 <b>Stricter evidence</b>: a setup must beat luck (the test resamples whole days) to be promising or "
+             "proven. The opening-range breakout (+0.02R) is now \"no measurable edge\", so the autopilot stops "
+             "following it, and the coach no longer draws conclusions from one day of paper results\n"
+             "🪙 Crypto: dropped the 5- and 10-day trend models — 60% fewer trades and a higher return in both tests; "
+             "it still trails Bitcoin in bull runs and falls far less in crashes\n"
+             "🧪 Everything is re-tested now — about 20 minutes; the result comes here")
 
 
 def _ssl_context():

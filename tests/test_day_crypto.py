@@ -156,7 +156,7 @@ def test_crypto_commands_and_dashboard():
     def say(text):
         return asyncio.run(app.commands.text(text, now))[0]["text"]
     board = say("/crypto")
-    assert "Crypto trend plan" in board and "/9" in board and "Backtest" in board
+    assert "Crypto trend plan" in board and "/7" in board and "Backtest" in board
     assert "Crypto backtest" in say("/crypto test")
     assert "starts over with a pretend $500" in say("/crypto reset 500") and app.crypto.start() == 500
     assert "off" in say("/crypto off") and not app.crypto.on

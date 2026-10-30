@@ -43,6 +43,7 @@ HELP = f"""<b>📈 DayBot {VERSION}</b> — your day-trading assistant. It reads
 • /today what to do today across everything, and what each part is worth at your size
 <b>Invest (slow, tested)</b>
 • /invest the ETF plans tested on 10 years of prices, which one to follow and what to buy or sell
+• /invest grow 50 5 what $50 a month for 5 years became in the past
 <b>Crypto</b>
 • /crypto the daily trend plan for Bitcoin and the big coins, its pretend account and its backtest
 • /btc15 which way Bitcoin most likely finishes this 15 minutes (Up or Down markets) · /btc15 62 vs a 62¢ price
@@ -559,6 +560,11 @@ class Commands:
             if not label:
                 return [reply(f"No plan called {esc(words[1])}. /invest lists them.")]
             return [reply(f"🧺 You're following <b>{esc(label)}</b>.\n\n" + iv.text(now))]
+        if words and words[0] in {"grow", "growth", "future", "project"}:
+            nums = [num(w.replace("$", "").replace(",", ""), -1) for w in words[1:]]
+            add = nums[0] if nums and nums[0] >= 0 else 50.0
+            years = int(nums[1]) if len(nums) > 1 and 1 <= nums[1] <= 10 else 5
+            return [reply(iv.grow_text(now, add, years))]
         if words and words[0] in {"test", "rerun", "refresh"}:
             await iv.load(now)
             iv._lab_key = None
