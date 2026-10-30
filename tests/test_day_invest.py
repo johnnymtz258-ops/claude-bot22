@@ -203,10 +203,11 @@ def test_holdings_map_to_the_plan_and_the_trades_are_in_your_own_tickers():
 
 
 # ---- the live flow -----------------------------------------------------------------------------------------------
-def _invest_app(end_day="2026-10-23"):
+def _invest_app(end_day="2026-10-23", manage=True):
     now = at(end_day, "17:00")
     app = make_app(daily=etf_world(end_day), now=now)
     app.fake.now = now
+    app.cfg.set("INVEST_MANAGE", 1 if manage else 0)
     return app, now
 
 
@@ -309,3 +310,19 @@ def test_what_to_do_today_pulls_every_part_into_actions_or_an_honest_nothing():
     assert "What to do today" in asyncio.run(app.commands.text("/today", now))[0]["text"]
     assert "Today:" in asyncio.run(app.morning_plan(now, send=False)) or "nothing needs doing" in asyncio.run(
         app.morning_plan(now, send=False))
+
+
+def test_it_never_tells_you_to_restructure_your_accounts_unless_you_ask():
+    app, now = _invest_app(manage=False)
+    app.db.run("insert into positions(account_id, key, symbol, underlying, kind, qty, avg_price, price, multiplier, updated) "
+               "values('a','VXUS','VXUS','VXUS','stock',3,60,70,1,0)")
+    app.db.set_meta("invest_plan", "trend_spy")
+    asyncio.run(app.invest.tick(now))
+    text = asyncio.run(app.commands.text("/invest", now))[0]["text"]
+    assert "Sell" not in text and "Dollar instructions are off" in text and "INVEST_MANAGE 1" in text
+    st = app.invest.summary(now)
+    assert st["actions"] == [] and st["manage"] is False
+    item = next(i for i in app.today(now)["items"] if i["sleeve"] == "invest")
+    assert item["status"] == "hold" and "INVEST_MANAGE" in " ".join(item["lines"])
+    app.cfg.set("INVEST_MANAGE", 1)
+    assert any(a["side"] == "sell" for a in app.invest.summary(now)["actions"])

@@ -708,13 +708,22 @@ class Invest:
         b = self.cfg.get("INVEST_BUDGET")
         return b if b > 0 else sum(held.values())
 
+    @property
+    def manage(self) -> bool:
+        return self.cfg.flag("INVEST_MANAGE")
+
     def actions(self, weights: dict) -> tuple[list[dict], float, dict, float]:
         held, tickers, other = self.holdings()
         budget = self.budget(held)
-        return (plan_actions(weights, held, tickers, budget) if budget > 0 else []), budget, tickers, other
+        acts = plan_actions(weights, held, tickers, budget) if budget > 0 and self.manage else []
+        return acts, budget, tickers, other
 
     def action_lines(self, weights: dict) -> list[str]:
         acts, budget, tickers, other = self.actions(weights)
+        if not self.manage:
+            return [f"Plan: {prefer_names(weights, tickers)}. Dollar instructions are off — /set INVEST_MANAGE 1 and it "
+                    "will say exactly what to buy and sell in your accounts (it treats your ETF holdings, or "
+                    "INVEST_BUDGET, as the plan's money)."]
         if budget <= 0:
             return [f"Set the money this plan manages: /set INVEST_BUDGET 500 (it shows {prefer_names(weights, tickers)})."]
         head = f"For {money(budget)}" + ("" if self.cfg.get("INVEST_BUDGET") > 0 else " (what you hold in ETFs)")
@@ -767,7 +776,7 @@ class Invest:
         return {**base, "ready": True, "start": lab["start"], "end": lab["end"], "days": lab["days"],
                 "cost_pct": lab["cost_pct"], "plan": plan, "recommended": lab.get("recommended") or recommend(lab),
                 "strategies": [{**r, "verdict_text": VERDICT_TEXT.get(r["verdict"], "")} for r in lab["strategies"]],
-                "actions": acts, "budget": budget, "held": {BUCKET_NAME.get(b, b): round(v, 2) for b, v in held.items()},
+                "actions": acts, "budget": budget, "manage": self.manage, "held": {BUCKET_NAME.get(b, b): round(v, 2) for b, v in held.items()},
                 "other": round(other, 2), "since": self.since(plan, lab),
                 "plan_now": prefer_names(res["weights"], tickers), "explain": res.get("explain", "")}
 

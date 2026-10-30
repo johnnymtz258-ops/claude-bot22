@@ -620,7 +620,8 @@ function renderInvest(v) {
   table('iv-actions', ['Do this', 'Fund', '#Now', '#Plan wants'], v.actions, a =>
     `<tr><td><b class="${a.side === 'buy' ? 'up' : 'down'}">${a.side === 'buy' ? 'Buy' : 'Sell'} ${usd(a.dollars)}</b></td><td>${esc(a.ticker)} <span class="muted">${esc(a.name)}</span></td>
      <td class="num">${usd(a.have)}</td><td class="num">${usd(a.want)}</td></tr>`,
-    v.budget ? `You already hold the plan (${usd(v.budget)}). Nothing to do.` : 'Set the money this plan manages in Settings → Invest (or hold ETFs in a linked account).');
+    !v.manage ? 'Dollar instructions are off. Turn on <b>Settings → Invest → Tell me what to buy and sell</b> and this table says exactly what to buy and sell in your accounts (it treats your ETF holdings, or the budget you set, as the plan\'s money).'
+      : v.budget ? `You already hold the plan (${usd(v.budget)}). Nothing to do.` : 'Set the money this plan manages in Settings → Invest (or link an account that holds ETFs).');
   $('iv-since').innerHTML = v.since && v.since.plan != null ? `Since ${esc(v.since.since)}: plan <b class="${cls(v.since.plan)}">${pc(v.since.plan * 100)}</b> vs SPY ${pc((v.since.spy || 0) * 100)}.${v.other ? ` Holdings outside the plan (single stocks…): ${usd(v.other)}.` : ''}` : (v.other ? `Holdings outside the plan (single stocks…): ${usd(v.other)}.` : '');
   $('iv-testnote').textContent = 'compared with holding SPY over the same days';
   const rows = [...v.strategies].sort((a, b) => b.perf.sharpe - a.perf.sharpe);
@@ -733,7 +734,10 @@ function renderUpDown(u) {
       ${f['5'] ? `<div style="margin-top:6px"><b>Track record</b> <span class="muted">(last 30 days, odds it never saw)</span>: its favorite won <b>${Math.round((f['5'].hit || 0) * 100)}%</b> at 5 min in, <b>${Math.round((f['10'].hit || 0) * 100)}%</b> at 10 min in · ${(t.windows || 0).toLocaleString()} windows</div>` : ''}
       ${cal.length ? `<div class="muted" style="margin-top:4px">When it said ${cal.map(b => `${b.from}s → won ${Math.round(b.happened * 100)}%`).join(' · ')}</div>` : ''}
       ${lv.n10 ? `<div class="muted" style="margin-top:4px">Live, last 7 days: favorite at 10 min won ${Math.round(lv.fav10 * 100)}% of ${lv.n10}${lv.lean_n ? ` · start leans right ${Math.round(lv.lean_hit * 100)}% of ${lv.lean_n}` : ''}</div>` : ''}
-      <div class="muted" style="margin-top:4px">Prices from Alpaca; the market settles on its own feed (Polymarket: Chainlink), a few $ apart.</div></div>`;
+      ${(u.quotes || []).map(q => `<div style="margin-top:8px"><b>${esc(q.name)}</b>: Up ${(+q.up).toFixed(0)}¢ / Down ${(+q.down).toFixed(0)}¢ → ${q.edge >= (u.min_edge || 4) ? `<b class="up">${esc(q.side)} is ${q.edge.toFixed(0)}¢ cheap</b> after fees` : '<span class="muted">no real edge after fees</span>'}</div>`).join('')}
+      ${Object.entries(u.paper || {}).map(([v, r]) => r.signal.n ? `<div class="muted" style="margin-top:4px">📒 ${esc(v)} paper record (30 days): the cheap-side signal ${r.signal.n} times, won ${Math.round(r.signal.win * 100)}%, <b class="${cls(r.signal.avg_c)}">${r.signal.avg_c > 0 ? '+' : ''}${r.signal.avg_c.toFixed(1)}¢ a contract</b> after fees${r.proven ? ' ✅ proven' : ' (not enough yet to trust)'}${r.favorite.n ? ` · always buying the favorite: ${r.favorite.avg_c.toFixed(1)}¢` : ''}</div>` : `<div class="muted" style="margin-top:4px">📒 ${esc(v)}: watching ${r.windows} windows — no side was cheap enough yet.</div>`).join('')}
+      ${!(u.quotes || []).length && !Object.keys(u.paper || {}).length ? `<div class="muted" style="margin-top:8px">Reading the market's own prices (Polymarket / Kalshi, no keys) so it can tell you when a side is cheap${Object.keys(u.quote_errors || {}).length ? ' — ' + esc(Object.entries(u.quote_errors).map(([k, e]) => k + ': ' + e).join('; ')) : ''}. Until then, type a price below.</div>` : ''}
+      <div class="muted" style="margin-top:4px">Prices from Alpaca; the market settles on its own feed (Polymarket: Chainlink, Kalshi: CF Benchmarks), a few $ apart.</div></div>`;
   table('ud-recent', ['Window', '#Start', '#End', 'Result', 'Call at 10 min'], u.recent || [], r => {
     const call = r.p10 == null ? null : r.p10 >= 0.5, ok = call == null ? '' : (call === !!r.outcome ? '✓' : '✗');
     return `<tr><td class="muted">${new Date(r.ts * 1000).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})}</td><td class="num">${px(r.open)}</td>
@@ -749,7 +753,10 @@ function udTick() {
 }
 setInterval(udTick, 1000);
 function udEdge() {
-  const v = +$('ud-mkt').value; store.set('daybot-udmkt', $('ud-mkt').value);
+  const typed = +$('ud-mkt').value; store.set('daybot-udmkt', $('ud-mkt').value);
+  const q0 = ud && ud.quotes && ud.quotes[0];
+  const v = typed > 0 ? typed : (q0 ? +q0.up : 0);
+  $('ud-mkt').placeholder = q0 ? `${(+q0.up).toFixed(0)} (${q0.name})` : 'e.g. 62';
   if (!ud || !ud.ready || !(v > 0 && v < 100)) { $('ud-edge').textContent = ''; return; }
   const fair = ud.p_up * 100, eu = fair - v, ed = (100 - fair) - (100 - v), best = eu >= ed ? 'Up' : 'Down', e = Math.max(eu, ed);
   $('ud-edge').innerHTML = `fair Up ${fair.toFixed(0)}¢ / Down ${(100 - fair).toFixed(0)}¢ → ` + (e >= 4 ? `<b class="up">${best} is ${e.toFixed(0)}¢ cheap</b>` : 'no real edge (fees eat a few ¢)');

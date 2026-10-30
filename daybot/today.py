@@ -33,6 +33,10 @@ def _invest_item(inv: dict) -> dict:
                   for a in acts]
         lines.append("Place them in the app — fractional shares, no commission. Orders placed after the close fill at "
                      "tomorrow's open.")
+    elif not inv.get("manage"):
+        status = "hold"
+        lines.append(f"The plan holds {inv['plan_now']}. Nothing for you to do unless you choose to follow it "
+                     "(/set INVEST_MANAGE 1 for exact dollars).")
     elif inv.get("budget"):
         status = "hold"
         lines.append(f"You already hold the plan ({inv['plan_now']}). Nothing to do — keep adding money to it.")
@@ -100,9 +104,12 @@ def _btc_item(u: dict) -> dict:
     up = u["p_up"] >= 0.5
     lines = [f"This window: {'UP' if up else 'DOWN'} {max(u['p_up'], 1 - u['p_up']) * 100:.0f}% "
              f"(price to beat ${u['beat']:,.0f}, now ${u['price']:,.0f})"]
-    mk = u.get("market_now")
-    if mk and mk.get("edge") is not None:
-        lines.append(f"Market: Up {mk['up']:.0f}¢ — " + (f"{mk['side']} is {mk['edge']:.0f}¢ cheap" if mk["edge"] >= 4 else "no real edge"))
+    for q in (u.get("quotes") or [])[:2]:
+        paper = (u.get("paper") or {}).get(q["venue"], {})
+        proven = paper.get("proven")
+        lines.append(f"{q['name']}: Up {q['up']:.0f}¢ / Down {q['down']:.0f}¢ — "
+                     + (f"{q['side']} is {q['edge']:.0f}¢ cheap" + ("" if proven else " (signal not proven yet — paper only)")
+                        if q["edge"] >= 4 else "no real edge"))
     return {"sleeve": "btc15", "icon": "⏱", "title": "BTC 15-minute call", "status": "wait", "lines": lines,
             "trust": "benchmark"}
 
@@ -139,10 +146,14 @@ def _score(inv: dict, c: dict, u: dict, table: list[dict], auto: dict) -> list[d
                              f"{num(bt2.get('med_pct')):+.2f}%), {int(bt2['n'])} trades",
                      "money": auto.get("start") or 0, "year": None, "drop": None, "live": live})
     lv = (u.get("live") or {}) if u.get("ready") else {}
+    paper = (u.get("paper") or {}) if u.get("ready") else {}
     if u.get("ready"):
         t = (u.get("test") or {}).get("favorite", {}).get("10", {}) if u.get("test") else {}
         rows.append({"sleeve": "btc15", "name": "⏱ BTC 15-minute", "trust": "benchmark",
-                     "verdict": "Odds are honest; whether they beat the market's price is being measured",
+                     "verdict": ("Edge vs market prices: " + "; ".join(
+                         f"{v.title()} {r['signal']['avg_c']:+.1f}¢/contract over {r['signal']['n']} signals"
+                         for v, r in paper.items() if r["signal"]["n"])) if any(r["signal"]["n"] for r in paper.values())
+                     else "Odds are honest; whether they beat the market's price is being measured",
                      "test": (f"favorite won {t['hit'] * 100:.0f}% at 10 min in (30-day test)" if t.get("hit") else ""),
                      "money": None, "year": None, "drop": None,
                      "live": (f"live 7 days: {lv['fav10'] * 100:.0f}% of {lv['n10']}" if lv.get("fav10") is not None else "")})

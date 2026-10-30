@@ -86,6 +86,10 @@ create table if not exists crypto_equity(day text primary key, ts integer, equit
 create table if not exists updown(ts integer primary key, open real, close real, lean integer default 0, p_lean real,
   k real, sigma real, p5 real, p10 real, outcome integer);
 
+-- what each venue charged for Up and Down (cents, asks) 5 and 10 minutes into a window: the proof of whether the edge pays
+create table if not exists updown_quotes(ts integer, venue text, strike real, m5_up real, m5_dn real, m10_up real,
+  m10_dn real, primary key(ts, venue));
+
 -- feed for the dashboard + one-off message dedupe
 create table if not exists events(id integer primary key, ts integer, kind text, symbol text default '', text text);
 create table if not exists sent(key text primary key, ts integer);

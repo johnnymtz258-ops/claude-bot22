@@ -425,4 +425,8 @@ def make_app(minute=None, daily=None, *, now=None, total=25_000.0, charts=None, 
     app = App(cfg, None, db=Database(":memory:"), telegram=None, alpaca=fake, snap=snap, charts=charts or False,
               notify=notes)
     app.fake, app.notes = fake, notes
+
+    async def no_quotes(session, arg):                       # tests never reach for the real markets
+        return None
+    app.updown.fetchers = {"polymarket": no_quotes, "kalshi": no_quotes}
     return app

@@ -28,6 +28,7 @@ TABLES = {
     "crypto_equity": "select * from crypto_equity order by day",
     "crypto_pos": "select * from crypto_pos",
     "updown": "select * from updown order by ts",
+    "updown_quotes": "select * from updown_quotes order by ts",
 }
 
 

@@ -19,10 +19,13 @@ from __future__ import annotations
 import math
 import time
 
+from . import markets
 from .clock import clock_text, et
+from .stats import clustered_mean_ci
 from .util import dumps, esc, loads, num, price as fmt_price
 
 WINDOW = 900
+PROVEN_N = 40               # live paper trades before the edge signal may ping you
 CHECKS = (5, 10)            # minutes into the window the track record is scored at
 VOL_MINUTES = 120           # 1-minute moves used for volatility
 STUDY_DAYS = 30
@@ -190,6 +193,9 @@ class UpDown:
         self.live_ts = 0.0
         self._last: dict = {}
         self.last_error = ""
+        self.quotes: dict[str, dict] = {}              # venue -> the latest quote for the current window
+        self.fetchers = {"polymarket": markets.fetch_polymarket, "kalshi": markets.fetch_kalshi}
+        self.quote_errors: dict[str, str] = {}
 
     @property
     def on(self) -> bool:
@@ -253,7 +259,11 @@ class UpDown:
         m = self.model()
         if not m or now - num(m.get("ts")) > 6 * 3600:
             self.db.set_meta("updown_study", dumps(study(self.bars, now)))
+        if self.every("quotes", 20, now):
+            await self.refresh_quotes(now)
+        self.save_quotes(now)
         self.record(now)
+        await self.edge_alert(now)
         start = window_start(now)
         if self.cfg.flag("BTC15_ALERTS") and now - start >= 60 and self.db.once(f"btc15:{start}", int(now)):
             card = self.card(now)
@@ -284,6 +294,95 @@ class UpDown:
             self.db.run("update updown set close=?, outcome=?, p5=?, p10=? where ts=?",
                         (end_px, 1 if end_px >= r["open"] else 0, probs.get(5), probs.get(10), r["ts"]))
 
+    # ---- the market's prices -----------------------------------------------------------------------------------------
+    def venues(self) -> list[str]:
+        v = int(self.cfg.get("BTC15_VENUE"))
+        return list(markets.VENUES) if v == 0 else [markets.VENUES[v - 1]]
+
+    async def refresh_quotes(self, now: float) -> None:
+        session = getattr(self.alpaca, "session", None)
+        if session is None:
+            return
+        start = window_start(now)
+        for venue in self.venues():
+            arg = start if venue == "polymarket" else start + WINDOW
+            try:
+                q = await self.fetchers[venue](session, arg)
+            except Exception as exc:
+                self.quote_errors[venue] = f"{type(exc).__name__}: {str(exc)[:80]}"
+                q = None
+            if q:
+                q["window"], q["ts"] = start, now
+                self.quotes[venue] = q
+                self.quote_errors.pop(venue, None)
+            elif self.quotes.get(venue, {}).get("window") != start:
+                self.quotes.pop(venue, None)                # an old window's price is no price
+
+    def live_quotes(self, now: float) -> dict[str, dict]:
+        start = window_start(now)
+        return {v: q for v, q in self.quotes.items() if q.get("window") == start and now - q["ts"] < 60}
+
+    def save_quotes(self, now: float) -> None:
+        """At 5 and 10 minutes into a window, keep what each venue charged: that's what the paper record scores."""
+        start = window_start(now)
+        into = now - start
+        for tag, lo in (("m5", 5 * 60), ("m10", 10 * 60)):
+            if not lo <= into < lo + 75:
+                continue
+            for venue, q in self.live_quotes(now).items():
+                self.db.run("insert or ignore into updown_quotes(ts, venue, strike) values(?,?,?)",
+                            (start, venue, q.get("strike")))
+                self.db.run(f"update updown_quotes set {tag}_up=?, {tag}_dn=?, strike=coalesce(strike, ?) "
+                            f"where ts=? and venue=? and {tag}_up is null",
+                            (q["up_ask"], q["dn_ask"], q.get("strike"), start, venue))
+
+    def paper_record(self, days: int = 30, now: float | None = None) -> dict:
+        """Per venue: what following the cheap-side signal (and, for comparison, always buying the favorite) would
+        have made per contract over the windows we saw prices for."""
+        since = int((now or time.time()) - days * 86400)
+        fee50, min_edge = self.cfg.get("BTC15_FEE_CENTS"), self.cfg.get("BTC15_MIN_EDGE")
+        out = {}
+        for venue in markets.VENUES:
+            rows = self.db.rows("""select u.ts, u.p10, u.outcome, q.m10_up, q.m10_dn from updown u join updown_quotes q
+                                  on q.ts=u.ts where q.venue=? and u.outcome is not null and u.p10 is not null
+                                  and q.m10_up is not null and q.m10_dn is not null and u.ts>=?""", (venue, since))
+            if not rows:
+                continue
+            data = [{"day": et(r["ts"]).strftime("%Y-%m-%d"), "p10": r["p10"], "outcome": r["outcome"],
+                     "up_ask": r["m10_up"], "dn_ask": r["m10_dn"]} for r in rows]
+            rec = markets.paper_trades(data, min_edge, fee50)
+            sig = rec["signal"]
+            ci = clustered_mean_ci(sig["pnls"]) if sig["n"] >= 10 else None
+            rec["proven"] = bool(sig["n"] >= PROVEN_N and sig["avg_c"] is not None and sig["avg_c"] >= 1.0 and ci and ci["lo"] > 0)
+            rec["ci"] = ci
+            for k in ("signal", "favorite"):
+                rec[k] = {x: v for x, v in rec[k].items() if x not in ("pnls", "days")} | {"days": len(rec[k]["days"])}
+            out[venue] = rec
+        return out
+
+    async def edge_alert(self, now: float) -> None:
+        """One message per window and venue, ten minutes in, when a side is cheap AND the live paper record says this
+        signal has paid (so a signal that loses money never pings you)."""
+        if not (self.cfg.flag("BTC15_EDGE_ALERTS") and 10 * 60 <= now - window_start(now) < 10 * 60 + 60):
+            return
+        quotes = self.live_quotes(now)
+        if not quotes:
+            return
+        card = self.card(now)
+        if not card.get("beat"):
+            return
+        record = self.paper_record(30, now)
+        for venue, q in quotes.items():
+            e = markets.edges(card["p_up"], q, self.cfg.get("BTC15_FEE_CENTS"))
+            if e["edge"] >= self.cfg.get("BTC15_MIN_EDGE") and record.get(venue, {}).get("proven") \
+                    and self.db.once(f"btc15edge:{window_start(now)}:{venue}", int(now)):
+                sig = record[venue]["signal"]
+                await self.notify(f"🟢 <b>BTC 15-min · {markets.VENUE_NAME[venue]}: {e['side']} is {e['edge']:.0f}¢ cheap</b>\n"
+                                  f"Ask {e['ask']:.0f}¢ vs fair {(card['p_up'] if e['side'] == 'Up' else 1 - card['p_up']) * 100:.0f}¢ "
+                                  f"· {int(card['left_min'])} min left · price to beat {fmt_price(card['beat'])}, now "
+                                  f"{fmt_price(card['price'])}\nThis signal's live paper record: {sig['n']} trades, "
+                                  f"{sig['avg_c']:+.1f}¢ per contract after fees.", kind="BTC15")
+
     def live_record(self, days: int = 7, now: float | None = None) -> dict:
         since = int((now or time.time()) - days * 86400)
         rows = self.db.rows("select * from updown where outcome is not null and ts>=?", (since,))
@@ -313,6 +412,12 @@ class UpDown:
                "p_up": prob, "lean": d, "lean_p": pl, "pattern": m.get("pattern"), "k": k,
                "sigma_15m_pct": sig * math.sqrt(15) * 100, "test": m.get("test"), "live": self.live_record(7, now),
                "fresh": bool(self.live_ts and now - self.live_ts < 120)}
+        out["quotes"] = []
+        for venue, q in self.live_quotes(now).items():
+            e = markets.edges(prob, q, self.cfg.get("BTC15_FEE_CENTS"))
+            out["quotes"].append({"venue": venue, "name": markets.VENUE_NAME[venue], "up": q["up_ask"], "down": q["dn_ask"],
+                                  "strike": q.get("strike"), "approx": q.get("approx", False), **e})
+        out["quote_errors"] = dict(self.quote_errors)
         if up_cents is not None and 0 < up_cents < 100:
             fair = prob * 100
             out["market"] = {"up": up_cents, "down": 100 - up_cents, "fair_up": fair,
@@ -370,15 +475,44 @@ class UpDown:
             lines.append(f"Track record (last 30 days, odds it never saw): its favorite won "
                          f"{(f5.get('hit') or 0) * 100:.0f}% of the time at 5 min in and "
                          f"{(f10.get('hit') or 0) * 100:.0f}% at 10 min in ({t['windows']:,} windows).")
+        min_edge = self.cfg.get("BTC15_MIN_EDGE")
+        for q in c.get("quotes") or []:
+            lines.append(f"{q['name']}: Up {q['up']:.0f}¢ / Down {q['down']:.0f}¢ → "
+                         + (f"<b>{q['side']} is {q['edge']:.0f}¢ cheap</b> after fees" if q["edge"] >= min_edge
+                            else "no real edge after fees"))
         mk = c.get("market")
         if mk:
             best = "Up" if mk["edge_up"] >= mk["edge_down"] else "Down"
             edge = max(mk["edge_up"], mk["edge_down"])
-            lines.append(f"Market: Up {mk['up']:.0f}¢ / Down {mk['down']:.0f}¢ vs fair Up {mk['fair_up']:.0f}¢ → "
+            lines.append(f"Your price: Up {mk['up']:.0f}¢ / Down {mk['down']:.0f}¢ vs fair Up {mk['fair_up']:.0f}¢ → "
                          + (f"<b>{best} is {edge:.0f}¢ cheap</b>" if edge >= 4 else "no real edge (fees eat a few ¢)"))
+        lines += self.record_lines(now, bool(c.get("quotes")))
         lines.append("\n/btc15 62 — compare with a market price of 62¢ for Up · /btc15 76543 — use the market's "
                      "price to beat")
         return "\n".join(lines)
+
+    def record_lines(self, now: float, have_quotes: bool) -> list[str]:
+        """The proof: what following the cheap-side signal would have made at the market's real prices."""
+        rec = self.paper_record(30, now)
+        if not rec:
+            return ["📒 Measuring whether the cheap-side signal pays at real market prices: it saves each venue's price "
+                    "5 and 10 minutes into every window" + ("" if have_quotes else " (no prices read yet — "
+                                                           + (esc("; ".join(f"{k}: {v}" for k, v in self.quote_errors.items()))
+                                                              or "waiting for the first window") + ")")]
+        out = []
+        for venue, r in rec.items():
+            sig, fav = r["signal"], r["favorite"]
+            head = f"📒 {markets.VENUE_NAME[venue]} paper record, 30 days:"
+            if sig["n"]:
+                tail = (" ✅ proven — it will ping you" if r["proven"] else
+                        f" (needs {PROVEN_N}+ signals, +1¢ and a positive 80% range to ping you)")
+                out.append(f"{head} the cheap-side signal: {sig['n']} trades, won {sig['win'] * 100:.0f}%, "
+                           f"<b>{sig['avg_c']:+.1f}¢ per contract</b> after fees{tail}")
+            else:
+                out.append(f"{head} no window had a side cheap enough yet ({r['windows']} windows watched)")
+            if fav["n"]:
+                out.append(f"   always buying the favorite instead: {fav['avg_c']:+.1f}¢ per contract ({fav['n']} windows)")
+        return out
 
     def summary(self, now: float) -> dict:
         if not self.on or not self.bars:
@@ -386,8 +520,8 @@ class UpDown:
         c = self.card(now)
         recent = self.db.rows("select ts, open, close, lean, outcome, p5, p10 from updown where outcome is not null "
                               "order by ts desc limit 12")
-        return {"on": True, "ready": bool(c["beat"]), **c, "recent": recent,
-                "alerts": self.cfg.flag("BTC15_ALERTS"), "error": self.last_error,
+        return {"on": True, "ready": bool(c["beat"]), **c, "recent": recent, "paper": self.paper_record(30, now),
+                "alerts": self.cfg.flag("BTC15_ALERTS"), "error": self.last_error, "min_edge": self.cfg.get("BTC15_MIN_EDGE"),
                 "label": f"{et(c['start']).strftime('%-I:%M')}–{clock_text(c['end'])}"}
 
     def status_line(self, now: float) -> str:

@@ -227,7 +227,7 @@ def test_the_live_call_records_each_window_and_answers():
     t = now + 1800 + 400
     app.fake.now = t
     text = u.text(t, "62")
-    assert "Most likely" in text and "Price to beat" in text and "Market: Up 62¢" in text
+    assert "Most likely" in text and "Price to beat" in text and "Your price: Up 62¢" in text
     assert "76543" in u.text(t, "76543").replace(",", "")
     c = u.summary(t)
     json.dumps(c, default=str)

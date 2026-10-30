@@ -185,7 +185,9 @@ LABELS = {
     "CRYPTO_TARGET_VOL": "Risk level (% swing a year)", "CRYPTO_COST_PCT": "Cost per crypto buy or sell (%)",
     "CRYPTO_AUTOPILOT_START": "Crypto autopilot start ($)", "CRYPTO_ALERTS": "Message me plan changes",
     "BTC15": "BTC 15-minute call", "BTC15_ALERTS": "Send it every 15 minutes",
-    "INVEST": "Invest lab (ETF plans)", "INVEST_BUDGET": "Money the plan manages ($)",
+    "BTC15_VENUE": "Market prices from (0 both · 1 Polymarket · 2 Kalshi)", "BTC15_MIN_EDGE": "Call a side cheap at (¢)",
+    "BTC15_FEE_CENTS": "Fee per contract at 50¢ (¢)", "BTC15_EDGE_ALERTS": "Message me proven cheap sides",
+    "INVEST": "Invest lab (ETF plans)", "INVEST_MANAGE": "Tell me what to buy and sell", "INVEST_BUDGET": "Money the plan manages ($)",
     "INVEST_COST_PCT": "Cost per ETF trade (%)", "INVEST_ALERTS": "Message me plan changes",
 }
 
@@ -198,8 +200,9 @@ GROUPS = {
                   "PAPER_ACCOUNT", "BACKTEST_DAYS"),
     "Scanner": ("MIN_PRICE", "GAP_MIN_PCT", "MIN_AVG_VOLUME", "WATCH_MAX"),
     "Crypto": ("CRYPTO", "CRYPTO_BUDGET", "CRYPTO_COINS", "CRYPTO_TARGET_VOL", "CRYPTO_COST_PCT",
-               "CRYPTO_AUTOPILOT_START", "CRYPTO_ALERTS", "BTC15", "BTC15_ALERTS"),
-    "Invest": ("INVEST", "INVEST_BUDGET", "INVEST_COST_PCT", "INVEST_ALERTS"),
+               "CRYPTO_AUTOPILOT_START", "CRYPTO_ALERTS", "BTC15", "BTC15_ALERTS", "BTC15_VENUE", "BTC15_MIN_EDGE",
+               "BTC15_FEE_CENTS", "BTC15_EDGE_ALERTS"),
+    "Invest": ("INVEST", "INVEST_MANAGE", "INVEST_BUDGET", "INVEST_COST_PCT", "INVEST_ALERTS"),
     "Options": ("OPTION_IDEAS", "OPTIONS_MAX_PREMIUM_PCT", "ALLOW_0DTE", "OPTION_MIN_DTE", "OPTION_MAX_SPREAD_PCT",
                 "OPTION_MIN_OI"),
 }
